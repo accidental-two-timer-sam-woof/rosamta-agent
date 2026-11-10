@@ -1,5 +1,6 @@
 mod adopt;
 mod commands;
+mod daemon;
 mod github;
 mod sync;
 
@@ -84,6 +85,11 @@ enum Command {
     Pull,
     /// Pull, then publish
     Sync,
+    /// Run the background service, or start it at login
+    Daemon {
+        #[command(subcommand)]
+        action: DaemonAction,
+    },
     /// Connect an account that hosts the repo
     Remote {
         #[command(subcommand)]
@@ -105,6 +111,18 @@ enum Command {
         #[arg(long)]
         yes: bool,
     },
+}
+
+#[derive(Subcommand)]
+enum DaemonAction {
+    /// Run the background service in this process
+    Run,
+    /// Start the background service now and at every login
+    Enable,
+    /// Stop the background service and no longer start it at login
+    Disable,
+    /// Show whether the background service runs and what it last did
+    Status,
 }
 
 #[derive(Subcommand)]
@@ -226,6 +244,12 @@ fn run(cli: &Cli) -> Result<ExitCode> {
             GithubAction::Logout => github::logout(cli.json),
         },
         Command::GitCredential { operation } => github::credential(operation),
+        Command::Daemon { action } => match action {
+            DaemonAction::Run => daemon::run(),
+            DaemonAction::Enable => daemon::enable(cli.json),
+            DaemonAction::Disable => daemon::disable(cli.json),
+            DaemonAction::Status => daemon::status(cli.json),
+        },
     }
 }
 

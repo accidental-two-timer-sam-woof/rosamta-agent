@@ -1,0 +1,279 @@
+//! `rsmt daemon run` against a throwaway HOME: it reacts to rc files, the
+//! repo and host.toml without anyone running a command.
+
+mod common;
+
+use std::fs;
+use std::path::Path;
+use std::process::Child;
+use std::time::{Duration, Instant};
+
+use common::Home;
+use predicates::prelude::*;
+
+/// Kills the daemon when the test ends, passing or not.
+struct Daemon(Child);
+
+impl Drop for Daemon {
+    fn drop(&mut self) {
+        let _ = self.0.kill();
+        let _ = self.0.wait();
+    }
+}
+
+fn start(home: &Home) -> Daemon {
+    let daemon = Daemon(home.spawn("rsmt", &["daemon", "run"]));
+    wait_for(home, Duration::from_secs(20), || {
+        log(home).contains("scanned rc files")
+    });
+    daemon
+}
+
+/// Poll until `done`; on timeout, show what the daemon logged.
+fn wait_for(home: &Home, limit: Duration, mut done: impl FnMut() -> bool) {
+    let start = Instant::now();
+    while !done() {
+        assert!(
+            start.elapsed() < limit,
+            "timed out; daemon.log:\n{}",
+            log(home)
+        );
+        std::thread::sleep(Duration::from_millis(200));
+    }
+}
+
+fn log(home: &Home) -> String {
+    fs::read_to_string(home.root.join(".local/state/rosamta/daemon.log")).unwrap_or_default()
+}
+
+fn queue(home: &Home) -> serde_json::Value {
+    let text = fs::read_to_string(home.root.join(".local/state/rosamta/queue.json"))
+        .unwrap_or_else(|_| "{\"items\":[]}".into());
+    serde_json::from_str(&text).unwrap()
+}
+
+fn status(home: &Home) -> serde_json::Value {
+    let out = home
+        .cmd("rsmt")
+        .args(["daemon", "status", "--json"])
+        .output()
+        .unwrap();
+    serde_json::from_slice(&out.stdout).unwrap()
+}
+
+/// A HOME with a repo and hooks for every installed shell.
+fn hooked() -> Home {
+    let home = Home::new();
+    home.cmd("rsmt").arg("init").assert().success();
+    home.cmd("rsmt").arg("apply").assert().success();
+    home
+}
+
+fn append(path: &Path, text: &str) {
+    let old = fs::read_to_string(path).unwrap_or_default();
+    fs::write(path, old + text).unwrap();
+}
+
+/// Replace one `key = value` line of host.toml.
+fn set_host(home: &Home, key: &str, value: &str) {
+    let text = fs::read_to_string(home.host_config()).unwrap();
+    let lines: Vec<String> = text
+        .lines()
+        .map(|line| {
+            if line.starts_with(&format!("{key} =")) {
+                format!("{key} = {value}")
+            } else {
+                line.to_string()
+            }
+        })
+        .collect();
+    fs::write(home.host_config(), lines.join("\n") + "\n").unwrap();
+}
+
+#[test]
+fn a_second_instance_exits_with_1() {
+    let home = hooked();
+    let _daemon = start(&home);
+    let running = status(&home);
+    assert_eq!(running["running"], true);
+    assert_eq!(running["version"], env!("CARGO_PKG_VERSION"));
+    assert_eq!(running["review"], 0);
+    home.cmd("rsmt")
+        .args(["daemon", "run"])
+        .assert()
+        .code(1)
+        .stderr(predicate::str::contains("already running (pid"));
+}
+
+#[test]
+fn installer_lines_are_queued_and_left_in_place() {
+    let home = hooked();
+    let profile = home.root.join(".profile");
+    let _daemon = start(&home);
+    append(&profile, "export FROM_INSTALLER=1\n");
+    wait_for(&home, Duration::from_secs(20), || {
+        queue(&home)["items"].as_array().unwrap().len() == 1
+    });
+    assert!(
+        fs::read_to_string(&profile)
+            .unwrap()
+            .contains("FROM_INSTALLER")
+    );
+
+    // Written to a new file and renamed over the old one.
+    let tmp = home.root.join(".profile.tmp");
+    fs::write(
+        &tmp,
+        fs::read_to_string(&profile).unwrap() + "\nexport RENAMED=1\n",
+    )
+    .unwrap();
+    fs::rename(&tmp, &profile).unwrap();
+    wait_for(&home, Duration::from_secs(20), || {
+        queue(&home)["items"].as_array().unwrap().len() == 2
+    });
+    assert_eq!(status(&home)["review"], 2);
+}
+
+#[test]
+fn adopting_does_not_trigger_another_scan() {
+    let home = hooked();
+    set_host(&home, "adopt", "\"auto\"");
+    let _daemon = start(&home);
+    append(&home.root.join(".profile"), "export AUTO=1\n");
+    wait_for(&home, Duration::from_secs(20), || {
+        log(&home).contains("1 adopted")
+    });
+    assert!(
+        !fs::read_to_string(home.root.join(".profile"))
+            .unwrap()
+            .contains("AUTO=1")
+    );
+    // Adoption rewrote .profile; that write is rosamta's own.
+    std::thread::sleep(Duration::from_secs(5));
+    assert_eq!(
+        log(&home).matches("scanned rc files").count(),
+        2,
+        "{}",
+        log(&home)
+    );
+}
+
+#[test]
+fn settings_and_repo_edits_take_effect_without_a_restart() {
+    let home = hooked();
+    let _daemon = start(&home);
+    home.write("modules/greeting.toml", "[env]\nGREETING = \"hi\"\n");
+    wait_for(&home, Duration::from_secs(20), || {
+        let out = home.shell(&[
+            "sh".into(),
+            "-l".into(),
+            "-c".into(),
+            "printf %s \"$GREETING\"".into(),
+        ]);
+        out.stdout == b"hi"
+    });
+
+    set_host(&home, "adopt", "\"auto\"");
+    std::thread::sleep(Duration::from_secs(3));
+    append(&home.root.join(".profile"), "export AFTER_RELOAD=1\n");
+    wait_for(&home, Duration::from_secs(20), || {
+        log(&home).contains("1 adopted")
+    });
+    assert_eq!(queue(&home)["items"].as_array().unwrap().len(), 0);
+}
+
+#[test]
+fn a_replaced_executable_restarts_the_daemon() {
+    let home = hooked();
+    let bin = home.root.join("bin");
+    fs::create_dir_all(&bin).unwrap();
+    let exe = bin.join("rsmt");
+    fs::copy(assert_cmd::cargo::cargo_bin("rsmt"), &exe).unwrap();
+    let mut cmd = std::process::Command::new(&exe);
+    cmd.args(["daemon", "run"])
+        .env("HOME", &home.root)
+        .env("SHELL", "/bin/sh")
+        .env("ROSAMTA_NO_KEYCHAIN", "1")
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null());
+    for var in ["XDG_CONFIG_HOME", "XDG_DATA_HOME", "XDG_STATE_HOME"] {
+        cmd.env_remove(var);
+    }
+    let _daemon = Daemon(cmd.spawn().unwrap());
+    wait_for(&home, Duration::from_secs(20), || {
+        log(&home).contains("scanned rc files")
+    });
+    let before = status(&home)["started_at"].as_u64().unwrap();
+
+    // Like a package manager: a new file renamed into place.
+    std::thread::sleep(Duration::from_secs(1));
+    let next = bin.join("rsmt.new");
+    fs::copy(&exe, &next).unwrap();
+    fs::rename(&next, &exe).unwrap();
+    wait_for(&home, Duration::from_secs(30), || {
+        log(&home).contains("restarting for the new version")
+            && status(&home)["started_at"]
+                .as_u64()
+                .is_some_and(|now| now > before)
+    });
+    assert_eq!(status(&home)["running"], true);
+}
+
+#[test]
+fn changes_close_together_share_one_notification() {
+    let home = hooked();
+    let profile = home.root.join(".profile");
+    let _daemon = start(&home);
+    for name in ["ONE", "TWO", "THREE"] {
+        append(&profile, &format!("\nexport {name}=1\n"));
+        // Longer than the debounce, so each is its own scan.
+        std::thread::sleep(Duration::from_secs(3));
+    }
+    wait_for(&home, Duration::from_secs(20), || {
+        log(&home).contains("notified:")
+    });
+    std::thread::sleep(Duration::from_secs(2));
+    let log = log(&home);
+    let notes: Vec<&str> = log
+        .lines()
+        .filter(|line| line.contains("notified:"))
+        .collect();
+    assert_eq!(notes.len(), 1, "{log}");
+    assert!(notes[0].contains('3'), "{log}");
+}
+
+#[test]
+fn a_problem_is_notified_once_until_it_clears() {
+    let home = hooked();
+    let _daemon = start(&home);
+    home.write("modules/broken.toml", "[env\n");
+    wait_for(&home, Duration::from_secs(20), || {
+        log(&home).contains("notified:")
+    });
+    // Another edit while the same file is still broken.
+    home.write("modules/other.toml", "[env]\nOTHER = \"1\"\n");
+    std::thread::sleep(Duration::from_secs(5));
+    assert_eq!(log(&home).matches("notified:").count(), 1, "{}", log(&home));
+
+    fs::remove_file(home.repo().join("modules/broken.toml")).unwrap();
+    std::thread::sleep(Duration::from_secs(4));
+    home.write("modules/broken.toml", "[env\n");
+    wait_for(&home, Duration::from_secs(20), || {
+        log(&home).matches("notified:").count() == 2
+    });
+}
+
+#[test]
+fn before_init_the_daemon_waits() {
+    let home = Home::new();
+    let _daemon = Daemon(home.spawn("rsmt", &["daemon", "run"]));
+    wait_for(&home, Duration::from_secs(20), || {
+        log(&home).contains("waiting for `rsmt init`")
+    });
+    home.cmd("rsmt").arg("init").assert().success();
+    wait_for(&home, Duration::from_secs(20), || {
+        log(&home).contains("scanned rc files")
+    });
+    assert_eq!(status(&home)["running"], true);
+}

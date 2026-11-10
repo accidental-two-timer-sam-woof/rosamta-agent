@@ -56,6 +56,24 @@ impl Home {
         cmd
     }
 
+    /// The CLI as a plain process, for running it in the background.
+    pub fn spawn(&self, bin: &str, args: &[&str]) -> std::process::Child {
+        let mut cmd = std::process::Command::new(assert_cmd::cargo::cargo_bin(bin));
+        cmd.args(args).env("HOME", &self.root);
+        for var in OUTSIDE {
+            cmd.env_remove(var);
+        }
+        cmd.env("ROSAMTA_NO_KEYCHAIN", "1").env("SHELL", "/bin/sh");
+        for (key, value) in GIT_ENV {
+            cmd.env(key, value);
+        }
+        cmd.stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::piped())
+            .spawn()
+            .unwrap()
+    }
+
     /// Start a shell the way a terminal would, inside this HOME, with a
     /// minimal environment: nothing from the developer's leaks in or out.
     pub fn shell(&self, argv: &[String]) -> std::process::Output {
@@ -105,13 +123,19 @@ impl Home {
 }
 
 /// Keep git away from the developer's config (signing, hooks, identity).
+const GIT_ENV: [(&str, &str); 6] = [
+    ("GIT_CONFIG_GLOBAL", "/dev/null"),
+    ("GIT_CONFIG_NOSYSTEM", "1"),
+    ("GIT_AUTHOR_NAME", "test"),
+    ("GIT_AUTHOR_EMAIL", "test@example.com"),
+    ("GIT_COMMITTER_NAME", "test"),
+    ("GIT_COMMITTER_EMAIL", "test@example.com"),
+];
+
 pub fn git_env(cmd: &mut Command) {
-    cmd.env("GIT_CONFIG_GLOBAL", "/dev/null")
-        .env("GIT_CONFIG_NOSYSTEM", "1")
-        .env("GIT_AUTHOR_NAME", "test")
-        .env("GIT_AUTHOR_EMAIL", "test@example.com")
-        .env("GIT_COMMITTER_NAME", "test")
-        .env("GIT_COMMITTER_EMAIL", "test@example.com");
+    for (key, value) in GIT_ENV {
+        cmd.env(key, value);
+    }
 }
 
 pub fn git(dir: &Path, args: &[&str]) {
