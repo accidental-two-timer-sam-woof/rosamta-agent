@@ -192,6 +192,64 @@ fn adopting_does_not_trigger_another_scan() {
 }
 
 #[test]
+fn lines_a_failed_scan_missed_are_queued_once_the_repo_applies() {
+    let home = hooked();
+    let _daemon = start(&home);
+    home.write("modules/broken.toml", "[env\n");
+    wait_for(&home, Duration::from_secs(20), || {
+        log(&home).contains("notified:")
+    });
+    append(&home.root.join(".profile"), "export LATER=1\n");
+    wait_for(&home, Duration::from_secs(20), || {
+        log(&home).contains("scan failed")
+    });
+    fs::remove_file(home.repo().join("modules/broken.toml")).unwrap();
+    wait_for(&home, Duration::from_secs(20), || {
+        queue(&home)["items"].as_array().unwrap().len() == 1
+    });
+}
+
+/// Make pushes to `remote` take a few seconds; `pushing` appears when one starts.
+fn slow_down(remote: &Path, pushing: &Path) {
+    let hook = remote.join("hooks/pre-receive");
+    fs::write(
+        &hook,
+        format!("#!/bin/sh\ntouch '{}'\nsleep 6\n", pushing.display()),
+    )
+    .unwrap();
+    fs::set_permissions(&hook, std::os::unix::fs::PermissionsExt::from_mode(0o755)).unwrap();
+}
+
+#[test]
+fn an_edit_during_a_slow_push_is_adopted_too() {
+    let home = Home::new();
+    // A host ID from the hostname can look like a secret and stop the push.
+    home.write_host("test");
+    append(&home.host_config(), "adopt = \"auto\"\n");
+    home.cmd("rsmt").arg("init").assert().success();
+    home.cmd("rsmt").arg("apply").assert().success();
+    let remote = home.root.join("remote.git");
+    let pushing = home.root.join("pushing");
+    common::git(&home.root, &["init", "--quiet", "--bare", "remote.git"]);
+    common::git(
+        &home.repo(),
+        &["remote", "add", "origin", remote.to_str().unwrap()],
+    );
+    common::git(&home.repo(), &["push", "--quiet", "-u", "origin", "HEAD"]);
+    slow_down(&remote, &pushing);
+    let profile = home.root.join(".profile");
+    let _daemon = start(&home);
+    append(&profile, "export FIRST=1\n");
+    wait_for(&home, Duration::from_secs(20), || pushing.exists());
+    append(&profile, "export DURING_PUSH=1\n");
+    wait_for(&home, Duration::from_secs(40), || {
+        !fs::read_to_string(&profile)
+            .unwrap()
+            .contains("DURING_PUSH")
+    });
+}
+
+#[test]
 fn settings_and_repo_edits_take_effect_without_a_restart() {
     let home = hooked();
     let _daemon = start(&home);
