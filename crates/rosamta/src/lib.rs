@@ -187,7 +187,10 @@ pub fn main() -> ExitCode {
     match run(&cli) {
         Ok(code) => code,
         Err(err) => {
-            eprintln!("{}: {err}", program_name());
+            let name = program_name();
+            // Hints from the core name `rsmt`.
+            let message = err.to_string().replace("`rsmt ", &format!("`{name} "));
+            eprintln!("{name}: {message}");
             ExitCode::from(if err.is_usage() { 2 } else { 1 })
         }
     }
