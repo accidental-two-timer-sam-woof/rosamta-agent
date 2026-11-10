@@ -769,9 +769,11 @@ fn without_header(text: &str) -> &str {
 
 /// Write the plan and stop hooking every shell. The caller disables the
 /// background service, which on macOS needs the app bundle.
-pub fn eject(ctx: &Context, changes: &[FileChange]) -> Result<()> {
+/// Returns the dotfiles that were links and are now regular files.
+pub fn eject(ctx: &Context, changes: &[FileChange]) -> Result<Vec<PathBuf>> {
     hooks::commit(changes, &ctx.snapshots(), "eject")?;
-    ctx.set_unhooked(&Shell::ALL)
+    ctx.set_unhooked(&Shell::ALL)?;
+    crate::dotfiles::manage::eject(ctx)
 }
 
 /// What `rsmt restore --original` would write.
@@ -780,6 +782,8 @@ pub fn plan_restore(ctx: &Context) -> Result<Vec<FileChange>> {
     for original in ctx.snapshots().originals()? {
         let before = match std::fs::read(&original.path) {
             Ok(bytes) => Some(String::from_utf8_lossy(&bytes).into_owned()),
+            // A dotfile directory that did not exist before rosamta.
+            Err(_) if original.path.is_dir() => Some(String::new()),
             Err(err) if err.kind() == std::io::ErrorKind::NotFound => None,
             Err(err) => {
                 return Err(Error::Read {
@@ -809,7 +813,14 @@ pub fn restore_original(ctx: &Context) -> Result<Vec<PathBuf>> {
         .iter()
         .map(|original| original.path.clone())
         .collect();
-    snapshots.save(&paths, "restore original")?;
+    // rosamta's links go first: the repo keeps what they show, and putting
+    // files back must not write through them.
+    crate::dotfiles::manage::unlink(ctx)?;
+    let mut current = Vec::new();
+    for path in &paths {
+        current.extend(crate::dotfiles::tree::files(path)?);
+    }
+    snapshots.save(&current, "restore original")?;
     for original in originals {
         match original.content {
             Some(bytes) => {
@@ -818,15 +829,7 @@ pub fn restore_original(ctx: &Context) -> Result<Vec<PathBuf>> {
                 }
                 std::fs::write(&original.path, bytes).map_err(Error::write(&original.path))?;
             }
-            None => match std::fs::remove_file(&original.path) {
-                Err(err) if err.kind() != std::io::ErrorKind::NotFound => {
-                    return Err(Error::Write {
-                        path: original.path,
-                        source: err,
-                    });
-                }
-                _ => {}
-            },
+            None => crate::dotfiles::tree::remove(&original.path)?,
         }
     }
     ctx.set_unhooked(&Shell::ALL)?;
