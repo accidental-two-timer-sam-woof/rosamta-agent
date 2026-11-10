@@ -7,10 +7,9 @@ use std::fs;
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
-use common::{Home, git_env};
+use common::{Home, git_env, has, sessions};
 use predicates::prelude::*;
 use rosamta_core::hooks::{BEGIN, strip_block};
-use rosamta_core::shells::which;
 
 const MODULE: &str = r#"
 [env]
@@ -38,10 +37,6 @@ const RC_FILES: [&str; 11] = [
     ".config/zsh/.zprofile",
     ".config/fish/conf.d/rosamta.fish",
 ];
-
-fn has(shell: &str) -> bool {
-    which(shell, &std::env::var("PATH").unwrap_or_default()).is_some()
-}
 
 fn set_up() -> Home {
     let home = Home::new();
@@ -72,26 +67,6 @@ fn read(home: &Home, rel: &str) -> String {
 
 fn current(home: &Home) -> PathBuf {
     home.root.join(".local/share/rosamta/generated/current")
-}
-
-/// Each installed shell started as a terminal would, running `posix` (fish: `fish`).
-fn sessions(posix: &str, fish: &str) -> Vec<Vec<String>> {
-    let argv = |args: &[&str]| args.iter().map(|arg| arg.to_string()).collect();
-    let mut out = Vec::new();
-    if has("sh") {
-        out.push(argv(&["sh", "-l", "-c", posix]));
-    }
-    if has("bash") {
-        out.push(argv(&["bash", "-l", "-i", "-c", posix]));
-        out.push(argv(&["bash", "-i", "-c", posix]));
-    }
-    if has("zsh") {
-        out.push(argv(&["zsh", "-l", "-i", "-c", posix]));
-    }
-    if has("fish") {
-        out.push(argv(&["fish", "-l", "-i", "-c", fish]));
-    }
-    out
 }
 
 #[test]
