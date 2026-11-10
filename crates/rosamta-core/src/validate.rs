@@ -153,6 +153,20 @@ pub fn validate(repo_dir: &Path) -> Result<Report> {
             Err(issue) => report.file(rel).errors.push(issue),
         }
     }
+    let path = repo_dir.join(crate::secrets::MANIFEST);
+    if path.is_file() {
+        let rel = PathBuf::from(crate::secrets::MANIFEST);
+        match read(&path)?.and_then(|text| parse::<crate::secrets::SecretCommands>(&text)) {
+            Ok(commands) => {
+                let problems = crate::secrets::check(&commands);
+                report
+                    .file(rel)
+                    .errors
+                    .extend(problems.into_iter().map(Issue::at));
+            }
+            Err(issue) => report.file(rel).errors.push(issue),
+        }
+    }
     // Its fields belong to a later change; for now only the syntax is checked.
     let path = repo_dir.join("packages.toml");
     if path.is_file() {

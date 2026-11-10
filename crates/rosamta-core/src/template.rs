@@ -1,12 +1,15 @@
 //! Templates: dotfiles rendered for each host with minijinja, in a sandbox
-//! that cannot read files or run anything (ADR 0006).
+//! that cannot read files or run anything but the secret sources rosamta
+//! provides (ADR 0006).
 
 use std::collections::BTreeMap;
 use std::path::Path;
+use std::sync::Arc;
 
-use minijinja::{Environment, UndefinedBehavior, Value, context};
+use minijinja::{Environment, ErrorKind, UndefinedBehavior, Value, context};
 
 use crate::config::HostConfig;
+use crate::secrets::{self, Failure, Session, Waiting};
 
 /// Instructions one render may run: far more than a dotfile needs, and a
 /// bound on a template that would loop for hours.
@@ -52,8 +55,17 @@ pub fn missing_vars(
     Ok(missing)
 }
 
-pub fn render(name: &str, source: &str, host: &HostConfig, home: &Path) -> Result<String, String> {
-    let env = environment();
+/// A secret that is waiting fails the render too; `secrets.take_waiting()`
+/// tells it apart from an error.
+pub fn render(
+    name: &str,
+    source: &str,
+    host: &HostConfig,
+    home: &Path,
+    secrets: &Arc<Session>,
+) -> Result<String, String> {
+    let mut env = environment();
+    add_functions(&mut env, secrets, home);
     let template = env
         .template_from_named_str(name, source)
         .map_err(|err| describe(&err))?;
@@ -67,6 +79,32 @@ pub fn render(name: &str, source: &str, host: &HostConfig, home: &Path) -> Resul
     template
         .render(context! { host => host_vars, vars => host.vars.clone() })
         .map_err(|err| describe(&err))
+}
+
+fn add_functions(env: &mut Environment<'static>, secrets: &Arc<Session>, home: &Path) {
+    let session = Arc::clone(secrets);
+    env.add_function("bitwarden", move |item: String, field: Option<String>| {
+        session.bitwarden(&item, field.as_deref()).map_err(error)
+    });
+    let session = Arc::clone(secrets);
+    env.add_function("secret", move |name: String, arg: String| {
+        session.secret(&name, &arg).map_err(error)
+    });
+    let socket = secrets::bitwarden_ssh_socket(home)
+        .map(|path| path.display().to_string())
+        .unwrap_or_default();
+    env.add_function("bitwarden_ssh_socket", move || socket.clone());
+}
+
+fn error(failure: Failure) -> minijinja::Error {
+    let text = match failure {
+        Failure::Error(text) => text,
+        Failure::Waiting(Waiting::Locked(tool)) => format!("{} is locked", tool.name()),
+        Failure::Waiting(Waiting::Command(name)) => {
+            format!("secret command `{name}` runs only in `rsmt apply` in a terminal")
+        }
+    };
+    minijinja::Error::new(ErrorKind::InvalidOperation, text)
 }
 
 /// minijinja's message with the line it found, and the cause behind it.
@@ -84,6 +122,16 @@ fn describe(err: &minijinja::Error) -> String {
 mod tests {
     use super::*;
 
+    fn none() -> Arc<Session> {
+        Arc::new(Session::with(
+            false,
+            &[],
+            Default::default(),
+            String::new(),
+            None,
+        ))
+    }
+
     fn host(tags: &[&str], vars: &[(&str, &str)]) -> HostConfig {
         let mut host = HostConfig::new("mbp".into());
         host.tags = tags.iter().map(|tag| tag.to_string()).collect();
@@ -99,19 +147,26 @@ mod tests {
         let text = r#"{% if "work" in host.tags %}me@work.com{% else %}me@home.com{% endif %}"#;
         let home = Path::new("/home/me");
         assert_eq!(
-            render("t", text, &host(&["work"], &[]), home).unwrap(),
+            render("t", text, &host(&["work"], &[]), home, &none()).unwrap(),
             "me@work.com"
         );
         assert_eq!(
-            render("t", text, &host(&[], &[]), home).unwrap(),
+            render("t", text, &host(&[], &[]), home, &none()).unwrap(),
             "me@home.com"
         );
         let text = "{{ host.id }} {{ host.home }} {{ vars.email }}";
         assert_eq!(
-            render("t", text, &host(&[], &[("email", "a@b.c")]), home).unwrap(),
+            render("t", text, &host(&[], &[("email", "a@b.c")]), home, &none()).unwrap(),
             "mbp /home/me a@b.c"
         );
-        let os = render("t", "{{ host.os }}/{{ host.arch }}", &host(&[], &[]), home).unwrap();
+        let os = render(
+            "t",
+            "{{ host.os }}/{{ host.arch }}",
+            &host(&[], &[]),
+            home,
+            &none(),
+        )
+        .unwrap();
         assert!(
             [
                 "macos/aarch64",
@@ -130,6 +185,7 @@ mod tests {
             "a\n{{ host.ids }}\n",
             &host(&[], &[]),
             Path::new("/h"),
+            &none(),
         )
         .unwrap_err();
         assert!(err.contains("home/.gitconfig:2"), "{err}");
@@ -143,7 +199,7 @@ mod tests {
             r#"{% import "m" as m %}"#,
         ] {
             assert!(
-                render("t", text, &host(&[], &[]), Path::new("/h")).is_err(),
+                render("t", text, &host(&[], &[]), Path::new("/h"), &none()).is_err(),
                 "{text}"
             );
         }
@@ -153,7 +209,7 @@ mod tests {
     fn endless_templates_stop() {
         let text =
             "{% for a in range(100000) %}{% for b in range(100000) %}{% endfor %}{% endfor %}";
-        assert!(render("t", text, &host(&[], &[]), Path::new("/h")).is_err());
+        assert!(render("t", text, &host(&[], &[]), Path::new("/h"), &none()).is_err());
     }
 
     #[test]
@@ -168,5 +224,29 @@ mod tests {
         let text = "{{ vars.email }}{% if vars.signing %}{{ vars.key.id }}{% endif %}{{ host.id }}";
         let vars: BTreeMap<String, String> = [("email".to_string(), String::new())].into();
         assert_eq!(missing_vars("t", text, &vars).unwrap(), ["key", "signing"]);
+    }
+
+    #[test]
+    fn secrets_come_only_from_rosamta_functions() {
+        let host = host(&[], &[]);
+        let home = Path::new("/h");
+        let err = render("t", r#"{{ secret("vault", "x") }}"#, &host, home, &none()).unwrap_err();
+        assert!(err.contains("`vault` is not declared"), "{err}");
+        let err = render("t", r#"{{ bitwarden("GitHub") }}"#, &host, home, &none()).unwrap_err();
+        assert!(err.contains("no Bitwarden tool"), "{err}");
+        let text = r#"{% if bitwarden_ssh_socket() %}set{% endif %}"#;
+        assert!(render("t", text, &host, home, &none()).is_ok());
+    }
+
+    #[test]
+    fn a_command_outside_a_terminal_waits() {
+        let commands: secrets::SecretCommands =
+            toml::from_str("[commands.op]\nrun = [\"op\", \"read\", \"{arg}\"]\n").unwrap();
+        let session = Arc::new(Session::with(false, &[], commands, String::new(), None));
+        let text = r#"{{ secret("op", "op://a/b") }}"#;
+        let err = render("t", text, &host(&[], &[]), Path::new("/h"), &session).unwrap_err();
+        assert!(err.contains("runs only in `rsmt apply`"), "{err}");
+        assert_eq!(session.take_waiting(), [Waiting::Command("op".into())]);
+        assert!(session.take_waiting().is_empty());
     }
 }

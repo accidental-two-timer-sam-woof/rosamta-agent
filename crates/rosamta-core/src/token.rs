@@ -1,5 +1,5 @@
-//! Where the GitHub token lives: the system keychain (macOS Keychain, Linux
-//! Secret Service), or a file only the user can read when there is none.
+//! Where tokens live: the system keychain (macOS Keychain, Linux Secret
+//! Service), or a file only the user can read when there is none.
 
 use std::path::{Path, PathBuf};
 
@@ -7,7 +7,6 @@ use crate::error::{Error, Result};
 use crate::paths::Paths;
 
 const SERVICE: &str = "rosamta";
-const ACCOUNT: &str = "github.com";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Stored {
@@ -17,23 +16,35 @@ pub enum Stored {
 }
 
 pub struct TokenStore {
+    account: &'static str,
     file: PathBuf,
     keychain: bool,
 }
 
 impl TokenStore {
+    /// The GitHub token.
+    pub fn new(paths: &Paths) -> Self {
+        Self::at("github.com", paths.github_token())
+    }
+
+    /// The Bitwarden Secrets Manager access token.
+    pub fn bws(paths: &Paths) -> Self {
+        Self::at("bws", paths.bws_token())
+    }
+
     /// `ROSAMTA_NO_KEYCHAIN` keeps the token in the file, as on a host
     /// without a keychain; tests use it to stay out of the real one.
-    pub fn new(paths: &Paths) -> Self {
+    fn at(account: &'static str, file: PathBuf) -> Self {
         Self {
-            file: paths.github_token(),
+            account,
+            file,
             keychain: std::env::var_os("ROSAMTA_NO_KEYCHAIN").is_none(),
         }
     }
 
     fn entry(&self) -> Option<keyring::Entry> {
         self.keychain
-            .then(|| keyring::Entry::new(SERVICE, ACCOUNT).ok())
+            .then(|| keyring::Entry::new(SERVICE, self.account).ok())
             .flatten()
     }
 
@@ -92,6 +103,7 @@ mod tests {
     fn file_store_is_private_and_deletable() {
         let dir = tempfile::tempdir().unwrap();
         let store = TokenStore {
+            account: "github.com",
             file: dir.path().join("rosamta/github-token"),
             keychain: false,
         };

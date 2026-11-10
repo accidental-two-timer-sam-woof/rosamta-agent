@@ -46,6 +46,10 @@ impl Paths {
         self.config.join("github-token")
     }
 
+    pub fn bws_token(&self) -> PathBuf {
+        self.config.join("bws-token")
+    }
+
     /// This host's copy of the key for encrypted dotfiles (ADR 0012).
     pub fn age_key(&self) -> PathBuf {
         self.config.join("age.key")
