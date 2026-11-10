@@ -31,6 +31,8 @@ const PATCH: [&str; 8] = [
     "--dst-prefix=b/",
 ];
 
+const ARMOR: &str = "-----BEGIN AGE ENCRYPTED FILE-----";
+
 /// Lines added by each commit in `range` (arguments to `git log`), with
 /// their line numbers in that commit's version of the file.
 pub(crate) fn scan(repo: &Path, range: &[&str]) -> Result<Vec<Hit>> {
@@ -47,14 +49,31 @@ pub(crate) fn scan(repo: &Path, range: &[&str]) -> Result<Vec<Hit>> {
     ];
     args.extend(PATCH);
     args.extend_from_slice(range);
-    Ok(check(&added_lines(&git::run(repo, &args)?)))
+    Ok(unencrypted(
+        repo,
+        check(&added_lines(&git::run(repo, &args)?)),
+    ))
 }
 
 /// Lines added by the staged changes.
 pub(crate) fn staged(repo: &Path) -> Result<Vec<Hit>> {
     let mut args = vec!["-c", "core.quotePath=false", "diff", "--cached"];
     args.extend(PATCH);
-    Ok(check(&added_lines(&git::run(repo, &args)?)))
+    Ok(unencrypted(
+        repo,
+        check(&added_lines(&git::run(repo, &args)?)),
+    ))
+}
+
+/// Hits outside encrypted dotfiles. A changed ciphertext adds only base64
+/// lines, so the file itself is checked: in the hit's commit, or the index.
+fn unencrypted(repo: &Path, hits: Vec<Hit>) -> Vec<Hit> {
+    hits.into_iter()
+        .filter(|hit| {
+            let blob = format!("{}:{}", hit.commit, hit.file);
+            !git::run(repo, &["cat-file", "blob", &blob]).is_ok_and(|text| text.starts_with(ARMOR))
+        })
+        .collect()
 }
 
 /// One file in one commit, and its added lines.
@@ -113,12 +132,7 @@ fn check(files: &[Added]) -> Vec<Hit> {
     files
         .iter()
         // Encrypted dotfiles are ciphertext, which looks like a key to the rules.
-        .filter(|added| {
-            !added
-                .lines
-                .iter()
-                .any(|(_, text)| text == "-----BEGIN AGE ENCRYPTED FILE-----")
-        })
+        .filter(|added| !added.lines.iter().any(|(_, text)| text == ARMOR))
         .filter_map(|added| {
             let text: Vec<&str> = added.lines.iter().map(|(_, text)| text.as_str()).collect();
             let rule = secret_rule(&text.join("\n"))?;
@@ -141,6 +155,34 @@ fn check(files: &[Added]) -> Vec<Hit> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn changed_ciphertext_is_not_a_secret() {
+        crate::git::tests::isolate();
+        let dir = tempfile::tempdir().unwrap();
+        let repo = dir.path();
+        let armored = |body: &str| format!("{ARMOR}\n{body}\n-----END AGE ENCRYPTED FILE-----\n");
+        let file = repo.join("netrc");
+        crate::git::run(repo, &["init", "--quiet"]).unwrap();
+        std::fs::write(
+            &file,
+            armored("YWdlLWVuY3J5cHRpb24ub3JnL3YxCi0+IFgyNTUxOSBhYmNk"),
+        )
+        .unwrap();
+        crate::git::run(repo, &["add", "netrc"]).unwrap();
+        crate::git::run(repo, &["commit", "--quiet", "--no-verify", "-m", "v1"]).unwrap();
+        // Saved again: only the base64 body changes, which looks like a key.
+        let body = "Qm9ndXNLZXlNYXRlcmlhbDlYcVpQd0V0UjJ0eUJrN0xtTnFQcVJzVHVWd1h5WjAxMjM0NTY3ODk=";
+        std::fs::write(&file, armored(body)).unwrap();
+        crate::git::run(repo, &["add", "netrc"]).unwrap();
+        assert!(
+            secret_rule(body).is_some(),
+            "the body must look like a secret"
+        );
+        assert_eq!(staged(repo).unwrap(), []);
+        crate::git::run(repo, &["commit", "--quiet", "--no-verify", "-m", "v2"]).unwrap();
+        assert_eq!(scan(repo, &["HEAD~1..HEAD"]).unwrap(), []);
+    }
 
     const LOG: &str = "commit 1111
 diff --git a/modules/env.toml b/modules/env.toml
