@@ -90,22 +90,23 @@ pub fn load_local_modules(paths: &Paths) -> Result<Vec<(String, Module)>> {
 
 /// Repo and local modules together; a name may be used only once.
 fn all_modules(paths: &Paths) -> Result<Vec<(String, Module)>> {
-    let mut modules = load_modules(&paths.repo())?;
-    for (name, module) in load_local_modules(paths)? {
-        if modules.iter().any(|(seen, _)| *seen == name) {
-            return Err(Error::Usage(format!(
-                "module `{name}` exists both in the repo and in {}; rename one",
-                paths.local().display()
-            )));
-        }
-        modules.push((name, module));
-    }
-    Ok(modules)
+    let mut files = repo::module_files(&paths.repo())?;
+    files.extend(repo::module_files(&paths.local())?);
+    parse_modules(files)
 }
 
 fn parse_modules(files: Vec<PathBuf>) -> Result<Vec<(String, Module)>> {
     let mut modules = Vec::new();
+    let mut seen: BTreeMap<String, PathBuf> = BTreeMap::new();
     for path in files {
+        let name = repo::module_name(&path);
+        if let Some(first) = seen.get(&name) {
+            return Err(Error::Usage(format!(
+                "module name `{name}` is used by more than one file: {}, {}; rename one",
+                first.display(),
+                path.display()
+            )));
+        }
         let text = std::fs::read_to_string(&path).map_err(Error::read(&path))?;
         let module: Module = validate::parse(&text).map_err(|issue| {
             Error::Usage(format!(
@@ -117,7 +118,8 @@ fn parse_modules(files: Vec<PathBuf>) -> Result<Vec<(String, Module)>> {
         if let Some(problem) = render::check(&module).into_iter().next() {
             return Err(Error::Usage(format!("{}: {problem}", path.display())));
         }
-        modules.push((repo::module_name(&path), module));
+        seen.insert(name.clone(), path);
+        modules.push((name, module));
     }
     Ok(modules)
 }
