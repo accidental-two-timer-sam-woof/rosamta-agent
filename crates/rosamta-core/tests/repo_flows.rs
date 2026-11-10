@@ -133,7 +133,10 @@ fn recent_commits_list_subjects_and_files() {
     let repo_dir = home.paths.repo();
     fs::write(repo_dir.join("a b.txt"), "x\n").unwrap();
     git(&repo_dir, &["add", "a b.txt"]);
-    git(&repo_dir, &["commit", "--quiet", "-m", "second\twith a tab"]);
+    git(
+        &repo_dir,
+        &["commit", "--quiet", "-m", "second\twith a tab"],
+    );
 
     let commits = repo::recent_commits(&repo_dir, 5);
     assert_eq!(commits.len(), 2);
@@ -481,4 +484,25 @@ fn tags_stay_sorted_and_unique() {
         host::load(&home.paths.host_config()).unwrap().tags,
         ["personal"]
     );
+}
+
+#[test]
+fn an_unknown_bitwarden_tool_is_an_error_with_its_line() {
+    let home = home();
+    repo::init_new(&home.paths).unwrap();
+    let file = home.paths.host_config();
+    let text = fs::read_to_string(&file).unwrap();
+    fs::write(
+        &file,
+        format!("{text}\n[secrets]\nbitwarden = [\"lastpass\"]\n"),
+    )
+    .unwrap();
+    let err = host::load(&file).unwrap_err().to_string();
+    assert!(err.contains("lastpass") && err.contains("host.toml:11:"), "{err}");
+    fs::write(
+        &file,
+        format!("{text}\n[secrets]\nbitwarden = [\"bw\", \"rbw\"]\n"),
+    )
+    .unwrap();
+    assert_eq!(host::load(&file).unwrap().secrets.bitwarden.len(), 2);
 }

@@ -2,9 +2,9 @@
 
 ## 1. Template
 
-- [ ] 1.1 加入 `minijinja`，建立沙箱環境（strict 未定義、不提供 loader），實作 `host.*` 與 `vars.*` 的 context，以及 `rsmt validate` 的 template 語法檢查
-- [ ] 1.2 以靜態分析找出引用但本機沒有的 `vars.*`；終端機中詢問並以 toml_edit 寫進 `host.toml` 的 `[vars]`
-- [ ] 1.3 在 `host.toml` 加入 `[vars]` 與 `[secrets] bitwarden`，更新 JSON Schema 與讀取時的檢查
+- [x] 1.1 加入 `minijinja`，建立沙箱環境（strict 未定義、不提供 loader），實作 `host.*` 與 `vars.*` 的 context，以及 `rsmt validate` 的 template 語法檢查
+- [x] 1.2 以靜態分析找出引用但本機沒有的 `vars.*`；終端機中詢問並以 toml_edit 寫進 `host.toml` 的 `[vars]`
+- [x] 1.3 在 `host.toml` 加入 `[vars]` 與 `[secrets] bitwarden`，更新 JSON Schema 與讀取時的檢查
 
 ## 2. 秘密來源
 

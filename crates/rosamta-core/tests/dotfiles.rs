@@ -746,3 +746,32 @@ mod manage {
         assert!(err.to_string().contains("is not a dotfile"), "{err}");
     }
 }
+
+#[test]
+fn templates_report_syntax_errors_and_missing_vars() {
+    let home = Home::new("ask");
+    home.repo_write("home/.gitconfig", "[user]\n\temail = {{ vars.email }}\n");
+    home.repo_write("home/.npmrc", "ok\n{% if %}\n");
+    home.repo_write(
+        "dotfiles.toml",
+        "[[dotfile]]\npath = \".gitconfig\"\ndeploy = \"template\"\n\n[[dotfile]]\npath = \".npmrc\"\ndeploy = \"template\"\n",
+    );
+    let manifest = dotfiles::load(&home.repo()).unwrap();
+    let problems = dotfiles::check(&manifest, &home.repo());
+    assert_eq!(problems.len(), 1, "{problems:?}");
+    assert!(
+        problems[0].contains(".npmrc") && problems[0].contains("home/.npmrc:2"),
+        "{problems:?}"
+    );
+
+    assert_eq!(dotfiles::missing_vars(&home.ctx).unwrap(), ["email"]);
+    let host = home.ctx.paths.host_config();
+    fs::write(&host, format!("# mine\n{}", read(&host))).unwrap();
+    rosamta_core::host::set_var(&home.ctx.paths, "email", "").unwrap();
+    assert!(dotfiles::missing_vars(&home.ctx).unwrap().is_empty());
+    let text = read(&host);
+    assert!(
+        text.starts_with("# mine\n") && text.contains("[vars]\nemail = \"\""),
+        "{text}"
+    );
+}

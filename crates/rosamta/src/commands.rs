@@ -54,6 +54,9 @@ pub fn apply(json: bool, dry_run: bool) -> Result<ExitCode> {
     let interactive = !json && std::io::stdin().is_terminal();
     let wrong_passphrase =
         interactive && dotfiles::needs_key(&ctx)? && !crate::dotfiles::unlock(&ctx, json)?;
+    if interactive {
+        crate::dotfiles::ask_vars(&ctx)?;
+    }
     let applied = {
         let _lock = adopt::lock(&ctx)?;
         apply::apply(&ctx)?

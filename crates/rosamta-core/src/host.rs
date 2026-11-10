@@ -122,6 +122,17 @@ pub fn set(paths: &Paths, key: &str, value: impl Into<toml_edit::Value>) -> Resu
     load(&paths.host_config()).map(drop)
 }
 
+/// Set `vars.<name>` for templates, keeping the file's comments.
+pub fn set_var(paths: &Paths, name: &str, value: &str) -> Result<()> {
+    edit_toml(&paths.host_config(), |doc| {
+        if !doc.contains_key("vars") {
+            doc["vars"] = toml_edit::table();
+        }
+        edit::set_value(&mut doc["vars"][name], value)
+    })?;
+    load(&paths.host_config()).map(drop)
+}
+
 pub fn add_tag(paths: &Paths, tag: &str) -> Result<bool> {
     let tag = tag.trim();
     if tag.is_empty() {
