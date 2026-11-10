@@ -7,7 +7,7 @@
 ## What Changes
 
 - 以 minijinja 作為 template 引擎（ADR 0006），預設在沙箱中執行，可用的函式由 rosamta 明確提供。
-- template 變數：`host.os`、`host.arch`、`host.name`（識別名稱）、`host.tags`，以及使用者自訂的 `vars.*`（存在 `host.toml`，第一次設定時詢問）。
+- template 變數：`host.id`（識別名稱）、`host.os`、`host.arch`、`host.tags`、`host.home`，以及使用者自訂的 `vars.*`（存在 `host.toml`，第一次在終端機套用時詢問）。
 - 秘密來源：依 rbw → bw → bws 的順序，自動使用第一個已安裝且可用的工具；順序可在 `host.toml` 覆寫，GUI 不顯示這項設定。
 - 另提供以指令取值的通用方式（例如 `op read`、`pass show`）：指令集中宣告在 repo 中並命名，template 只能以名稱呼叫，不能直接寫指令字串。
 - 背景服務永遠不跳出解鎖提示：只有輸入改變的 template 才重新 render；需要秘密但 vault 鎖住時，保留上一次的結果並在待處理清單標示「需要解鎖」，等使用者在終端機執行 `rsmt apply` 處理。
@@ -24,7 +24,10 @@
 ### Modified Capabilities
 
 - `dotfile-deploy`: 啟用 template 部署方式。
-- `review-queue`: 新增「需要解鎖」類型的項目。
+- `review-queue`: 新增「等待輸入」類型的項目（秘密來源鎖住、需要執行秘密指令、缺少變數）。
+- `host-config`: `host.toml` 新增 `[vars]` 與 `[secrets]`。
+- `daemon`: `host.toml` 改變時重新部署 dotfile。
+- `notifications`: 等待項目的通知。
 
 ## Impact
 
