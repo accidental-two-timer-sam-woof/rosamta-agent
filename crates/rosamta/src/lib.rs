@@ -1,5 +1,6 @@
 mod adopt;
 mod commands;
+mod sync;
 
 use std::path::Path;
 use std::process::ExitCode;
@@ -73,6 +74,12 @@ enum Command {
         #[command(subcommand)]
         action: Option<ReviewAction>,
     },
+    /// Commit changes in the repo and push them to the remote
+    Publish,
+    /// Bring in other hosts' changes and apply them
+    Pull,
+    /// Pull, then publish
+    Sync,
     /// Undo one adoption, or put startup files back the way they were before
     /// rosamta changed them
     Restore {
@@ -176,10 +183,14 @@ fn run(cli: &Cli) -> Result<ExitCode> {
             id: Some(id), yes, ..
         } => adopt::restore(cli.json, *yes, *id),
         Command::Restore { yes, .. } => commands::restore(cli.json, *yes),
+        Command::Publish => sync::publish(cli.json),
+        Command::Pull => sync::pull(cli.json),
+        Command::Sync => sync::sync(cli.json),
     }
 }
 
 fn init(json: bool, url: Option<&str>) -> Result<ExitCode> {
+    let started = rosamta_core::time::now();
     let paths = Paths::from_env()?;
     let outcome = match url {
         None => repo::init_new(&paths)?,
@@ -194,6 +205,12 @@ fn init(json: bool, url: Option<&str>) -> Result<ExitCode> {
             println!("Migrated repo format {from} to {to}");
         }
         println!("Host ID: {}", outcome.host_id);
+    }
+    if outcome.cloned {
+        // Joining committed this host to the repo's host list.
+        let ctx = rosamta_core::apply::Context::from_env()?;
+        let lock = rosamta_core::adopt::lock(&ctx)?;
+        sync::after_commit(&ctx, &lock, started, json);
     }
     Ok(ExitCode::SUCCESS)
 }

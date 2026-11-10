@@ -8,10 +8,10 @@
 
 ## 2. 推送、拉取與同步
 
-- [ ] 2.1 實作 `rsmt publish`（自動 commit、推送前秘密掃描、push），確認含 API key 的手改內容會被擋下且遠端沒有新 commit
-- [ ] 2.2 實作 `rsmt pull`（fetch、rebase、衝突時 abort、格式版本檢查、apply），確認衝突時 repo 不處於 rebase 中途、smoke test 失敗時 generated script 不切換
-- [ ] 2.3 實作 `rsmt sync` 與推送偏好（自動、手動），以兩個本機 clone 模擬兩台 host 的整合測試確認雙向同步
-- [ ] 2.4 實作離線重試：沒有網路時保留 commit，恢復後下一次同步推送成功
+- [x] 2.1 實作 `rsmt publish`（自動 commit、推送前秘密掃描、push），確認含 API key 的手改內容會被擋下且遠端沒有新 commit
+- [x] 2.2 實作 `rsmt pull`（fetch、rebase、衝突時 abort、格式版本檢查、apply），確認衝突時 repo 不處於 rebase 中途、smoke test 失敗時 generated script 不切換
+- [x] 2.3 實作 `rsmt sync` 與推送偏好（自動、手動），以兩個本機 clone 模擬兩台 host 的整合測試確認雙向同步
+- [x] 2.4 實作離線重試：沒有網路時保留 commit，恢復後下一次同步推送成功
 
 ## 3. GitHub 連結
 

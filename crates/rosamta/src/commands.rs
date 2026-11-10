@@ -44,7 +44,7 @@ pub fn apply(json: bool, dry_run: bool) -> Result<ExitCode> {
     Ok(ExitCode::SUCCESS)
 }
 
-fn warn_skipped(skipped: &[String]) {
+pub(crate) fn warn_skipped(skipped: &[String]) {
     for reason in skipped {
         eprintln!("warning: {reason}");
     }

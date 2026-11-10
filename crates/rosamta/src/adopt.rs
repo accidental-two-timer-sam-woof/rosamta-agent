@@ -10,10 +10,12 @@ use rosamta_core::time;
 
 use crate::commands::confirm;
 use crate::print_json;
+use crate::sync::after_commit;
 
 pub fn adopt(json: bool, yes: bool) -> Result<ExitCode> {
+    let started = time::now();
     let ctx = Context::from_env()?;
-    let _lock = adopt::lock(&ctx)?;
+    let lock = adopt::lock(&ctx)?;
     let candidates = adopt::scan(&ctx)?;
     if candidates.is_empty() {
         if json {
@@ -40,6 +42,7 @@ pub fn adopt(json: bool, yes: bool) -> Result<ExitCode> {
     }
     let done = adopt::execute(&ctx, plan)?;
     report(&ctx, json, &done);
+    after_commit(&ctx, &lock, started, json);
     Ok(ExitCode::SUCCESS)
 }
 
@@ -82,9 +85,13 @@ fn report(ctx: &Context, json: bool, done: &[Adoption]) {
 }
 
 pub fn review(json: bool) -> Result<ExitCode> {
+    let started = time::now();
     let ctx = Context::from_env()?;
-    let _lock = adopt::lock(&ctx)?;
+    let lock = adopt::lock(&ctx)?;
     let reviewed = adopt::refresh(&ctx)?;
+    if !reviewed.adopted.is_empty() {
+        after_commit(&ctx, &lock, started, json);
+    }
     if json {
         print_json(&reviewed.items);
         return Ok(ExitCode::SUCCESS);
@@ -119,11 +126,13 @@ fn item_line(ctx: &Context, item: &QueueItem) -> String {
 }
 
 pub fn accept(json: bool, id: u32, all_hosts: bool) -> Result<ExitCode> {
+    let started = time::now();
     let ctx = Context::from_env()?;
-    let _lock = adopt::lock(&ctx)?;
+    let lock = adopt::lock(&ctx)?;
     let scope = if all_hosts { Scope::All } else { Scope::Host };
     let done = adopt::accept(&ctx, id, scope)?;
     report(&ctx, json, &done);
+    after_commit(&ctx, &lock, started, json);
     Ok(ExitCode::SUCCESS)
 }
 
@@ -140,8 +149,9 @@ pub fn ignore(json: bool, id: u32) -> Result<ExitCode> {
 }
 
 pub fn restore(json: bool, yes: bool, id: u32) -> Result<ExitCode> {
+    let started = time::now();
     let ctx = Context::from_env()?;
-    let _lock = adopt::lock(&ctx)?;
+    let lock = adopt::lock(&ctx)?;
     let undo = adopt::plan_undo(&ctx, id)?;
     let mut changes = vec![undo.file.clone()];
     if let Some((path, text)) = &undo.module {
@@ -161,5 +171,6 @@ pub fn restore(json: bool, yes: bool, id: u32) -> Result<ExitCode> {
     } else {
         println!("Restored {}", adopt::display(&file, &ctx.home));
     }
+    after_commit(&ctx, &lock, started, json);
     Ok(ExitCode::SUCCESS)
 }
