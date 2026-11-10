@@ -81,7 +81,7 @@ fn finish(stopped: Result<Stop>) -> ! {
 /// Homebrew links `rsmt` to the CLI inside rosamta.app, but macOS finds the
 /// app bundle, which SMAppService needs, only when the program starts from
 /// its real path. Start again from there.
-fn from_app() -> Result<()> {
+pub(crate) fn from_app() -> Result<()> {
     #[cfg(target_os = "macos")]
     {
         use std::os::unix::process::CommandExt;

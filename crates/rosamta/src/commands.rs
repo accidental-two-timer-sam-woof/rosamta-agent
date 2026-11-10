@@ -6,6 +6,7 @@ use std::process::ExitCode;
 use rosamta_core::adopt;
 use rosamta_core::apply::{self, Context};
 use rosamta_core::config::Shell;
+use rosamta_core::daemon::service;
 use rosamta_core::dotfiles::{self, Action, Step};
 use rosamta_core::hooks::FileChange;
 use rosamta_core::{Error, Result};
@@ -182,37 +183,42 @@ pub(crate) fn warn_skipped(skipped: &[String]) {
 
 pub fn hook(json: bool, shells: &[Shell]) -> Result<ExitCode> {
     let ctx = Context::from_env()?;
-    let shells = if shells.is_empty() {
-        Shell::ALL.to_vec()
-    } else {
-        shells.to_vec()
-    };
-    let changed = apply::hook(&ctx, &shells)?;
+    let _lock = adopt::lock(&ctx)?;
+    let changed = apply::hook(&ctx, shells)?;
     report_paths(json, "Hooked", &changed);
     Ok(ExitCode::SUCCESS)
 }
 
 pub fn unhook(json: bool, shell: Shell) -> Result<ExitCode> {
     let ctx = Context::from_env()?;
+    let _lock = adopt::lock(&ctx)?;
     let changed = apply::unhook(&ctx, shell)?;
     report_paths(json, "Unhooked", &changed);
     Ok(ExitCode::SUCCESS)
 }
 
 pub fn eject(json: bool, yes: bool) -> Result<ExitCode> {
+    // Before anything else: on macOS this may start again from rosamta.app.
+    crate::daemon::from_app()?;
     let ctx = Context::from_env()?;
+    let _lock = adopt::lock(&ctx)?;
     let changes = apply::plan_eject(&ctx)?;
     if !confirm(json, yes, &changes)? {
         return Ok(ExitCode::SUCCESS);
     }
     apply::eject(&ctx, &changes)?;
+    let disabled = service::disable(&ctx.paths)?;
     let paths: Vec<_> = changes.into_iter().map(|change| change.path).collect();
     report_paths(json, "Ejected", &paths);
+    if disabled && !json {
+        println!("The background service is disabled");
+    }
     Ok(ExitCode::SUCCESS)
 }
 
 pub fn restore(json: bool, yes: bool) -> Result<ExitCode> {
     let ctx = Context::from_env()?;
+    let _lock = adopt::lock(&ctx)?;
     let changes = apply::plan_restore(&ctx)?;
     if changes.is_empty() {
         if json {

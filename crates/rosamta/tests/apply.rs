@@ -747,6 +747,58 @@ fn eject_drops_the_hook_of_a_shell_without_scripts() {
     assert!(!read(&home, ".profile").contains(BEGIN));
 }
 
+/// `rsmt hook`, `unhook`, `eject` and `restore --original` wait for the
+/// background service, and for other commands, to finish.
+#[test]
+fn commands_that_edit_rc_files_wait_for_the_lock() {
+    let home = set_up();
+    apply(&home);
+    let lock_file = home.root.join(".local/state/rosamta/lock");
+    for args in [
+        &["unhook", "sh"][..],
+        &["hook"],
+        &["eject", "--yes"],
+        &["restore", "--original", "--yes"],
+    ] {
+        let lock = fs::OpenOptions::new()
+            .create(true)
+            .truncate(false)
+            .write(true)
+            .open(&lock_file)
+            .unwrap();
+        lock.lock().unwrap();
+        let mut child = home.spawn("rsmt", args);
+        std::thread::sleep(Duration::from_millis(700));
+        assert!(child.try_wait().unwrap().is_none(), "{args:?} did not wait");
+        drop(lock);
+        let out = child.wait_with_output().unwrap();
+        assert!(
+            out.status.success(),
+            "{args:?}: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+    }
+}
+
+#[test]
+fn hook_without_arguments_hooks_the_installed_shells() {
+    use rosamta_core::shells::which;
+    let home = set_up();
+    let bin = home.root.join("only-sh");
+    fs::create_dir_all(&bin).unwrap();
+    let path = std::env::var("PATH").unwrap();
+    for tool in ["sh", "git"] {
+        std::os::unix::fs::symlink(which(tool, &path).unwrap(), bin.join(tool)).unwrap();
+    }
+    home.cmd("rsmt")
+        .arg("hook")
+        .env("PATH", &bin)
+        .assert()
+        .success();
+    assert!(read(&home, ".profile").contains(BEGIN));
+    assert!(!home.root.join(".bashrc").exists());
+}
+
 #[test]
 fn a_start_marker_without_its_end_stops_apply() {
     let home = set_up();

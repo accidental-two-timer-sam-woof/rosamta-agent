@@ -574,12 +574,22 @@ fn smoke(ctx: &Context, found: &Detected, dir: &Path) -> Vec<Smoke> {
         .collect()
 }
 
-/// `rsmt hook [shell...]`: install hooks and stop treating the shells as unhooked.
+/// `rsmt hook [shell...]`: install hooks and stop treating the shells as
+/// unhooked. No shells means every installed shell rosamta supports.
 pub fn hook(ctx: &Context, shells: &[Shell]) -> Result<Vec<PathBuf>> {
     let installed = ctx.installed();
     let env = ctx.hook_env(&installed);
+    let shells: Vec<Shell> = if shells.is_empty() {
+        installed
+            .iter()
+            .filter(|found| found.unsupported().is_none())
+            .map(|found| found.shell)
+            .collect()
+    } else {
+        shells.to_vec()
+    };
     let mut changes = Vec::new();
-    for shell in shells {
+    for shell in &shells {
         let found = installed.iter().find(|found| found.shell == *shell);
         match found.map(Detected::unsupported) {
             None => return Err(Error::Usage(format!("{shell} is not installed"))),
