@@ -429,7 +429,7 @@ impl Daemon {
         if self.host.pull != SyncPolicy::Auto {
             return;
         }
-        match sync::sync(&self.ctx) {
+        match sync::sync_per_policy(&self.ctx) {
             Ok(_) => {}
             // No remote yet, or no repo: nothing to sync with.
             Err(err) if err.is_usage() => {}

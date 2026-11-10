@@ -47,12 +47,30 @@ pub fn pull(ctx: &Context) -> Result<Pulled> {
 /// Pull, then Publish.
 pub fn sync(ctx: &Context) -> Result<Published> {
     let _lock = adopt::lock(ctx)?;
+    sync_locked(ctx)
+}
+
+fn sync_locked(ctx: &Context) -> Result<Published> {
     let pulled = pull_locked(ctx, true)?;
     let mut published = publish_locked(ctx, true)?;
     if pulled.commits > 0 {
         published.pulled = Some(pulled);
     }
     Ok(published)
+}
+
+/// The background service's Sync: with the publish policy `manual`, only
+/// Pull, leave edits the user has not committed alone and count unpushed
+/// commits.
+pub fn sync_per_policy(ctx: &Context) -> Result<()> {
+    let _lock = adopt::lock(ctx)?;
+    if host::load(&ctx.paths.host_config())?.publish == SyncPolicy::Auto {
+        return sync_locked(ctx).map(drop);
+    }
+    pull_locked(ctx, false)?;
+    let repo_dir = ctx.paths.repo();
+    let unpushed = Remote::required(&repo_dir)?.unpushed(&repo_dir)?;
+    state::update(ctx.paths.state(), |state| state.unpushed = unpushed)
 }
 
 /// After rosamta committed to the repo: push when the publish policy is
@@ -561,7 +579,64 @@ fn conflict(ctx: &Context, files: Vec<String>) -> Error {
 
 #[cfg(test)]
 mod tests {
+    use std::ffi::OsString;
+
     use super::*;
+    use crate::paths::Paths;
+
+    /// With `publish = "manual"` the background service's sync only pulls.
+    #[test]
+    fn manual_publish_policy_keeps_periodic_sync_to_a_pull() {
+        git::tests::isolate();
+        let dir = tempfile::tempdir().unwrap();
+        let home = dir.path().join("home");
+        let ctx = Context {
+            paths: Paths::from_vars(|name| (name == "HOME").then(|| OsString::from(&home)))
+                .unwrap(),
+            home: home.clone(),
+            path_var: String::new(),
+        };
+        std::fs::create_dir_all(ctx.paths.host_config().parent().unwrap()).unwrap();
+        std::fs::write(
+            ctx.paths.host_config(),
+            "id = \"a\"\npublish = \"manual\"\n",
+        )
+        .unwrap();
+        repo::init_new(&ctx.paths).unwrap();
+        let repo_dir = ctx.paths.repo();
+        let bare = dir.path().join("remote.git");
+        let bare_url = bare.to_str().unwrap();
+        git::run(dir.path(), &["init", "--quiet", "--bare", "remote.git"]).unwrap();
+        git::run(&repo_dir, &["remote", "add", "origin", bare_url]).unwrap();
+        publish(&ctx).unwrap();
+        // Another host pushes a module.
+        let other = dir.path().join("other");
+        git::clone(bare_url, &other, &[]).unwrap();
+        std::fs::create_dir_all(other.join("modules")).unwrap();
+        std::fs::write(other.join("modules/b.toml"), "[env]\nB = \"1\"\n").unwrap();
+        git::commit_all(&other, "b").unwrap();
+        git::run(&other, &["push", "--quiet"]).unwrap();
+        // This host commits a module, then edits it by hand.
+        std::fs::create_dir_all(repo_dir.join("modules")).unwrap();
+        std::fs::write(repo_dir.join("modules/a.toml"), "[env]\nA = \"1\"\n").unwrap();
+        git::commit_all(&repo_dir, "a").unwrap();
+        std::fs::write(repo_dir.join("modules/a.toml"), "[env]\nA = \"2\"\n").unwrap();
+        let remote_head = git::run(&bare, &["rev-parse", "HEAD"]).unwrap();
+
+        sync_per_policy(&ctx).unwrap();
+        assert!(repo_dir.join("modules/b.toml").is_file());
+        assert_eq!(
+            git::run(&bare, &["rev-parse", "HEAD"]).unwrap(),
+            remote_head
+        );
+        assert_eq!(
+            git::run(&repo_dir, &["status", "--porcelain"]).unwrap(),
+            " M modules/a.toml\n"
+        );
+        let state = load_state(ctx.paths.state()).unwrap();
+        assert_eq!(state.unpushed, 1);
+        assert_eq!(state.pull.unwrap().outcome, Outcome::Ok);
+    }
 
     #[test]
     fn edit_messages_name_what_changed() {
