@@ -142,6 +142,44 @@ fn init_refuses_existing_repo() {
 }
 
 #[test]
+fn init_adds_this_host_to_a_repo_without_host_toml() {
+    let home = home();
+    write_host(&home, "mbp");
+    repo::init_new(&home.paths).unwrap();
+    let repo_dir = home.paths.repo();
+    fs::remove_file(home.paths.host_config()).unwrap();
+    fs::write(repo_dir.join("notes.txt"), "hand edit\n").unwrap();
+
+    let outcome = repo::init_new(&home.paths).unwrap();
+    assert!(outcome.existing && outcome.host_created && !outcome.cloned);
+    let id = host::load(&home.paths.host_config()).unwrap().id;
+    assert_eq!(outcome.host_id, id);
+    assert_eq!(manifest(&repo_dir).hosts, ["mbp".to_string(), id.clone()]);
+    assert_eq!(
+        last_commit(&repo_dir),
+        format!("chore(repo): add host {id}")
+    );
+    // Only the host list is committed; the hand edit stays as it was.
+    assert_eq!(git(&repo_dir, &["status", "--porcelain"]), "?? notes.txt\n");
+
+    // With host.toml back, a second init refuses again.
+    assert!(repo::init_new(&home.paths).unwrap_err().is_usage());
+}
+
+#[test]
+fn init_finishes_after_an_interrupted_init() {
+    let home = home();
+    let repo_dir = home.paths.repo();
+    fs::create_dir_all(&repo_dir).unwrap();
+    git(&repo_dir, &["init", "--quiet"]);
+
+    let outcome = repo::init_new(&home.paths).unwrap();
+    assert!(!outcome.existing);
+    assert_eq!(manifest(&repo_dir).hosts, [outcome.host_id]);
+    assert_eq!(last_commit(&repo_dir), "chore(repo): initialize");
+}
+
+#[test]
 fn existing_host_id_survives_hostname_changes() {
     let home = home();
     write_host(&home, "mbp");
@@ -172,6 +210,37 @@ fn join_registers_host_and_leaves_rc_files() {
         .map(|e| e.unwrap().file_name())
         .collect();
     assert_eq!(entries.len(), 3, "{entries:?}"); // .zshrc, .config, .local
+}
+
+#[test]
+fn join_picks_a_free_host_id() {
+    let generated = host::generate_id();
+    let manifest_text = format!("format = 1\nhosts = [\"{generated}\", \"{generated}-2\"]\n");
+    let (_remote, url) = remote(&[("rosamta.toml", &manifest_text)]);
+    let home = home();
+
+    let outcome = repo::join(&home.paths, &url).unwrap();
+    let id = format!("{generated}-3");
+    assert_eq!(outcome.host_id, id);
+    assert_eq!(outcome.host_id_taken.as_deref(), Some(generated.as_str()));
+    assert_eq!(host::load(&home.paths.host_config()).unwrap().id, id);
+    assert_eq!(
+        manifest(&home.paths.repo()).hosts,
+        [generated.clone(), format!("{generated}-2"), id]
+    );
+}
+
+#[test]
+fn join_keeps_an_existing_host_id() {
+    let (_remote, url) = remote(&[("rosamta.toml", "format = 1\nhosts = [\"mbp\"]\n")]);
+    let home = home();
+    write_host(&home, "mbp");
+    let outcome = repo::join(&home.paths, &url).unwrap();
+    assert_eq!(
+        (outcome.host_id.as_str(), outcome.host_id_taken),
+        ("mbp", None)
+    );
+    assert_eq!(manifest(&home.paths.repo()).hosts, ["mbp"]);
 }
 
 #[test]
@@ -271,6 +340,87 @@ fn rename_updates_repo_in_one_commit() {
     assert_eq!(
         host::load(&home.paths.host_config()).unwrap().id,
         "work-mbp"
+    );
+}
+
+#[test]
+fn rename_updates_local_modules_and_commits_only_its_files() {
+    let home = home();
+    write_host(&home, "mbp");
+    repo::init_new(&home.paths).unwrap();
+    let repo_dir = home.paths.repo();
+    fs::write(repo_dir.join("secrets.txt"), "token\n").unwrap();
+    let local = home.paths.local_modules().join("token.toml");
+    fs::create_dir_all(local.parent().unwrap()).unwrap();
+    fs::write(&local, "[when]\nhosts = [\"mbp\"]\n").unwrap();
+
+    host::rename(&home.paths, "work-mbp").unwrap();
+
+    assert_eq!(
+        fs::read_to_string(&local).unwrap(),
+        "[when]\nhosts = [\"work-mbp\"]\n"
+    );
+    assert_eq!(
+        git(&repo_dir, &["show", "--name-only", "--format=", "HEAD"]),
+        "rosamta.toml\n"
+    );
+    assert_eq!(
+        git(&repo_dir, &["status", "--porcelain"]),
+        "?? secrets.txt\n"
+    );
+}
+
+#[test]
+fn rename_with_a_broken_file_changes_nothing() {
+    let home = home();
+    write_host(&home, "mbp");
+    repo::init_new(&home.paths).unwrap();
+    let repo_dir = home.paths.repo();
+    fs::create_dir_all(repo_dir.join("modules")).unwrap();
+    fs::write(
+        repo_dir.join("modules/a.toml"),
+        "[when]\nhosts = [\"mbp\"]\n",
+    )
+    .unwrap();
+    fs::write(repo_dir.join("modules/b.toml"), "[when\n").unwrap();
+    let head = git(&repo_dir, &["rev-parse", "HEAD"]);
+
+    assert!(
+        host::rename(&home.paths, "work-mbp")
+            .unwrap_err()
+            .is_usage()
+    );
+    assert_eq!(manifest(&repo_dir).hosts, ["mbp"]);
+    assert_eq!(
+        fs::read_to_string(repo_dir.join("modules/a.toml")).unwrap(),
+        "[when]\nhosts = [\"mbp\"]\n"
+    );
+    assert_eq!(host::load(&home.paths.host_config()).unwrap().id, "mbp");
+    assert_eq!(git(&repo_dir, &["rev-parse", "HEAD"]), head);
+}
+
+#[test]
+fn rename_to_another_hosts_id_is_refused() {
+    let home = home();
+    write_host(&home, "mbp");
+    repo::init_new(&home.paths).unwrap();
+    repo::register_host(&home.paths.repo(), "lab").unwrap();
+
+    assert!(host::rename(&home.paths, "lab").unwrap_err().is_usage());
+    assert_eq!(manifest(&home.paths.repo()).hosts, ["mbp", "lab"]);
+    assert_eq!(host::load(&home.paths.host_config()).unwrap().id, "mbp");
+}
+
+#[test]
+fn rename_keeps_the_comment_on_the_id() {
+    let home = home();
+    let path = home.paths.host_config();
+    fs::create_dir_all(path.parent().unwrap()).unwrap();
+    fs::write(&path, "id = \"mbp\" # my laptop\n").unwrap();
+    host::rename(&home.paths, "work-mbp").unwrap();
+    assert_eq!(
+        fs::read_to_string(&path).unwrap(),
+        "id = \"work-mbp\" # my laptop\n"
     );
 }
 
