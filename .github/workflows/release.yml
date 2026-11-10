@@ -117,7 +117,8 @@ jobs:
           # The runner's shared libraries reference newer glibc; the target system supplies its own copies.
           RUSTFLAGS: -C link-arg=-Wl,--allow-shlib-undefined
       - run: cargo deb --no-build -p rosamta --target "${TARGET}" -o dist/
-      - run: cargo generate-rpm -p crates/rosamta --target "${TARGET}" -o dist/
+      # rpm versions cannot contain "-"; "~" sorts a prerelease before its release.
+      - run: cargo generate-rpm -p crates/rosamta --target "${TARGET}" -o dist/ -s "version = \"$(printf '%s' "${VERSION}" | tr - '~')\""
       - name: Tarball
         run: |
           dir="rosamta-${VERSION}-linux-${{ matrix.arch }}"
@@ -143,7 +144,13 @@ jobs:
         with:
           path: dist
           merge-multiple: true
-      - run: gh release create "${GITHUB_REF_NAME}" dist/* --repo "${GITHUB_REPOSITORY}" --generate-notes
+      - name: Create the release
+        env:
+          VERSION: ${{ needs.version.outputs.version }}
+        run: |
+          flags=()
+          case "${VERSION}" in *-*) flags+=(--prerelease) ;; esac
+          gh release create "${GITHUB_REF_NAME}" dist/* --repo "${GITHUB_REPOSITORY}" --generate-notes "${flags[@]}"
 
   homebrew:
     needs: [version, publish]
@@ -175,8 +182,8 @@ jobs:
 
   aur:
     needs: [version, publish]
-    # Skipped until an AUR account exists; the placeholder variable holds a single space.
-    if: vars.AUR_USERNAME != '' && vars.AUR_USERNAME != ' '
+    # Skipped for prereleases, and until an AUR account exists (the placeholder variable holds a single space).
+    if: vars.AUR_USERNAME != '' && vars.AUR_USERNAME != ' ' && !contains(needs.version.outputs.version, '-')
     runs-on: ubuntu-24.04
     env:
       VERSION: ${{ needs.version.outputs.version }}
