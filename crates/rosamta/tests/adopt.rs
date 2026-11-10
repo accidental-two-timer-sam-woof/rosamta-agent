@@ -555,6 +555,56 @@ fn modules_that_do_not_load_here_replace_nothing() {
     assert!(zshrc.contains("FOO") && zshrc.contains("BAR"), "{zshrc}");
 }
 
+fn zsh_prints(home: &Home, expr: &str) -> String {
+    let out = home.shell(&[
+        "zsh".into(),
+        "-i".into(),
+        "-c".into(),
+        format!("print -r -- {expr}"),
+    ]);
+    String::from_utf8_lossy(&out.stdout).into_owned()
+}
+
+/// In a late file, an assignment after a snippet still runs after it.
+#[test]
+fn env_after_a_snippet_keeps_its_place() {
+    if !has("zsh") {
+        return;
+    }
+    let zshrc = "eval \"$(echo export FOO=early)\"\n\nexport FOO=late\n";
+    let home = hooked(&[(".zshrc", zshrc)]);
+    assert_eq!(zsh_prints(&home, "$FOO"), "late\n");
+    run(&home, &["adopt", "--yes"]);
+    assert_eq!(zsh_prints(&home, "$FOO"), "late\n");
+}
+
+/// An ignored snippet stays in the file and still changes PATH there, so
+/// a PATH change after it keeps its place too.
+#[test]
+fn an_ignored_snippet_keeps_path_order() {
+    if !has("zsh") {
+        return;
+    }
+    let zshrc =
+        "eval \"$(echo 'export PATH=/opt/a/bin:$PATH')\"\n\nexport PATH=\"/opt/b/bin:$PATH\"\n";
+    let home = hooked(&[(".zshrc", zshrc)]);
+    let items = review(&home);
+    let eval = items
+        .iter()
+        .find(|item| item["text"].as_str().unwrap().starts_with("eval"))
+        .unwrap()["id"]
+        .to_string();
+    run(&home, &["review", "ignore", &eval]);
+    // Only the two entries, after the review notice line.
+    let order = || {
+        let out = zsh_prints(&home, "${(M)path:#/opt/[ab]/bin}");
+        out.lines().last().unwrap_or_default().to_string()
+    };
+    assert_eq!(order(), "/opt/b/bin /opt/a/bin");
+    run(&home, &["adopt", "--yes"]);
+    assert_eq!(order(), "/opt/b/bin /opt/a/bin");
+}
+
 fn adoptions_json(home: &Home) -> String {
     read(home, ".local/state/rosamta/adoptions.json")
 }

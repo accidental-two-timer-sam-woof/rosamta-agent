@@ -172,11 +172,12 @@ pub fn scan(ctx: &Context) -> Result<Vec<Candidate>> {
             .map(|adoption| adoption.order)
             .max()
             .unwrap_or(watched.rank * 1000);
-        // Structured PATH entries load in the env phase and are put back in
-        // front at the end of `.zprofile`, while snippets keep their place.
-        // A snippet may change PATH unseen (eval, source), so PATH changes
-        // stay snippets where moving them would reorder PATH: after a snippet
-        // in a late file, and anywhere in a login file that has one.
+        // Structured env and PATH load in the env phase (PATH is put back in
+        // front at the end of `.zprofile`), while snippets keep their place.
+        // A snippet may change either unseen (eval, source), so they stay
+        // snippets where moving them would change the order: after a snippet
+        // or ignored lines in a late file, and anywhere in a login file that
+        // has a snippet.
         let mut barrier = watched.phase == Phase::Login
             && segments.iter().any(|segment| {
                 !segment.comment_only()
@@ -189,7 +190,12 @@ pub fn scan(ctx: &Context) -> Result<Vec<Candidate>> {
             let seed = watched.path.ends_with(".bash_profile") && text == hooks::BASH_PROFILE_SEED;
             let fish_default =
                 watched.path.ends_with("config.fish") && segment::fish_default(&text);
-            if seed || fish_default || ignored.hashes.contains(&hash) {
+            if seed || fish_default {
+                continue;
+            }
+            if ignored.hashes.contains(&hash) {
+                // Ignored lines stay and run in place, like a snippet.
+                barrier |= watched.phase != Phase::Env && !segment.comment_only();
                 continue;
             }
             let mut candidate = Candidate {
@@ -301,8 +307,10 @@ fn structured(
         return None;
     }
     if watched.phase != Phase::Env {
-        let touches_path = !module.path.prepend.is_empty() || !module.path.append.is_empty();
-        if (barrier && touches_path) || reads_late_variables(&module) {
+        let moves_to_env = !module.env.is_empty()
+            || !module.path.prepend.is_empty()
+            || !module.path.append.is_empty();
+        if (barrier && moves_to_env) || reads_late_variables(&module) {
             return None;
         }
     }
@@ -337,17 +345,26 @@ fn home_value(value: &str, home: &str) -> String {
 }
 
 /// Variables a late file's values read that the env phase may not have yet:
-/// anything but HOME, USER, LOGNAME, PATH and the module's own variables.
+/// anything but HOME, USER, LOGNAME, PATH and the module's other variables.
+/// `X="a:$X"` reads the old X, which is not the module's.
 fn reads_late_variables(module: &Module) -> bool {
     let known = ["HOME", "USER", "LOGNAME", "PATH"];
-    let values = module
+    let env = module
         .env
-        .values()
-        .chain(&module.path.prepend)
-        .chain(&module.path.append);
-    values
-        .flat_map(|value| variables(value))
-        .any(|name| !known.contains(&name.as_str()) && !module.env.contains_key(&name))
+        .iter()
+        .map(|(name, value)| (Some(name.as_str()), value));
+    let path = module
+        .path
+        .prepend
+        .iter()
+        .chain(&module.path.append)
+        .map(|value| (None, value));
+    env.chain(path).any(|(own, value)| {
+        variables(value).iter().any(|name| {
+            !known.contains(&name.as_str())
+                && (own == Some(name.as_str()) || !module.env.contains_key(name))
+        })
+    })
 }
 
 fn variables(value: &str) -> Vec<String> {
@@ -1222,4 +1239,21 @@ pub fn notice_path(ctx: &Context) -> PathBuf {
 /// For tests and the GUI: the adoption records.
 pub fn adoptions(ctx: &Context) -> Result<Vec<Adoption>> {
     Ok(Store::new(ctx.paths.state()).adoptions()?.adoptions)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn module(text: &str) -> Module {
+        toml::from_str(text).unwrap()
+    }
+
+    #[test]
+    fn a_value_that_reads_its_own_old_value_is_late() {
+        assert!(reads_late_variables(&module("[env]\nX = \"a:$X\"")));
+        assert!(!reads_late_variables(&module(
+            "[env]\nA = \"$HOME/a\"\nB = \"$A/b\"\n[path]\nprepend = [\"$B/bin\"]"
+        )));
+    }
 }
