@@ -3,7 +3,7 @@
 
 use std::path::Path;
 
-use gpui_kit::component::button::{Button, ButtonGroup, ButtonVariants};
+use gpui_kit::component::button::{Button, ButtonGroup};
 use gpui_kit::component::{Disableable, h_flex, v_flex};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
@@ -188,7 +188,7 @@ fn selected(app: &Rosamta, cx: &mut Context<Rosamta>) -> Option<impl IntoElement
         h_flex()
             .gap(px(S8))
             .child(
-                Button::new("discard")
+                super::glass(Button::new("discard"), cx)
                     .label(t("item.use_repo"))
                     .disabled(busy)
                     .on_click(cx.listener(move |this, _, window, cx| {
@@ -196,9 +196,8 @@ fn selected(app: &Rosamta, cx: &mut Context<Rosamta>) -> Option<impl IntoElement
                     })),
             )
             .child(
-                Button::new("keep")
+                super::prominent(Button::new("keep"))
                     .label(t("item.keep_local"))
-                    .primary()
                     .loading(busy)
                     .on_click(cx.listener(move |this, _, window, cx| {
                         this.run(window, cx, move |core| {
@@ -211,13 +210,13 @@ fn selected(app: &Rosamta, cx: &mut Context<Rosamta>) -> Option<impl IntoElement
         h_flex()
             .gap(px(S8))
             .child(
-                ButtonGroup::new("scope")
+                super::segments(ButtonGroup::new("scope"), cx)
                     .child(
-                        super::segment(Button::new("this-host"), scope == Scope::Host)
+                        super::segment(Button::new("this-host"), scope == Scope::Host, cx)
                             .label(t("item.this_host")),
                     )
                     .child(
-                        super::segment(Button::new("all-hosts"), scope == Scope::All)
+                        super::segment(Button::new("all-hosts"), scope == Scope::All, cx)
                             .label(t("item.all_hosts"))
                             // Lines holding a secret stay on this host.
                             .disabled(item.local),
@@ -232,9 +231,8 @@ fn selected(app: &Rosamta, cx: &mut Context<Rosamta>) -> Option<impl IntoElement
                     })),
             )
             .child(
-                Button::new("adopt")
+                super::prominent(Button::new("adopt"))
                     .label(t("action.adopt"))
-                    .primary()
                     .loading(busy)
                     .on_click(cx.listener(move |this, _, window, cx| {
                         let scope = this.scope;
@@ -243,9 +241,8 @@ fn selected(app: &Rosamta, cx: &mut Context<Rosamta>) -> Option<impl IntoElement
             )
     }
     .child(
-        Button::new("ignore")
+        super::ghost(Button::new("ignore"))
             .label(t("action.ignore"))
-            .ghost()
             .disabled(busy)
             .on_click(cx.listener(move |this, _, window, cx| {
                 this.run(window, cx, move |core| actions::ignore(core, id));

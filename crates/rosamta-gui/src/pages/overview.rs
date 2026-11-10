@@ -1,6 +1,6 @@
 //! What needs attention, how this host is set up, and what happened lately.
 
-use gpui_kit::component::button::{Button, ButtonVariants};
+use gpui_kit::component::button::Button;
 use gpui_kit::component::{h_flex, v_flex};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
@@ -35,7 +35,7 @@ pub fn render(app: &Rosamta, cx: &mut Context<Rosamta>) -> impl IntoElement {
                 .child(tf("overview.synced", &[("time", &when(at))]))
         }))
         .child(
-            Button::new("sync")
+            super::glass(Button::new("sync"), cx)
                 .label(t("overview.sync"))
                 .loading(app.busy)
                 .on_click(cx.listener(|this, _, window, cx| {
@@ -85,9 +85,8 @@ fn attention(app: &Rosamta, cx: &mut Context<Rosamta>) -> Option<impl IntoElemen
                     ),
             )
             .child(
-                Button::new(("view", id))
+                super::ghost(Button::new(("view", id)))
                     .label(t("overview.view"))
-                    .ghost()
                     .on_click(cx.listener(move |this, _, _, cx| this.select(id, cx))),
             )
     });

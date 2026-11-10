@@ -1,6 +1,6 @@
 //! This host's settings in `host.toml`, its remote and the background service.
 
-use gpui_kit::component::button::{Button, ButtonGroup, ButtonVariants};
+use gpui_kit::component::button::{Button, ButtonGroup};
 use gpui_kit::component::input::Input;
 use gpui_kit::component::switch::Switch;
 use gpui_kit::component::{Disableable, Sizable, h_flex, v_flex};
@@ -60,9 +60,8 @@ pub fn render(
                     .bg(p.code)
                     .child(tag.clone())
                     .child(
-                        Button::new(("remove-tag", index))
+                        super::ghost(Button::new(("remove-tag", index)))
                             .label("×")
-                            .ghost()
                             .xsmall()
                             .disabled(busy)
                             .on_click(cx.listener(move |this, _, window, cx| {
@@ -73,7 +72,7 @@ pub fn render(
             }))
             .child(div().w(px(160.)).child(Input::new(&app.tag).small()))
             .child(
-                Button::new("add-tag")
+                super::glass(Button::new("add-tag"), cx)
                     .label(t("settings.add"))
                     .small()
                     .disabled(busy)
@@ -130,12 +129,13 @@ pub fn render(
             ))
             .child(
                 row(cx).child(label(t("settings.pull_interval"), cx)).child(
-                    ButtonGroup::new("pull_interval")
+                    super::segments(ButtonGroup::new("pull_interval"), cx)
                         .small()
                         .children(INTERVALS.iter().enumerate().map(|(index, (key, minutes))| {
                             super::segment(
                                 Button::new(("pull_interval", index)),
                                 *minutes == interval,
+                                cx,
                             )
                             .label(t(key))
                             .disabled(busy)
@@ -217,10 +217,10 @@ fn choice(
     cx: &mut Context<Rosamta>,
 ) -> impl IntoElement {
     row(cx).child(label(t(key), cx)).child(
-        ButtonGroup::new(setting)
+        super::segments(ButtonGroup::new(setting), cx)
             .small()
             .children(options.iter().enumerate().map(|(index, (label, value))| {
-                super::segment(Button::new((setting, index)), *value == current)
+                super::segment(Button::new((setting, index)), *value == current, cx)
                     .label(t(label))
                     .disabled(busy)
             }))
