@@ -82,12 +82,71 @@ pub fn apply(json: bool, dry_run: bool) -> Result<ExitCode> {
         for step in changed {
             print_step(&ctx, step);
         }
+        if std::io::stdin().is_terminal() {
+            settle_conflicts(&ctx, &applied.dotfiles)?;
+        }
     }
     Ok(if failed {
         ExitCode::FAILURE
     } else {
         ExitCode::SUCCESS
     })
+}
+
+/// Ask about each conflict: the repo's version, this host's (kept for this
+/// host alone), or later from `rsmt review`.
+fn settle_conflicts(ctx: &Context, steps: &[Step]) -> Result<()> {
+    let started = rosamta_core::time::now();
+    let lock = adopt::lock(ctx)?;
+    let mut kept = false;
+    for step in steps.iter().filter(|step| step.action == Action::Conflict) {
+        let item = adopt::queue(ctx)?.into_iter().find(|item| {
+            item.dotfile
+                .as_ref()
+                .is_some_and(|dotfile| dotfile.path == step.path)
+        });
+        let Some((id, dotfile)) = item.and_then(|item| Some((item.id, item.dotfile?))) else {
+            continue;
+        };
+        print!("{}", dotfiles::review::diff(ctx, &dotfile)?);
+        let path = adopt::display(&ctx.home.join(&step.path), &ctx.home);
+        let answer = ask(&format!(
+            "Keep which version of {path}? [r]epo, [l]ocal, [s]kip: "
+        ))?;
+        match answer.as_str() {
+            "r" | "repo" => {
+                dotfiles::review::discard(ctx, id)?;
+                println!("Replaced {path} with the repo's version");
+            }
+            "l" | "local" => {
+                adopt::accept(ctx, id, adopt::Scope::Host)?;
+                println!("Kept {path} in the repo for this host");
+                kept = true;
+            }
+            _ => println!("Skipped {path}; run `rsmt review` to decide later"),
+        }
+    }
+    if kept {
+        crate::sync::after_commit(ctx, &lock, started, false);
+    }
+    Ok(())
+}
+
+fn ask(question: &str) -> Result<String> {
+    print!("{question}");
+    std::io::stdout().flush().map_err(|err| Error::Write {
+        path: "stdout".into(),
+        source: err,
+    })?;
+    let mut answer = String::new();
+    std::io::stdin()
+        .lock()
+        .read_line(&mut answer)
+        .map_err(|err| Error::Read {
+            path: "stdin".into(),
+            source: err,
+        })?;
+    Ok(answer.trim().to_ascii_lowercase())
 }
 
 #[derive(serde::Serialize)]

@@ -57,6 +57,10 @@ pub struct QueueItem {
     pub module: Option<PathBuf>,
     /// Secrets stay on this host.
     pub local: bool,
+    /// Set for a dotfile that differs from the repo; the fields above that
+    /// describe rc file lines are then empty.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub dotfile: Option<crate::dotfiles::review::DotfileItem>,
 }
 
 #[derive(Debug, Default, Serialize, Deserialize)]

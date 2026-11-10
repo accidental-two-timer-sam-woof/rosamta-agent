@@ -10,6 +10,7 @@ use crate::validate;
 
 pub mod deploy;
 mod history;
+pub mod review;
 pub mod state;
 pub mod tree;
 

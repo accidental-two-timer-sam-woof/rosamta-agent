@@ -122,3 +122,26 @@ permissions = "600x"
     }
     assert_eq!(problems.len(), expected.len() + 1, "{problems:#?}");
 }
+
+#[test]
+fn appended_declarations_stay_compact() {
+    let repo = tempfile::tempdir().unwrap();
+    let manifest = repo.path().join(MANIFEST);
+    std::fs::write(
+        &manifest,
+        "# mine\n[[dotfile]]\npath = \".gitconfig\" # shared\n",
+    )
+    .unwrap();
+    let mut entry = Dotfile::new(".gitconfig");
+    entry.source = Some("hosts/mbp/.gitconfig".into());
+    entry.deploy = Deploy::Copy;
+    entry.when.hosts = vec!["mbp".into()];
+    review::append(repo.path(), &entry).unwrap();
+    assert_eq!(
+        std::fs::read_to_string(&manifest).unwrap(),
+        "# mine\n[[dotfile]]\npath = \".gitconfig\" # shared\n\n[[dotfile]]\npath = \".gitconfig\"\nsource = \"hosts/mbp/.gitconfig\"\ndeploy = \"copy\"\nwhen = { hosts = [\"mbp\"] }\n"
+    );
+    let parsed: DotfileManifest =
+        toml::from_str(&std::fs::read_to_string(&manifest).unwrap()).unwrap();
+    assert_eq!(parsed.dotfile[1], entry);
+}

@@ -9,6 +9,7 @@ use std::path::{Path, PathBuf};
 
 use serde::Serialize;
 
+use super::review::{self, DotfileItem, Reason};
 use super::state::{self, Deployed, Record, Sides};
 use super::tree::{self, Content};
 use super::{Choice, history};
@@ -57,6 +58,8 @@ pub struct Planned {
     /// The current and the new content, for a preview of a copy that
     /// changes; `None` on a side that is not text or not there.
     pub preview: Option<(Option<String>, Option<String>)>,
+    /// Both sides of a path that waits for the user.
+    sides: Option<Sides>,
     work: Work,
 }
 
@@ -135,8 +138,16 @@ fn step(path: &Path, action: Action, reason: Option<String>, work: Work) -> Plan
             reason,
         },
         preview: None,
+        sides: None,
         work,
     }
+}
+
+/// A step that waits for the user, with both sides as they are.
+fn wait(path: &Path, action: Action, local: String, repo: String) -> Planned {
+    let mut planned = step(path, action, None, Work::Nothing);
+    planned.sides = Some(Sides { local, repo });
+    planned
 }
 
 /// Work out what deploying would do, without writing anything.
@@ -227,7 +238,7 @@ fn plan_link(env: &Env, path: &Path, entry: &Dotfile) -> Result<Planned> {
     if replaced {
         return Ok(step(path, Action::Saved, None, Work::Save(entry.clone())));
     }
-    Ok(step(path, Action::Conflict, None, Work::Nothing))
+    Ok(wait(path, Action::Conflict, local, repo_hash))
 }
 
 fn plan_copy(env: &Env, path: &Path, entry: &Dotfile) -> Result<Planned> {
@@ -246,7 +257,7 @@ fn plan_copy(env: &Env, path: &Path, entry: &Dotfile) -> Result<Planned> {
             Work::Keep(entry.clone()),
         ));
     }
-    let Some(desired) = desired(env, entry)? else {
+    let Some(desired) = desired(&env.repo, entry)? else {
         return Ok(step(
             path,
             Action::Skipped,
@@ -275,7 +286,7 @@ fn plan_copy(env: &Env, path: &Path, entry: &Dotfile) -> Result<Planned> {
     if record.is_some_and(|record| record.source_hash == repo_hash) {
         return Ok(match env.policy {
             AdoptPolicy::Auto => step(path, Action::Saved, None, Work::Save(entry.clone())),
-            AdoptPolicy::Ask => step(path, Action::Changed, None, Work::Nothing),
+            AdoptPolicy::Ask => wait(path, Action::Changed, local, repo_hash),
             AdoptPolicy::Off => step(
                 path,
                 Action::Skipped,
@@ -284,14 +295,14 @@ fn plan_copy(env: &Env, path: &Path, entry: &Dotfile) -> Result<Planned> {
             ),
         });
     }
-    Ok(step(path, Action::Conflict, None, Work::Nothing))
+    Ok(wait(path, Action::Conflict, local, repo_hash))
 }
 
-fn desired(env: &Env, entry: &Dotfile) -> Result<Option<Desired>> {
+fn desired(repo: &Path, entry: &Dotfile) -> Result<Option<Desired>> {
     if entry.encrypted {
         return Ok(None);
     }
-    Ok(Some(Desired::Source(env.source(entry))))
+    Ok(Some(Desired::Source(repo.join(entry.source()))))
 }
 
 fn write(
@@ -341,7 +352,19 @@ pub fn deploy(ctx: &Context) -> Result<Vec<Step>> {
     }
     snapshots.save(&keep, "deploy dotfiles")?;
     let mut steps = Vec::new();
+    let mut waiting = Vec::new();
     for item in planned {
+        if let Some(sides) = item.sides {
+            let reason = match item.step.action {
+                Action::Changed => Reason::Changed,
+                _ => Reason::Conflict,
+            };
+            waiting.push(DotfileItem {
+                path: item.step.path.clone(),
+                reason,
+                sides,
+            });
+        }
         let mut step = item.step;
         if let Err(err) = run(ctx, &repo, &mut deployed, &step.path, item.work) {
             step.action = Action::Failed;
@@ -350,7 +373,35 @@ pub fn deploy(ctx: &Context) -> Result<Vec<Step>> {
         steps.push(step);
     }
     state::save(state_dir, &deployed)?;
+    review::sync_queue(ctx, waiting)?;
     Ok(steps)
+}
+
+/// Put the repo's version at `path`, keeping what was there in a snapshot.
+pub(crate) fn force(ctx: &Context, path: &Path, entry: &Dotfile) -> Result<()> {
+    let repo = ctx.paths.repo();
+    let work = match entry.deploy {
+        Deploy::Link => Work::Link(entry.clone()),
+        Deploy::Copy => match desired(&repo, entry)? {
+            Some(desired) => Work::Write(entry.clone(), desired),
+            None => {
+                return Err(Error::Usage(
+                    "encrypted dotfiles are not supported yet".into(),
+                ));
+            }
+        },
+        Deploy::Template => {
+            return Err(Error::Usage("template deploy is not supported yet".into()));
+        }
+    };
+    let target = ctx.home.join(path);
+    Snapshots::new(ctx.paths.state(), &ctx.home).save(
+        &tree::files(&target)?,
+        &format!("discard {}", path.display()),
+    )?;
+    let mut deployed = state::load(ctx.paths.state())?;
+    run(ctx, &repo, &mut deployed, path, work)?;
+    state::save(ctx.paths.state(), &deployed)
 }
 
 fn run(ctx: &Context, repo: &Path, deployed: &mut Deployed, path: &Path, work: Work) -> Result<()> {
