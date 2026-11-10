@@ -115,6 +115,70 @@ rsmt review ignore <編號>
 | `adopt_original` | `delete`：刪除原內容（預設）；`comment`：改成註解 |
 | `shell_notice` | `true`：開 shell 時提醒（預設）；`false` |
 
+## 同步到其他主機
+
+```sh
+rsmt sync
+```
+
+先拉取其他主機推送的變更並套用，再把這台主機的變更推送到遠端。也可以分開執行：
+
+```sh
+rsmt pull
+rsmt publish
+```
+
+`rsmt publish` 會先把你在 repo 中手動修改的內容建立成 commit。commit 依你的 git 設定簽章。
+
+`rsmt init` 建立的 repo 沒有遠端，要先加上一個（換成你的 repo 網址）：
+
+```sh
+git -C ~/.local/share/rosamta/repo remote add origin git@github.com:<你的帳號>/dotfiles.git
+rsmt publish
+```
+
+接管與還原建立 commit 後會立即推送。在 `~/.config/rosamta/host.toml` 設定 `publish = "manual"` 時，只在執行 `rsmt publish` 或 `rsmt sync` 時推送。
+
+拉取時，這台主機還沒推送的 commit 會接在遠端的變更之後。兩台主機改到同一個檔案的同一處時，拉取會中止並列出這些檔案，repo 維持拉取前的狀態；在 repo 中用 git 合併後，再執行 `rsmt sync`。拉取到的 module 讓 shell 啟動時出現新的錯誤時，repo 保留新內容，shell 繼續使用原本的設定。
+
+### 推送受阻
+
+推送前會檢查每個要推送的 commit 新增的內容。看起來像 API key 或 token 時，推送會停止並列出檔案、行號與符合的規則；把該內容移出 repo、修改尚未推送的 commit 後，再推送一次。
+
+| 情況 | 結果 |
+|---|---|
+| commit 無法簽章，例如背景中無法輸入 GPG 密碼 | 不建立 commit，變更留在 repo 中；解鎖金鑰後再執行 `rsmt publish` |
+| 遠端拒絕存取 | 不推送；確認 SSH 金鑰或 GitHub 登入後再推送 |
+| 連不上遠端 | commit 留在本機，下一次 `rsmt sync` 時推送 |
+
+## 連結 GitHub
+
+```sh
+rsmt remote github login
+```
+
+依畫面上的網址開啟 GitHub 的驗證頁，輸入顯示的驗證碼並授權。token 存在系統的 keychain（macOS Keychain、Linux Secret Service）；沒有 keychain 時存在 `~/.config/rosamta/github-token`，只有你能讀取。
+
+登入後，建立一個 private repo 作為遠端：
+
+```sh
+rsmt init --github dotfiles
+```
+
+或加入既有的 repo：
+
+```sh
+rsmt init --github <帳號>/dotfiles
+```
+
+SSH 金鑰能通過 GitHub 驗證時使用 SSH；否則以登入的 token 走 HTTPS，相關設定只寫在 repo 中，不修改 `~/.gitconfig`。
+
+登出時會刪除 token：
+
+```sh
+rsmt remote github logout
+```
+
 ## 移除 hook
 
 ```sh
