@@ -2,7 +2,7 @@
 
 ## 1. Spike（可丟棄）
 
-- [ ] 1.1 在獨立分支做最小的簽章 `.app` 與 helper app，以 SMAppService 註冊並由 helper 發出帶三個按鈕的通知，確認在 macOS 13 與最新版上都能顯示按鈕並收到點擊
+- [x] 1.1 在獨立分支做最小的簽章 `.app` 與 helper app，以 SMAppService 註冊並由 helper 發出帶三個按鈕的通知，確認在 macOS 13 與最新版上都能顯示按鈕並收到點擊
 - [x] 1.2 把 spike 的結果與限制寫回 ADR 0004，若不可行則記錄改採的退路
 
 ## 2. 程序與生命週期
