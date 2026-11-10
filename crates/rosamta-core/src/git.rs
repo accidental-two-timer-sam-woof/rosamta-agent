@@ -161,6 +161,15 @@ pub(crate) fn commit(dir: &Path, message: &str, paths: &[&str]) -> Result<Commit
     finish(dir, &args, paths)
 }
 
+/// Commit what is staged and add nothing, so what the caller checked is
+/// what gets committed; on failure `paths` end up unstaged again.
+pub(crate) fn commit_staged(dir: &Path, message: &str, paths: &[&str]) -> Result<Commit> {
+    if succeeds(dir, &["diff", "--cached", "--quiet"])? {
+        return Ok(Commit::Clean);
+    }
+    finish(dir, &["commit", "--quiet", "--message", message], paths)
+}
+
 /// Run `git commit`; whatever stops it, `paths` end up unstaged again.
 fn finish(dir: &Path, args: &[&str], paths: &[&str]) -> Result<Commit> {
     let Err(err) = run(dir, args) else {

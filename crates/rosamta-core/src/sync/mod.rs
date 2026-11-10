@@ -308,10 +308,10 @@ fn commit_pending(ctx: &Context, _repo_dir: &Path) -> Result<bool> {
     commit_scanned(ctx, &[], None)
 }
 
-/// Commit the changes under `paths` (every change when empty) once the
-/// secret scan passes; `message` defaults to one naming what changed. A
-/// commit that fails, to sign or otherwise, is recorded and returned as an
-/// error.
+/// Stage the changes under `paths` (every change when empty) and commit
+/// exactly what the secret scan passed; `message` defaults to one naming
+/// what changed. A commit that fails, to sign or otherwise, is recorded and
+/// returned as an error.
 pub(crate) fn commit_scanned(ctx: &Context, paths: &[&str], message: Option<&str>) -> Result<bool> {
     let repo_dir = ctx.paths.repo();
     git::ensure_on_branch(&repo_dir)?;
@@ -344,7 +344,7 @@ pub(crate) fn commit_scanned(ctx: &Context, paths: &[&str], message: Option<&str
         return Err(secret_blocked(ctx, &hits, None));
     }
     let message = message.map_or_else(|| edit_message(&status), str::to_string);
-    match git::commit(&repo_dir, &message, paths) {
+    match git::commit_staged(&repo_dir, &message, paths) {
         Ok(Commit::Clean) => Ok(false),
         Ok(Commit::Created) => Ok(true),
         Ok(Commit::SigningFailed(message)) => {
