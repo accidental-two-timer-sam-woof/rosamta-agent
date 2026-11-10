@@ -272,8 +272,8 @@ fn init(json: bool, url: Option<&str>) -> Result<ExitCode> {
         Some(url) => repo::join(&paths, url)?,
     };
     report_init(json, &outcome);
-    if outcome.cloned {
-        // Joining committed this host to the repo's host list.
+    if outcome.cloned || outcome.existing {
+        // Adding this host to an existing repo committed it to the host list.
         let ctx = rosamta_core::apply::Context::from_env()?;
         let lock = rosamta_core::adopt::lock(&ctx)?;
         sync::after_commit(&ctx, &lock, started, json);
@@ -285,12 +285,24 @@ fn report_init(json: bool, outcome: &repo::InitOutcome) {
     if json {
         print_json(outcome);
     } else {
-        let verb = if outcome.cloned { "Cloned" } else { "Created" };
+        let verb = if outcome.cloned {
+            "Cloned"
+        } else if outcome.existing {
+            "Using existing"
+        } else {
+            "Created"
+        };
         println!("{verb} repo at {}", outcome.repo.display());
         if let Some((from, to)) = outcome.migrated {
             println!("Migrated repo format {from} to {to}");
         }
-        println!("Host ID: {}", outcome.host_id);
+        match &outcome.host_id_taken {
+            Some(taken) => println!(
+                "Host ID: {} ({taken} is already used by another host)",
+                outcome.host_id
+            ),
+            None => println!("Host ID: {}", outcome.host_id),
+        }
     }
 }
 

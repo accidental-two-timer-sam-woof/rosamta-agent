@@ -255,6 +255,24 @@ fn init_twice_exits_2_and_changes_nothing() {
 }
 
 #[test]
+fn init_sets_up_a_host_for_a_repo_without_host_toml() {
+    let home = Home::new();
+    home.write_host("mbp");
+    home.cmd("rsmt").arg("init").assert().success();
+    fs::remove_file(home.host_config()).unwrap();
+    home.cmd("rsmt")
+        .arg("init")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Using existing repo at"));
+    assert!(home.host_config().is_file());
+    home.cmd("rsmt")
+        .args(["apply", "--dry-run"])
+        .assert()
+        .success();
+}
+
+#[test]
 fn init_with_url_clones_and_registers_host() {
     let remote = tempfile::tempdir().unwrap();
     let work = remote.path().join("work");
