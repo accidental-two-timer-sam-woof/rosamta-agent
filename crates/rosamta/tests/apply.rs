@@ -545,7 +545,12 @@ fn every_stage_of_one_shell_loads_the_same_version() {
         current(&home).display()
     );
     if has("zsh") {
-        let zshenv = home.root.join(".zshenv");
+        // Alpine's /etc/zsh/zshenv moves a new user's files to ~/.config/zsh.
+        let zshenv = [".zshenv", ".config/zsh/.zshenv"]
+            .map(|rel| home.root.join(rel))
+            .into_iter()
+            .find(|path| path.exists())
+            .unwrap();
         let text = fs::read_to_string(&zshenv).unwrap();
         fs::write(&zshenv, format!("{text}{switch}")).unwrap();
         reset();
@@ -709,7 +714,7 @@ fn ejected_code_keeps_return_local_and_env_once() {
     );
     home.write("modules/late.toml", "[aliases]\ngs = \"git status\"\n");
     apply(&home);
-    for rel in [".bashrc", ".zshrc"] {
+    for rel in [".bashrc", ".zshrc", ".config/zsh/.zshrc"] {
         if home.root.join(rel).exists() {
             let text = read(&home, rel);
             fs::write(home.root.join(rel), format!("{text}AFTER=1\n")).unwrap();
