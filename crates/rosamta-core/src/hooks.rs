@@ -4,7 +4,7 @@
 //! |---|---|---|
 //! | sh | `~/.profile` | env |
 //! | bash | the profile file login bash reads, and `~/.bashrc` | env, then `~/.bashrc` when interactive; env and rc |
-//! | zsh | `.zshenv`; `$ZDOTDIR/.zshrc`; macOS `$ZDOTDIR/.zprofile` | env; rc; PATH order |
+//! | zsh | `.zshenv`; `$ZDOTDIR/.zshrc`; `$ZDOTDIR/.zprofile` | env; rc; PATH order |
 //! | fish | `conf.d/rosamta.fish` (a file of its own) | env, and rc when interactive |
 
 use std::path::{Path, PathBuf};
@@ -27,45 +27,47 @@ const POSIX_DIR: &str =
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct HookEnv {
     pub home: PathBuf,
-    /// Where zsh reads `.zshenv`: `$ZDOTDIR` as zsh starts, or HOME.
+    /// Where zsh reads `.zshenv`: `$ZDOTDIR` after the global zshenv, or HOME.
     pub zshenv_dir: PathBuf,
     /// Where zsh reads `.zshrc` and `.zprofile`, after `.zshenv` ran.
     pub zdotdir: PathBuf,
     pub fish_config: PathBuf,
-    pub macos: bool,
 }
 
 impl HookEnv {
     /// Ask zsh and fish themselves; fall back to their defaults.
     pub fn detect(home: &Path, zsh: Option<&Path>, fish: Option<&Path>) -> Self {
-        let query = |exe: &Path, script: &str| {
+        let query = |exe: &Path, args: &[&str]| {
             let mut cmd = std::process::Command::new(exe);
-            cmd.args(["-c", script])
+            cmd.args(args)
                 .env("HOME", home)
                 .env("ROSAMTA_CURRENT", "/nonexistent");
             let output = output_with_timeout(&mut cmd, Duration::from_secs(5)).ok()??;
             let text = String::from_utf8_lossy(&output.stdout).trim().to_string();
             (output.status.success() && text.starts_with('/')).then(|| PathBuf::from(text))
         };
-        let zshenv_dir = std::env::var_os("ZDOTDIR")
-            .map(PathBuf::from)
+        let zdotdir_script = "printf %s \"${ZDOTDIR:-$HOME}\"";
+        // -f still runs the global zshenv, which may set ZDOTDIR (Alpine does
+        // when HOME has no zsh startup files), but not the user's .zshenv.
+        let zshenv_dir = zsh
+            .and_then(|zsh| query(zsh, &["-f", "-c", zdotdir_script]))
+            .or_else(|| std::env::var_os("ZDOTDIR").map(PathBuf::from))
             .unwrap_or_else(|| home.to_path_buf());
         let zdotdir = zsh
-            .and_then(|zsh| query(zsh, "printf %s \"${ZDOTDIR:-$HOME}\""))
+            .and_then(|zsh| query(zsh, &["-c", zdotdir_script]))
             .unwrap_or_else(|| zshenv_dir.clone());
         let config_home = std::env::var_os("XDG_CONFIG_HOME")
             .map(PathBuf::from)
             .filter(|dir| dir.is_absolute())
             .unwrap_or_else(|| home.join(".config"));
         let fish_config = fish
-            .and_then(|fish| query(fish, "printf %s $__fish_config_dir"))
+            .and_then(|fish| query(fish, &["-c", "printf %s $__fish_config_dir"]))
             .unwrap_or_else(|| config_home.join("fish"));
         Self {
             home: home.to_path_buf(),
             zshenv_dir,
             zdotdir,
             fish_config,
-            macos: cfg!(target_os = "macos"),
         }
     }
 }
@@ -209,13 +211,13 @@ pub fn plan_install(shell: Shell, env: &HookEnv) -> Result<Vec<FileChange>> {
                 posix_block(shell, &source_line("rc.zsh")),
                 None,
             )?;
-            if env.macos {
-                upsert(
-                    env.zdotdir.join(".zprofile"),
-                    posix_block(shell, &source_line("profile.zsh")),
-                    None,
-                )?;
-            }
+            // The global zprofile may reorder PATH (macOS path_helper) or reset
+            // it (Alpine's /etc/profile) after .zshenv ran.
+            upsert(
+                env.zdotdir.join(".zprofile"),
+                posix_block(shell, &source_line("profile.zsh")),
+                None,
+            )?;
         }
         Shell::Fish => {
             let path = env.fish_config.join("conf.d/rosamta.fish");
