@@ -66,7 +66,7 @@ unset _rosamta
 | zsh | `.zshenv`（全域 zshenv 執行後的 `$ZDOTDIR`，或 HOME）、`$ZDOTDIR/.zshrc`、`$ZDOTDIR/.zprofile` | `.zshenv`：env；`.zprofile`：重新排序 PATH；`.zshrc`：互動階段 |
 | fish | `conf.d/rosamta.fish`（整個檔案屬於 rosamta） | env 一律載入，互動階段包在 `status is-interactive` 中 |
 
-`ZDOTDIR` 以 `zsh -c 'printf %s "${ZDOTDIR:-$HOME}"'` 詢問 zsh 本身，因此 `~/.zshenv` 中設定的 `ZDOTDIR` 也會生效。`.zshenv` 的位置改用 `zsh -f` 詢問：`-f` 仍會執行全域的 zshenv，但不讀使用者的 `.zshenv`。Alpine 的全域 zshenv 會在 HOME 沒有任何 zsh 啟動檔時，把 `ZDOTDIR` 設為 `~/.config/zsh`，這時四個檔案都在 `~/.config/zsh`。fish 的設定目錄以 `fish -c 'printf %s $__fish_config_dir'` 詢問。
+`ZDOTDIR` 以 `zsh -c 'printf %s "${ZDOTDIR:-$HOME}"'` 詢問 zsh 本身，因此 `~/.zshenv` 中設定的 `ZDOTDIR` 也會生效。`.zshenv` 的位置改用 `zsh -f` 詢問：`-f` 仍會執行全域的 zshenv，但不讀使用者的 `.zshenv`。rosamta 自己繼承的 `ZDOTDIR` 只有在新開的 zsh 不會自己設成同樣的值時，也就是來自登入 session 時，才帶進這兩次詢問：在 `~/.zshenv` 匯出 `ZDOTDIR` 的 zsh 中執行 rosamta（背景服務也會從 login shell 繼承）時，新開的 zsh 仍先讀 `~/.zshenv`。Alpine 的全域 zshenv 會在 HOME 沒有任何 zsh 啟動檔時，把 `ZDOTDIR` 設為 `~/.config/zsh`，這時四個檔案都在 `~/.config/zsh`。fish 的設定目錄以 `fish -c 'printf %s $__fish_config_dir'` 詢問。
 
 `rsmt unhook <shell>` 只移除該 shell 的區塊，並把它記在 `$XDG_STATE_HOME/rosamta/unhooked`，之後的 `rsmt apply` 不再替它安裝 hook；`rsmt hook [shell...]` 重新安裝並移出清單。`eject` 與 `restore --original` 會把所有 shell 記入清單。
 

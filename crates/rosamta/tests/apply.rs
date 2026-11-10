@@ -155,6 +155,27 @@ fn zsh_hooks_follow_zdotdir() {
     assert!(read(&home, "zdot/.zshenv").contains(BEGIN));
     assert!(read(&home, "zdot/.zshrc").contains(BEGIN));
     assert!(!home.root.join(".zshenv").exists());
+
+    // Exported in ~/.zshenv, so rsmt inherits it from the zsh it runs in;
+    // a new zsh still reads ~/.zshenv first.
+    let home = set_up();
+    fs::write(
+        home.root.join(".zshenv"),
+        "export ZDOTDIR=\"$HOME/.config/zsh\"\n",
+    )
+    .unwrap();
+    home.cmd("rsmt")
+        .arg("apply")
+        .env("ZDOTDIR", home.root.join(".config/zsh"))
+        .assert()
+        .success();
+    assert!(read(&home, ".zshenv").contains(BEGIN));
+    assert!(!home.root.join(".config/zsh/.zshenv").exists());
+    let out = home.shell(&["zsh".into(), "-c".into(), "echo \"$ROSAMTA_TEST\"".into()]);
+    assert_eq!(
+        String::from_utf8_lossy(&out.stdout),
+        format!("it's {}\n", home.root.display())
+    );
 }
 
 #[test]
@@ -472,6 +493,19 @@ fn eject_keeps_every_shell_the_same_without_rosamta() {
             "{argv:?}"
         );
     }
+}
+
+#[test]
+fn a_start_marker_without_its_end_stops_apply() {
+    let home = set_up();
+    let text = format!("echo mine-1\n{BEGIN}\necho mine-2\n");
+    fs::write(home.root.join(".profile"), &text).unwrap();
+    home.cmd("rsmt")
+        .arg("apply")
+        .assert()
+        .code(2)
+        .stderr(predicate::str::contains(".profile"));
+    assert_eq!(read(&home, ".profile"), text);
 }
 
 #[test]
