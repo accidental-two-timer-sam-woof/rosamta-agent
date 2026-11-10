@@ -259,11 +259,12 @@ impl Rosamta {
             .bg(p.panel)
             .border_r_1()
             .border_color(p.line)
-            .p(px(S12))
+            .px(px(S12))
+            .py(px(S16))
             .gap(px(S4))
             .child(
                 div()
-                    .px(px(S8))
+                    .px(px(S12))
                     .pb(px(S12))
                     .text_base()
                     .font_weight(FontWeight::SEMIBOLD)
@@ -273,7 +274,7 @@ impl Rosamta {
                 let active = self.page == page;
                 h_flex()
                     .id(key)
-                    .px(px(S8))
+                    .px(px(S12))
                     .py(px(S8))
                     .rounded(px(S8))
                     .cursor_pointer()
@@ -293,7 +294,7 @@ impl Rosamta {
             .child(div().flex_1())
             .child(
                 h_flex()
-                    .px(px(S8))
+                    .px(px(S12))
                     .gap(px(S8))
                     .text_sm()
                     .text_color(p.muted)

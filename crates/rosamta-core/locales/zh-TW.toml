@@ -81,8 +81,8 @@ rc = "rc 檔變更"
 module = "產生的模組"
 this_host = "本機"
 all_hosts = "所有主機"
-use_repo = "採用 repo 版本"
-keep_local = "保留本機版本"
+use_repo = "採用 repo"
+keep_local = "保留本機"
 empty = "沒有待處理項目"
 
 [phase]
@@ -110,7 +110,7 @@ not_deployed = "未部署"
 empty = "沒有設定檔"
 
 [history]
-commits = "Repo"
+commits = "提交紀錄"
 snapshots = "快照"
 
 [settings]

@@ -127,6 +127,25 @@ fn init_creates_repo_and_host() {
 }
 
 #[test]
+fn recent_commits_list_subjects_and_files() {
+    let home = home();
+    repo::init_new(&home.paths).unwrap();
+    let repo_dir = home.paths.repo();
+    fs::write(repo_dir.join("a b.txt"), "x\n").unwrap();
+    git(&repo_dir, &["add", "a b.txt"]);
+    git(&repo_dir, &["commit", "--quiet", "-m", "second\twith a tab"]);
+
+    let commits = repo::recent_commits(&repo_dir, 5);
+    assert_eq!(commits.len(), 2);
+    assert_eq!(commits[0].subject, "second\twith a tab");
+    assert_eq!(commits[0].files, vec!["a b.txt".to_string()]);
+    assert_eq!(commits[1].subject, "chore(repo): initialize");
+    assert!(commits[1].files.iter().any(|file| file == "rosamta.toml"));
+    assert_eq!(repo::recent_commits(&repo_dir, 1).len(), 1);
+    assert!(repo::recent_commits(home.paths.state(), 5).is_empty());
+}
+
+#[test]
 fn init_refuses_existing_repo() {
     let home = home();
     repo::init_new(&home.paths).unwrap();

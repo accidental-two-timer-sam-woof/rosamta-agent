@@ -40,7 +40,8 @@ pub fn badge(text: SharedString, tone: Tone, cx: &App) -> impl IntoElement {
     let (bg, fg) = tone.colors(&palette(cx));
     div()
         .flex_none()
-        .w(px(88.))
+        .w(px(badge_width()))
+        .px(px(S8))
         .h(px(S20))
         .line_height(px(S20))
         .rounded(px(S4))
@@ -52,9 +53,19 @@ pub fn badge(text: SharedString, tone: Tone, cx: &App) -> impl IntoElement {
         .child(text)
 }
 
+/// The proposal's 56 px fits every Chinese label; English ones need more.
+fn badge_width() -> f32 {
+    match crate::text::lang() {
+        rosamta_core::i18n::Lang::ZhTw => 56.,
+        rosamta_core::i18n::Lang::En => 96.,
+    }
+}
+
 pub fn count_badge(count: usize, cx: &App) -> impl IntoElement {
     let p = palette(cx);
     div()
+        .h(px(S20))
+        .line_height(px(S20))
         .px(px(S8))
         .rounded_full()
         .bg(p.accent)
@@ -77,9 +88,9 @@ pub fn dot(running: bool, cx: &App) -> impl IntoElement {
 pub fn header(title: SharedString, actions: impl IntoElement, cx: &App) -> impl IntoElement {
     h_flex()
         .flex_none()
-        .px(px(S32))
-        .pt(px(S24))
-        .pb(px(S16))
+        .px(px(S40))
+        .pt(px(S32))
+        .pb(px(S24))
         .gap(px(S12))
         .child(
             div()
@@ -109,8 +120,8 @@ pub fn page(
                 .flex_1()
                 .min_h_0()
                 .overflow_y_scroll()
-                .px(px(S32))
-                .pb(px(S32))
+                .px(px(S40))
+                .pb(px(S48))
                 .child(body),
         )
 }
@@ -119,7 +130,7 @@ pub fn page(
 pub fn section(title: SharedString, body: impl IntoElement, cx: &App) -> impl IntoElement {
     let p = palette(cx);
     v_flex()
-        .gap(px(S8))
+        .gap(px(S12))
         .child(
             div()
                 .text_sm()
@@ -156,7 +167,7 @@ pub fn row(cx: &App) -> Div {
         .min_h(px(S40))
         .px(px(S16))
         .py(px(S8))
-        .gap(px(S12))
+        .gap(px(S16))
         .text_sm()
         .border_b_1()
         .border_color(p.line)

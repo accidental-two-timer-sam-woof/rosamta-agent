@@ -297,21 +297,29 @@ pub struct CommitInfo {
     pub at: u64,
     pub hash: String,
     pub subject: String,
+    /// Paths it changed, relative to the repo.
+    pub files: Vec<String>,
 }
 
 /// The newest `count` commits of the git repo at `dir`; none when it has none.
 pub fn recent_commits(dir: &Path, count: usize) -> Vec<CommitInfo> {
     let count = format!("--max-count={count}");
-    let Ok(text) = git::run(dir, &["log", &count, "--format=%ct%x09%h%x09%s"]) else {
+    let format = "--format=%x1e%ct%x09%h%x09%s";
+    let Ok(text) = git::run(dir, &["log", &count, "--name-only", format]) else {
         return Vec::new();
     };
-    text.lines()
-        .filter_map(|line| {
-            let mut parts = line.splitn(3, '\t');
+    text.split('\x1e')
+        .filter_map(|entry| {
+            let mut lines = entry.lines();
+            let mut parts = lines.next()?.splitn(3, '\t');
             Some(CommitInfo {
                 at: parts.next()?.parse().ok()?,
                 hash: parts.next()?.to_string(),
                 subject: parts.next()?.to_string(),
+                files: lines
+                    .filter(|line| !line.is_empty())
+                    .map(str::to_string)
+                    .collect(),
             })
         })
         .collect()

@@ -128,7 +128,18 @@ pub fn render(app: &Rosamta, cx: &mut Context<Rosamta>) -> impl IntoElement {
                     .border_b_1()
                     .border_color(p.line)
                     .cursor_pointer()
-                    .when(selected, |card| card.bg(p.line))
+                    .relative()
+                    .when(selected, |card| {
+                        card.bg(p.panel).child(
+                            div()
+                                .absolute()
+                                .left_0()
+                                .top_0()
+                                .bottom_0()
+                                .w(px(S4))
+                                .bg(p.accent),
+                        )
+                    })
                     .when(!selected, |card| card.hover(|style| style.bg(p.panel)))
                     .child(
                         h_flex()

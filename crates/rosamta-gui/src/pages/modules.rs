@@ -48,7 +48,7 @@ pub fn render(app: &Rosamta, cx: &mut Context<Rosamta>) -> impl IntoElement {
         empty(t("modules.empty"), cx).into_any_element()
     } else {
         v_flex()
-            .gap(px(S24))
+            .gap(px(S32))
             .children(groups.into_iter().map(|(phase, rows)| {
                 let rows = rows.into_iter().map(|(index, module)| {
                     let file = module.file.clone();
