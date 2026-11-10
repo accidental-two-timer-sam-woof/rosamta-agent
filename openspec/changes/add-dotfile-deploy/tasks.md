@@ -16,9 +16,9 @@
 
 ## 3. 衝突與待處理清單
 
-- [ ] 3.1 `QueueItem` 加上 dotfile 類型，衝突與本機修改進入清單並在內容改變時更新，`rsmt review` 與 `--json` 列出
-- [ ] 3.2 實作 dotfile 項目的 `accept --scope host|all`、`discard`、`ignore`，並以 commit 記錄與依偏好推送
-- [ ] 3.3 實作互動終端機中 `rsmt apply` 逐一詢問衝突（採用 repo 版本、保留本機版本、稍後處理）
+- [x] 3.1 `QueueItem` 加上 dotfile 類型，衝突與本機修改進入清單並在內容改變時更新，`rsmt review` 與 `--json` 列出
+- [x] 3.2 實作 dotfile 項目的 `accept --scope host|all`、`discard`、`ignore`，並以 commit 記錄與依偏好推送
+- [x] 3.3 實作互動終端機中 `rsmt apply` 逐一詢問衝突（採用 repo 版本、保留本機版本、稍後處理）
 
 ## 4. 加密
 

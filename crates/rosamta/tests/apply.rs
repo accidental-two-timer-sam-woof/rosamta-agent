@@ -469,3 +469,37 @@ fn apply_deploys_dotfiles_after_a_dry_run() {
         .success()
         .stdout("Already up to date\n");
 }
+
+#[test]
+fn conflicts_wait_in_the_review_queue() {
+    let home = set_up();
+    home.write("home/.gitconfig", "[user]\nname = repo\n");
+    home.write("dotfiles.toml", "[[dotfile]]\npath = \".gitconfig\"\n");
+    fs::write(home.root.join(".gitconfig"), "[user]\nname = local\n").unwrap();
+    let gitconfig = home.root.join(".gitconfig");
+    home.cmd("rsmt")
+        .arg("apply")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(format!(
+            "Not deployed {}: differs from the repo",
+            gitconfig.display()
+        )));
+    let out = home.cmd("rsmt").arg("review").output().unwrap();
+    let listed = String::from_utf8(out.stdout).unwrap();
+    assert!(
+        listed.contains("~/.gitconfig") && listed.contains("differs from the repo"),
+        "{listed}"
+    );
+    let id = listed.split_whitespace().next().unwrap().to_string();
+    home.cmd("rsmt")
+        .args(["review", "discard", &id])
+        .assert()
+        .success()
+        .stdout("Replaced ~/.gitconfig with the repo's version\n");
+    assert_eq!(read(&home, ".gitconfig"), "[user]\nname = repo\n");
+    home.cmd("rsmt")
+        .args(["review", "discard", &id])
+        .assert()
+        .code(2);
+}

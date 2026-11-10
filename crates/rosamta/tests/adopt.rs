@@ -287,6 +287,11 @@ fn review_lists_accepts_and_ignores() {
 
     let bun = items[0]["id"].to_string();
     let foo = items[1]["id"].to_string();
+    home.cmd("rsmt")
+        .args(["review", "discard", &bun])
+        .assert()
+        .code(2)
+        .stderr(predicate::str::contains("discard applies only to dotfiles"));
     run(&home, &["review", "accept", &bun, "--scope", "all"]);
     let module = read(&home, ".local/share/rosamta/repo/modules/adopted/bun.toml");
     assert!(!module.contains("[when]"), "{module}");
@@ -474,7 +479,7 @@ fn interactive_shells_print_the_review_notice() {
     };
     assert_eq!(
         interactive(&home),
-        "rosamta: 1 rc file change to review. Run: rsmt review\n"
+        "rosamta: 1 change to review. Run: rsmt review\n"
     );
     let out = home.shell(&["zsh".into(), "-c".into(), "exit".into()]);
     assert!(out.stdout.is_empty());

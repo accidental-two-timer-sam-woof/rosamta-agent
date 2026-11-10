@@ -5,6 +5,7 @@ use std::process::ExitCode;
 use rosamta_core::Result;
 use rosamta_core::adopt::{self, Adoption, Candidate, Kind, QueueItem, Scope};
 use rosamta_core::apply::Context;
+use rosamta_core::dotfiles::review::{self, Reason};
 use rosamta_core::hooks::FileChange;
 use rosamta_core::time;
 
@@ -106,8 +107,21 @@ pub fn review(json: bool) -> Result<ExitCode> {
     Ok(ExitCode::SUCCESS)
 }
 
-/// `3  ~/.zshrc:12-14  2026-11-10 14:30 UTC  modules/adopted/bun.toml`.
+/// `3  ~/.zshrc:12-14  2026-11-10 14:30 UTC  modules/adopted/bun.toml`, or
+/// `4  ~/.gitconfig  2026-11-10 14:31 UTC  differs from the repo`.
 fn item_line(ctx: &Context, item: &QueueItem) -> String {
+    if let Some(dotfile) = &item.dotfile {
+        let what = match dotfile.reason {
+            Reason::Conflict => "differs from the repo",
+            Reason::Changed => "changed on this host",
+        };
+        return format!(
+            "{}  {}  {}  {what}",
+            item.id,
+            adopt::display(&item.file, &ctx.home),
+            time::date_time(item.detected_at)
+        );
+    }
     let target = match &item.module {
         Some(module) if item.local => {
             format!("{} (this host only)", adopt::display(module, &ctx.home))
@@ -130,8 +144,15 @@ pub fn accept(json: bool, id: u32, all_hosts: bool) -> Result<ExitCode> {
     let ctx = Context::from_env()?;
     let lock = adopt::lock(&ctx)?;
     let scope = if all_hosts { Scope::All } else { Scope::Host };
+    let dotfile = adopt::queue(&ctx)?
+        .into_iter()
+        .find(|item| item.id == id && item.dotfile.is_some());
     let done = adopt::accept(&ctx, id, scope)?;
-    report(&ctx, json, &done);
+    match dotfile {
+        Some(item) if json => print_json(&[&item.file]),
+        Some(item) => println!("Kept {} in the repo", adopt::display(&item.file, &ctx.home)),
+        None => report(&ctx, json, &done),
+    }
     after_commit(&ctx, &lock, started, json);
     Ok(ExitCode::SUCCESS)
 }
@@ -144,6 +165,21 @@ pub fn ignore(json: bool, id: u32) -> Result<ExitCode> {
         print_json(&item);
     } else {
         println!("Ignored {id}");
+    }
+    Ok(ExitCode::SUCCESS)
+}
+
+pub fn discard(json: bool, id: u32) -> Result<ExitCode> {
+    let ctx = Context::from_env()?;
+    let _lock = adopt::lock(&ctx)?;
+    let path = ctx.home.join(review::discard(&ctx, id)?);
+    if json {
+        print_json(&[&path]);
+    } else {
+        println!(
+            "Replaced {} with the repo's version",
+            adopt::display(&path, &ctx.home)
+        );
     }
     Ok(ExitCode::SUCCESS)
 }

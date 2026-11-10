@@ -308,3 +308,154 @@ fn restore_original_removes_new_links() {
         "{originals:?}"
     );
 }
+
+mod review {
+    use super::*;
+    use rosamta_core::adopt::{self, Scope};
+    use rosamta_core::dotfiles::review::Reason;
+
+    /// A repo `.gitconfig` and a different one already on this host.
+    fn conflict() -> (Home, u32) {
+        let home = Home::new("ask");
+        home.repo_write("home/.gitconfig", "[user]\nname = repo\n");
+        home.repo_write("dotfiles.toml", "[[dotfile]]\npath = \".gitconfig\"\n");
+        git(&home.repo(), &["add", "-A"]);
+        git(
+            &home.repo(),
+            &["commit", "--quiet", "--no-verify", "-m", "init"],
+        );
+        write(&home.at(".gitconfig"), "[user]\nname = local\n");
+        home.deploy();
+        let queue = adopt::queue(&home.ctx).unwrap();
+        assert_eq!(queue.len(), 1, "{queue:?}");
+        let dotfile = queue[0].dotfile.as_ref().unwrap();
+        assert_eq!(
+            (dotfile.path.as_path(), dotfile.reason),
+            (Path::new(".gitconfig"), Reason::Conflict)
+        );
+        (home, queue[0].id)
+    }
+
+    fn log(home: &Home) -> String {
+        let out = Command::new("git")
+            .arg("-C")
+            .arg(home.repo())
+            .args(["log", "--format=%s", "--name-only"])
+            .output()
+            .unwrap();
+        String::from_utf8(out.stdout).unwrap()
+    }
+
+    #[test]
+    fn listed_once_with_a_notice() {
+        let (home, id) = conflict();
+        home.deploy();
+        assert_eq!(adopt::queue(&home.ctx).unwrap()[0].id, id);
+        let notice = read(&adopt::notice_path(&home.ctx));
+        assert_eq!(notice, "rosamta: 1 change to review. Run: rsmt review\n");
+    }
+
+    #[test]
+    fn accept_keeps_a_host_variant() {
+        let (home, id) = conflict();
+        adopt::accept(&home.ctx, id, Scope::Host).unwrap();
+        let variant = home.repo().join("hosts/mbp/.gitconfig");
+        assert_eq!(read(&variant), "[user]\nname = local\n");
+        assert_eq!(
+            read(&home.repo().join("home/.gitconfig")),
+            "[user]\nname = repo\n"
+        );
+        assert_eq!(fs::read_link(home.at(".gitconfig")).unwrap(), variant);
+        let manifest = read(&home.repo().join("dotfiles.toml"));
+        assert!(
+            manifest.contains("source = \"hosts/mbp/.gitconfig\""),
+            "{manifest}"
+        );
+        assert!(adopt::queue(&home.ctx).unwrap().is_empty());
+        let log = log(&home);
+        assert!(
+            log.contains("hosts/mbp/.gitconfig") && log.contains("dotfiles.toml"),
+            "{log}"
+        );
+    }
+
+    #[test]
+    fn accept_for_all_hosts_replaces_the_source() {
+        let (home, id) = conflict();
+        adopt::accept(&home.ctx, id, Scope::All).unwrap();
+        assert_eq!(
+            read(&home.repo().join("home/.gitconfig")),
+            "[user]\nname = local\n"
+        );
+        assert!(!home.repo().join("hosts").exists());
+        assert!(
+            fs::symlink_metadata(home.at(".gitconfig"))
+                .unwrap()
+                .is_symlink()
+        );
+    }
+
+    #[test]
+    fn discard_takes_the_repo_version() {
+        let (home, id) = conflict();
+        rosamta_core::dotfiles::review::discard(&home.ctx, id).unwrap();
+        assert_eq!(read(&home.at(".gitconfig")), "[user]\nname = repo\n");
+        assert!(adopt::queue(&home.ctx).unwrap().is_empty());
+        let out = Command::new("git")
+            .arg("-C")
+            .arg(home.ctx.paths.state().join("snapshots"))
+            .args(["show", "HEAD:files/home/.gitconfig"])
+            .output()
+            .unwrap();
+        assert_eq!(
+            String::from_utf8_lossy(&out.stdout),
+            "[user]\nname = local\n"
+        );
+    }
+
+    #[test]
+    fn ignore_holds_until_a_side_changes() {
+        let (home, id) = conflict();
+        adopt::ignore(&home.ctx, id).unwrap();
+        assert!(adopt::queue(&home.ctx).unwrap().is_empty());
+        assert_eq!(home.deploy(), one(".gitconfig", Action::Skipped));
+        write(&home.at(".gitconfig"), "[user]\nname = other\n");
+        assert_eq!(home.deploy(), one(".gitconfig", Action::Conflict));
+        assert_eq!(adopt::queue(&home.ctx).unwrap().len(), 1);
+    }
+
+    #[test]
+    fn stale_items_are_refused() {
+        let (home, id) = conflict();
+        write(&home.at(".gitconfig"), "[user]\nname = newer\n");
+        let err = adopt::accept(&home.ctx, id, Scope::Host).unwrap_err();
+        assert!(
+            err.to_string().contains("changed since it was listed"),
+            "{err}"
+        );
+        assert_eq!(read(&home.at(".gitconfig")), "[user]\nname = newer\n");
+    }
+
+    #[test]
+    fn secrets_stay_out() {
+        let (home, id) = conflict();
+        write(
+            &home.at(".gitconfig"),
+            "[github]\ntoken = ghp_0123456789abcdefghijklmnopqrstuvwxyzAB\n",
+        );
+        home.deploy();
+        let id = adopt::queue(&home.ctx)
+            .unwrap()
+            .first()
+            .map_or(id, |item| item.id);
+        let err = adopt::accept(&home.ctx, id, Scope::All).unwrap_err();
+        assert!(
+            err.to_string().contains("looks like it contains a secret"),
+            "{err}"
+        );
+        assert_eq!(
+            read(&home.repo().join("home/.gitconfig")),
+            "[user]\nname = repo\n"
+        );
+    }
+}

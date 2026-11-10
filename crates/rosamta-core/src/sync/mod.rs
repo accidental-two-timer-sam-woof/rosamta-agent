@@ -304,28 +304,45 @@ fn secret_blocked(ctx: &Context, hits: &[Hit], unpushed: Option<u32>) -> Error {
 
 /// Commit edits made outside rosamta, named after what changed. A secret
 /// in them stops this before it is committed.
-fn commit_pending(ctx: &Context, repo_dir: &Path) -> Result<bool> {
+fn commit_pending(ctx: &Context, _repo_dir: &Path) -> Result<bool> {
+    commit_scanned(ctx, &[], None)
+}
+
+/// Commit the changes under `paths` (every change when empty) once the
+/// secret scan passes; `message` defaults to one naming what changed. A
+/// signing failure is recorded and returned as an error.
+pub(crate) fn commit_scanned(ctx: &Context, paths: &[&str], message: Option<&str>) -> Result<bool> {
+    let repo_dir = ctx.paths.repo();
+    let limit = |args: &[&'static str]| {
+        let mut all: Vec<&str> = args.to_vec();
+        if !paths.is_empty() {
+            all.push("--");
+            all.extend_from_slice(paths);
+        }
+        all
+    };
     let status = git::run(
-        repo_dir,
-        &[
+        &repo_dir,
+        &limit(&[
             "-c",
             "core.quotePath=false",
             "status",
             "--porcelain",
             "--untracked-files=all",
             "--no-renames",
-        ],
+        ]),
     )?;
     if status.trim().is_empty() {
         return Ok(false);
     }
-    git::run(repo_dir, &["add", "--all"])?;
-    let hits = scan::staged(repo_dir)?;
+    git::run(&repo_dir, &limit(&["add", "--all"]))?;
+    let hits = scan::staged(&repo_dir)?;
     if !hits.is_empty() {
-        git::run(repo_dir, &["reset", "--quiet"])?;
+        git::run(&repo_dir, &["reset", "--quiet"])?;
         return Err(secret_blocked(ctx, &hits, None));
     }
-    match git::commit(repo_dir, &edit_message(&status), &[])? {
+    let message = message.map_or_else(|| edit_message(&status), str::to_string);
+    match git::commit(&repo_dir, &message, paths)? {
         Commit::Clean => Ok(false),
         Commit::Created => Ok(true),
         Commit::SigningFailed(message) => {

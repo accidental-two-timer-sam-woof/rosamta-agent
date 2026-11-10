@@ -116,7 +116,7 @@ pub fn display(path: &Path, home: &Path) -> String {
     }
 }
 
-fn host_config(ctx: &Context) -> Result<HostConfig> {
+pub(crate) fn host_config(ctx: &Context) -> Result<HostConfig> {
     let path = ctx.paths.host_config();
     if !path.exists() {
         return Err(Error::Usage(
@@ -884,9 +884,15 @@ pub fn refresh(ctx: &Context) -> Result<Reviewed> {
         });
     let adopted = adopt(ctx, &now_adopt, Scope::Host)?;
     let old = store.queue()?;
+    // Dotfile items are kept up to date by deploying.
     let mut queue = Queue {
         next_id: old.next_id.max(1),
-        items: Vec::new(),
+        items: old
+            .items
+            .iter()
+            .filter(|item| item.dotfile.is_some())
+            .cloned()
+            .collect(),
     };
     for candidate in &ask {
         let kept = old
@@ -910,6 +916,7 @@ pub fn refresh(ctx: &Context) -> Result<Reviewed> {
             text: candidate.text.clone(),
             module: candidate.module.clone(),
             local: candidate.local,
+            dotfile: None,
         });
     }
     store.save_queue(&queue)?;
@@ -920,17 +927,17 @@ pub fn refresh(ctx: &Context) -> Result<Reviewed> {
     })
 }
 
-fn update_notice(store: &Store, host: &HostConfig, pending: usize) -> Result<()> {
+pub(crate) fn update_notice(store: &Store, host: &HostConfig, pending: usize) -> Result<()> {
     if pending == 0 || !host.shell_notice {
         return store.set_notice(None);
     }
     let noun = if pending == 1 { "change" } else { "changes" };
     store.set_notice(Some(&format!(
-        "rosamta: {pending} rc file {noun} to review. Run: rsmt review"
+        "rosamta: {pending} {noun} to review. Run: rsmt review"
     )))
 }
 
-fn take_item(ctx: &Context, id: u32) -> Result<(QueueItem, Queue)> {
+pub(crate) fn take_item(ctx: &Context, id: u32) -> Result<(QueueItem, Queue)> {
     let store = Store::new(ctx.paths.state());
     let mut queue = store.queue()?;
     let index = queue
@@ -945,6 +952,10 @@ fn take_item(ctx: &Context, id: u32) -> Result<(QueueItem, Queue)> {
 /// `rsmt review accept <id>`.
 pub fn accept(ctx: &Context, id: u32, scope: Scope) -> Result<Vec<Adoption>> {
     let (item, queue) = take_item(ctx, id)?;
+    if let Some(dotfile) = &item.dotfile {
+        crate::dotfiles::review::keep(ctx, id, dotfile, scope)?;
+        return Ok(Vec::new());
+    }
     let candidate = scan(ctx)?
         .into_iter()
         .find(|candidate| candidate.file == item.file && candidate.hash == item.hash)
@@ -964,6 +975,10 @@ pub fn accept(ctx: &Context, id: u32, scope: Scope) -> Result<Vec<Adoption>> {
 /// until its content changes.
 pub fn ignore(ctx: &Context, id: u32) -> Result<QueueItem> {
     let (item, queue) = take_item(ctx, id)?;
+    if let Some(dotfile) = &item.dotfile {
+        crate::dotfiles::review::ignore(ctx, id, dotfile)?;
+        return Ok(item);
+    }
     let store = Store::new(ctx.paths.state());
     let mut ignored = store.ignored()?;
     if !ignored.hashes.contains(&item.hash) {

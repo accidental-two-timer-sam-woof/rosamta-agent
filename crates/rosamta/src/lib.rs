@@ -74,7 +74,7 @@ enum Command {
         #[arg(long)]
         yes: bool,
     },
-    /// List changes found in startup files, or accept or ignore one
+    /// List changes waiting for a decision, or decide one
     Review {
         #[command(subcommand)]
         action: Option<ReviewAction>,
@@ -151,8 +151,10 @@ enum ReviewAction {
         #[arg(long, value_enum, default_value = "host")]
         scope: ScopeArg,
     },
-    /// Keep a change in its startup file and stop listing it
+    /// Keep a change where it is and stop listing it
     Ignore { id: u32 },
+    /// Replace a dotfile with the repo's version
+    Discard { id: u32 },
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, ValueEnum)]
@@ -233,6 +235,9 @@ fn run(cli: &Cli) -> Result<ExitCode> {
         Command::Review {
             action: Some(ReviewAction::Ignore { id }),
         } => adopt::ignore(cli.json, *id),
+        Command::Review {
+            action: Some(ReviewAction::Discard { id }),
+        } => adopt::discard(cli.json, *id),
         Command::Restore {
             id: Some(id), yes, ..
         } => adopt::restore(cli.json, *yes, *id),
