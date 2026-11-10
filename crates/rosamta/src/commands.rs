@@ -49,15 +49,21 @@ pub fn apply(json: bool, dry_run: bool) -> Result<ExitCode> {
         }
         return Ok(ExitCode::SUCCESS);
     }
+    // Asked before taking the lock, so the daemon is not held up while the
+    // user types. Without a terminal, encrypted dotfiles are only skipped.
+    let interactive = !json && std::io::stdin().is_terminal();
+    let wrong_passphrase =
+        interactive && dotfiles::needs_key(&ctx)? && !crate::dotfiles::unlock(&ctx, json)?;
     let applied = {
         let _lock = adopt::lock(&ctx)?;
         apply::apply(&ctx)?
     };
     warn_skipped(&applied.skipped);
-    let failed = applied
-        .dotfiles
-        .iter()
-        .any(|step| step.action == Action::Failed);
+    let failed = wrong_passphrase
+        || applied
+            .dotfiles
+            .iter()
+            .any(|step| step.action == Action::Failed);
     if json {
         print_json(&applied);
     } else {
@@ -158,8 +164,7 @@ struct DryRun<'a> {
 }
 
 fn print_step(ctx: &Context, step: &Step) {
-    let path = ctx.home.join(&step.path);
-    let path = path.display();
+    let path = adopt::display(&ctx.home.join(&step.path), &ctx.home);
     let reason = step.reason.as_deref().unwrap_or_default();
     match step.action {
         Action::Unchanged => {}
