@@ -124,6 +124,23 @@ fn unreadable_repo_exits_1() {
 }
 
 #[test]
+fn unreadable_repo_dir_exits_1() {
+    use std::os::unix::fs::PermissionsExt;
+    let home = Home::new();
+    home.write("rosamta.toml", "format = 1\n");
+    let repo = home.repo();
+    fs::set_permissions(&repo, fs::Permissions::from_mode(0o000)).unwrap();
+    let readable_anyway = fs::read_dir(&repo).is_ok(); // running as root
+    let assert = home.cmd("rsmt").arg("validate").assert();
+    fs::set_permissions(&repo, fs::Permissions::from_mode(0o755)).unwrap();
+    if !readable_anyway {
+        assert
+            .code(1)
+            .stderr(predicate::str::contains(repo.display().to_string()));
+    }
+}
+
+#[test]
 fn apply_refuses_duplicate_module_names() {
     let local = ".config/rosamta/local/modules/bun.toml";
     for (first, second) in [
