@@ -87,7 +87,7 @@ login zsh 在 `.zshenv` 之後才執行全域的 zprofile：macOS 的 `/etc/zpro
 
 ### Smoke test
 
-對每個已安裝 hook 的 shell，以 `TERM=dumb` 執行 `<shell> -i -c exit`（sh 為 `sh -l -c exit`），逾時 5 秒；以 `ROSAMTA_CURRENT` 讓 hook 改讀候選版本。先用目前版本跑一次取得基準 stderr，再跑候選版本；候選版本多出來的 stderr 行視為新錯誤。錯誤行含有片段檔名時指出該 module；沒有時列出這次有變動的 module。
+對每個已安裝 hook 的 shell，以 `TERM=dumb` 執行 `<shell> -i -c exit`，bash 與 zsh 另執行 `<shell> -l -i -c exit`（sh 為 `sh -l -c exit`），逾時 5 秒；以 `ROSAMTA_CURRENT` 讓 hook 改讀候選版本。shell 在自己的 session 中執行，沒有終端機可搶；逾時時整個程序群組一起結束，rc 檔啟動的程序不會讓 rosamta 卡住。先用目前版本跑一次取得基準 stderr，再跑候選版本；候選版本多出來的 stderr 行視為新錯誤。錯誤行含有片段檔名時指出該 module；沒有時列出這次有變動的 module。
 
 ### Snapshot 存放
 
@@ -101,6 +101,6 @@ login zsh 在 `.zshenv` 之後才執行全域的 zprofile：macOS 的 `/etc/zpro
 
 ## Risks / Trade-offs
 
-- [`<shell> -i -c exit` 可能因使用者既有的設定而卡住，例如等待輸入] → 逾時 5 秒並視為失敗，訊息中說明是逾時，而不是錯誤輸出。
+- [`<shell> -i -c exit` 可能因使用者既有的設定而卡住，例如等待輸入] → 逾時 5 秒並視為失敗，訊息中說明是逾時，而不是錯誤輸出；基準也逾時時不算新錯誤。
 - [使用者自己的 rc 內容在 hook 之後又改了 PATH] → 不處理；交給 `add-providers-and-doctor` 的診斷規則偵測。
 - [5 ms 預算在慢速機器上不易量測] → 以 CI 的固定機型量測中位數，並與沒有 hook 的基準比較，而不是看絕對值。

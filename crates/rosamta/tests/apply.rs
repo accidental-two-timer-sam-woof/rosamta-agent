@@ -289,6 +289,47 @@ fn a_module_that_prints_errors_is_rolled_back() {
 }
 
 #[test]
+fn a_login_snippet_that_prints_errors_is_rolled_back() {
+    if !has("zsh") {
+        return;
+    }
+    let home = set_up();
+    apply(&home);
+    let before = fs::read_link(current(&home)).unwrap();
+    home.write(
+        "modules/brew.toml",
+        "phase = \"login\"\n[raw]\nzsh = \"echo login-noise >&2\"\n",
+    );
+    home.cmd("rsmt").arg("apply").assert().code(1).stderr(
+        predicate::str::contains("module brew").and(predicate::str::contains("login-noise")),
+    );
+    assert_eq!(fs::read_link(current(&home)).unwrap(), before);
+}
+
+/// The shell already ran past the smoke test's deadline before this apply,
+/// and what its rc file started keeps the output open.
+#[test]
+fn a_shell_that_was_already_slow_does_not_block_apply() {
+    if !has("zsh") {
+        return;
+    }
+    let home = set_up();
+    apply(&home);
+    for rel in [".zshrc", ".config/zsh/.zshrc"] {
+        let text = read(&home, rel);
+        if text.contains(BEGIN) {
+            fs::write(home.root.join(rel), format!("{text}sleep 120\n")).unwrap();
+        }
+    }
+    home.write("modules/more.toml", "[env]\nMORE = \"1\"\n");
+    home.cmd("rsmt")
+        .arg("apply")
+        .timeout(Duration::from_secs(60))
+        .assert()
+        .success();
+}
+
+#[test]
 fn a_shell_below_the_minimum_version_is_skipped_with_a_warning() {
     use std::os::unix::fs::PermissionsExt;
     let home = set_up();
