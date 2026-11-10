@@ -89,6 +89,34 @@ fn daemon(home: &Path) -> (Daemon, Arc<Mutex<Vec<String>>>) {
 }
 
 #[test]
+fn a_sync_after_waking_retries_soon_while_offline() {
+    crate::git::tests::isolate();
+    let dir = tempfile::tempdir().unwrap();
+    let (mut daemon, _) = daemon(dir.path());
+    crate::repo::init_new(&daemon.ctx.paths).unwrap();
+    let missing = dir.path().join("remote.git");
+    let repo = daemon.ctx.paths.repo();
+    crate::git::run(
+        &repo,
+        &["remote", "add", "origin", missing.to_str().unwrap()],
+    )
+    .unwrap();
+    let interval = Duration::from_secs(u64::from(daemon.host.pull_interval) * 60);
+    // Back from sleep: the wall clock moved on, the monotonic one did not.
+    daemon.clock.1 -= Duration::from_secs(600);
+    for expected in [Duration::from_secs(30), Duration::from_secs(120), interval] {
+        let before = Instant::now();
+        daemon.tick();
+        let delay = daemon.next_sync - before;
+        assert!(
+            delay >= expected && delay < expected + Duration::from_secs(5),
+            "{delay:?} after waking, expected {expected:?}"
+        );
+        daemon.next_sync = Instant::now();
+    }
+}
+
+#[test]
 fn problems_say_whether_publishing_or_pulling_failed() {
     let dir = tempfile::tempdir().unwrap();
     let (mut daemon, shown) = daemon(dir.path());
