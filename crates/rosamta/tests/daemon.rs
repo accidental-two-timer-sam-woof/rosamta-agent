@@ -106,6 +106,39 @@ fn a_second_instance_exits_with_1() {
 }
 
 #[test]
+fn the_state_directory_comes_from_the_login_shell() {
+    let home = hooked();
+    append(
+        &home.root.join(".profile"),
+        "export XDG_STATE_HOME=\"$HOME/state\"\n",
+    );
+    let state = home.root.join("state");
+    let _daemon = Daemon(home.spawn("rsmt", &["daemon", "run"]));
+    let log = || fs::read_to_string(state.join("rosamta/daemon.log")).unwrap_or_default();
+    let start = Instant::now();
+    while !log().contains("scanned rc files") {
+        assert!(start.elapsed() < Duration::from_secs(20), "{}", log());
+        std::thread::sleep(Duration::from_millis(200));
+    }
+    let running = home
+        .cmd("rsmt")
+        .args(["daemon", "status", "--json"])
+        .env("XDG_STATE_HOME", &state)
+        .output()
+        .unwrap();
+    let running: serde_json::Value = serde_json::from_slice(&running.stdout).unwrap();
+    assert_eq!(running["running"], true);
+    assert!(running["pid"].is_u64(), "{running}");
+    home.cmd("rsmt")
+        .args(["daemon", "run"])
+        .env("SHELL", "/bin/sh")
+        .timeout(Duration::from_secs(20))
+        .assert()
+        .code(1)
+        .stderr(predicate::str::contains("already running (pid"));
+}
+
+#[test]
 fn installer_lines_are_queued_and_left_in_place() {
     let home = hooked();
     let profile = home.root.join(".profile");
