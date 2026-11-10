@@ -349,31 +349,26 @@ impl Daemon {
     fn rc_changed(&mut self) {
         // Taken before the scan: a write during the scan then still differs
         // from it when its own event arrives.
-        let seen = fingerprint(&self.rc_files());
+        let mut seen = fingerprint(&self.rc_files());
         if self.rc_seen == Some(seen) {
             return;
         }
         let result = (|| {
             let lock = adopt::lock(&self.ctx)?;
             let reviewed = adopt::refresh(&self.ctx)?;
-            if !reviewed.adopted.is_empty()
-                && let Err(err) = sync::publish_if_auto(&self.ctx, &lock)
-            {
-                self.log(&err.to_string());
+            if !reviewed.adopted.is_empty() {
+                // Adopting rewrote the files; that write is rosamta's own,
+                // an edit made while the push runs is not.
+                seen = fingerprint(&self.rc_files());
+                if let Err(err) = sync::publish_if_auto(&self.ctx, &lock) {
+                    self.log(&err.to_string());
+                }
             }
             Ok::<_, crate::Error>(reviewed)
         })();
-        let adopted = result
-            .as_ref()
-            .is_ok_and(|reviewed| !reviewed.adopted.is_empty());
-        // Adopting rewrote the files; that write is rosamta's own.
-        self.rc_seen = Some(if adopted {
-            fingerprint(&self.rc_files())
-        } else {
-            seen
-        });
         match result {
             Ok(reviewed) => {
+                self.rc_seen = Some(seen);
                 self.log(&format!(
                     "scanned rc files: {} adopted, {} to review",
                     reviewed.adopted.len(),
@@ -386,6 +381,7 @@ impl Daemon {
                     }
                 }
             }
+            // Not counted as seen: the next change or repo apply scans again.
             Err(err) => self.log(&format!("scan failed: {err}")),
         }
         self.report_problems();
@@ -416,6 +412,10 @@ impl Daemon {
             self.log(&err.to_string());
         }
         self.report_problems();
+        // A scan that failed on the previous repo can work now.
+        if self.repo_problem.is_none() {
+            self.rc_changed();
+        }
     }
 
     fn apply_repo(&self) -> std::result::Result<(), (&'static str, String)> {
@@ -460,6 +460,7 @@ impl Daemon {
 
     fn act(&mut self, action: Action, ids: &[u32]) {
         self.log(&format!("clicked {} for {ids:?}", action.id()));
+        let mut seen = None;
         let result = (|| {
             let lock = adopt::lock(&self.ctx)?;
             for &id in ids {
@@ -474,6 +475,8 @@ impl Daemon {
                 }
             }
             if action == Action::Adopt {
+                // Adopting rewrote the files; that write is rosamta's own.
+                seen = Some(fingerprint(&self.rc_files()));
                 sync::publish_if_auto(&self.ctx, &lock)?;
             }
             Ok::<_, crate::Error>(())
@@ -486,7 +489,9 @@ impl Daemon {
         {
             open(&format!("rosamta://review/{id}"));
         }
-        self.rc_seen = Some(fingerprint(&self.rc_files()));
+        if seen.is_some() {
+            self.rc_seen = seen;
+        }
         self.report_problems();
     }
 
