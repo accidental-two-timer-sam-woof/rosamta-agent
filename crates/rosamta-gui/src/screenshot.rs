@@ -38,7 +38,14 @@ pub fn start(window: AnyWindowHandle, view: Entity<Rosamta>, cx: &mut App) {
     cx.spawn(async move |cx| {
         let executor = cx.background_executor().clone();
         let wait = |ms| executor.timer(Duration::from_millis(ms));
-        wait(3000).await;
+        // The first snapshot loads in the background.
+        for _ in 0..40 {
+            wait(500).await;
+            if view.read_with(cx, |view, _| view.snap.ready) {
+                break;
+            }
+        }
+        wait(1000).await;
         for (page, name) in PAGES {
             view.update(cx, |view, cx| {
                 view.page = page;
@@ -46,7 +53,9 @@ pub fn start(window: AnyWindowHandle, view: Entity<Rosamta>, cx: &mut App) {
             });
             wait(800).await;
             let path = dir.join(format!("{name}{suffix}.png"));
-            let saved = cx.update_window(window, |_, window, _| {
+            let saved = cx.update_window(window, |_, window, cx| {
+                // Draw here: a locked screen stops the display link.
+                window.draw(cx).clear(cx);
                 window.render_to_image().map(|image| image.save(&path))
             });
             eprintln!("{}: {saved:?}", path.display());
