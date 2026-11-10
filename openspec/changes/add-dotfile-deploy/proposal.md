@@ -10,10 +10,10 @@
 - 三種部署方式：
   - link（預設）：以目錄為單位 symlink 回 repo；app 把 symlink 換成一般檔案時，自動把內容收回 repo 並重建 symlink。
   - copy：複製到目標位置；被外部修改時依接管偏好收回 repo。
-  - template：render 成實體檔案；被外部修改時無法反推，只通知並提供三方 diff 與「在編輯器開啟 template」。
+  - template：render 成實體檔案；被外部修改時無法反推，只通知並提供三方 diff 與「在編輯器開啟 template」。本 change 只接受這個宣告，實際部署與外部修改的處理在 `add-templates-and-secrets` 實作。
 - 權限：可宣告檔案權限（例如 `0600`），套用時強制設定。
 - 加密：以 age 加密檔案；私鑰以使用者設定的密碼加密後放進 repo，新 host 輸入一次密碼即可（ADR 0012）。
-- 目標位置已有內容不同的檔案時不直接覆蓋，逐一讓使用者選擇採用 repo 版本、保留本機版本（收進 repo 並限定本機）或稍後處理。
+- 目標位置已有內容不同的檔案時不直接覆蓋，逐一讓使用者選擇採用 repo 版本、保留本機版本（收進 repo 的 `hosts/<識別名稱>/`，並加一筆限定本機的宣告）或稍後處理；稍後處理的項目放進待處理清單，以 `rsmt review accept|discard|ignore` 處理。
 - CLI：`rsmt add <path>`（自動寫入 `dotfiles.toml`）、`rsmt forget <path>`。
 
 ## Capabilities
@@ -25,8 +25,10 @@
 
 ### Modified Capabilities
 
-- `apply`: 套用流程加入 dotfile 部署。
+- `apply`: 套用流程加入 dotfile 部署；eject 與還原原始內容也涵蓋 dotfile。
 - `daemon`: 監看 copy 與 template 部署出去的檔案，以及 link 是否被取代。
+- `review-queue`: 新增 dotfile 類型的項目與 `rsmt review discard`。
+- `notifications`: 新增 dotfile 項目與缺少解密金鑰的通知。
 
 ## Impact
 
