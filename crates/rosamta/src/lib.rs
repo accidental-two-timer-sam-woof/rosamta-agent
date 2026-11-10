@@ -1,3 +1,4 @@
+mod adopt;
 mod commands;
 
 use std::path::Path;
@@ -61,15 +62,51 @@ enum Command {
         #[arg(long)]
         yes: bool,
     },
-    /// Put startup files back the way they were before rosamta changed them
+    /// Move everything outside the hook in startup files into modules
+    Adopt {
+        /// Do not ask for confirmation
+        #[arg(long)]
+        yes: bool,
+    },
+    /// List changes found in startup files, or accept or ignore one
+    Review {
+        #[command(subcommand)]
+        action: Option<ReviewAction>,
+    },
+    /// Undo one adoption, or put startup files back the way they were before
+    /// rosamta changed them
     Restore {
+        /// The adoption to undo
+        #[arg(required_unless_present = "original", conflicts_with = "original")]
+        id: Option<u32>,
         /// Restore the content from before rosamta's first change
-        #[arg(long, required = true)]
+        #[arg(long)]
         original: bool,
         /// Do not ask for confirmation
         #[arg(long)]
         yes: bool,
     },
+}
+
+#[derive(Subcommand)]
+enum ReviewAction {
+    /// Move a change into a module
+    Accept {
+        id: u32,
+        /// Hosts the new module applies to
+        #[arg(long, value_enum, default_value = "host")]
+        scope: ScopeArg,
+    },
+    /// Keep a change in its startup file and stop listing it
+    Ignore { id: u32 },
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, ValueEnum)]
+enum ScopeArg {
+    /// Only this host
+    Host,
+    /// Every host
+    All,
 }
 
 fn parse_shell(name: &str) -> std::result::Result<Shell, String> {
@@ -127,6 +164,17 @@ fn run(cli: &Cli) -> Result<ExitCode> {
         Command::Hook { shells } => commands::hook(cli.json, shells),
         Command::Unhook { shell } => commands::unhook(cli.json, *shell),
         Command::Eject { yes } => commands::eject(cli.json, *yes),
+        Command::Adopt { yes } => adopt::adopt(cli.json, *yes),
+        Command::Review { action: None } => adopt::review(cli.json),
+        Command::Review {
+            action: Some(ReviewAction::Accept { id, scope }),
+        } => adopt::accept(cli.json, *id, *scope == ScopeArg::All),
+        Command::Review {
+            action: Some(ReviewAction::Ignore { id }),
+        } => adopt::ignore(cli.json, *id),
+        Command::Restore {
+            id: Some(id), yes, ..
+        } => adopt::restore(cli.json, *yes, *id),
         Command::Restore { yes, .. } => commands::restore(cli.json, *yes),
     }
 }
