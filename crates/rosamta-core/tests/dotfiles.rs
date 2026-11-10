@@ -641,7 +641,6 @@ mod manage {
     }
 
     #[test]
-    #[ignore = "git::commit stages twice; fixed on the sync review branch"]
     fn forget_leaves_a_regular_copy() {
         let home = committed();
         write(&home.at(".config/ghostty/config"), "theme = dark\n");
