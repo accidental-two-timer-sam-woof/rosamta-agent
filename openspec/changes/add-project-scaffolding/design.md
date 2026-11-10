@@ -2,7 +2,7 @@
 
 ## Context
 
-repo 目前只有規劃文件。相關的既定決策：GPUI 透過 `gpui-component` 引入並鎖定版本（ADR 0005）、不提供 Flatpak 與 Snap（ADR 0009）、macOS 最低版本 13、授權為 Apache-2.0。
+repo 目前只有規劃文件。相關的既定決策：GPUI 透過 `gpui-kit`（內含 `gpui-component`）引入並鎖定版本（ADR 0005）、不提供 Flatpak 與 Snap（ADR 0009）、macOS 最低版本 13、授權為 Apache-2.0。
 
 ## Goals / Non-Goals
 
@@ -23,13 +23,13 @@ repo 目前只有規劃文件。相關的既定決策：GPUI 透過 `gpui-compon
 
 ### 兩個命令名稱
 
-`crates/rosamta` 宣告兩個 `[[bin]]`（`rosamta` 與 `rsmt`），共用同一個 `main.rs`，讓 `cargo install` 的使用者也能直接用兩個名稱。發布的套件只放 `rosamta`，`rsmt` 以 symlink 建立，避免重複佔用空間。
+`crates/rosamta` 有 `rosamta` 與 `rsmt` 兩個 bin，入口放在 `src/lib.rs`，`src/main.rs` 與 `src/bin/rsmt.rs` 都只呼叫它（兩個 bin 指向同一個檔案時 cargo 每次建置都會警告），讓 `cargo install` 的使用者也能直接用兩個名稱。發布的套件只放 `rosamta`，`rsmt` 以 symlink 建立，避免重複佔用空間。
 
 替代方案是只有一個執行檔、由使用者自己設定 alias，但這樣文件裡的 `rsmt` 指令在 `cargo install` 的環境下會失效。
 
 ### 授權檢查
 
-`deny.toml` 允許 MIT、Apache-2.0、BSD-2-Clause、BSD-3-Clause、ISC、Zlib、Unicode-3.0、MPL-2.0；其他授權讓 CI 失敗，交由人工判斷。`cargo-about` 依 `about.toml` 產生第三方聲明，release 時一併打包。
+`deny.toml` 允許 MIT、Apache-2.0、BSD-2-Clause、BSD-3-Clause、ISC、Zlib、Unicode-3.0、MPL-2.0，以及經人工判斷後加入的 0BSD 與 CC0-1.0（`notify` 與 GPUI 的依賴使用）；其他授權讓 CI 失敗，交由人工判斷。已知漏洞一律失敗；unmaintained 只檢查 workspace 直接依賴的 crate，GPUI 深層依賴的部分交給上游。`cargo-about` 依 `about.toml` 產生第三方聲明，release 時一併打包。
 
 ### CI
 
@@ -41,12 +41,17 @@ repo 目前只有規劃文件。相關的既定決策：GPUI 透過 `gpui-compon
 
 - macOS：在 arm64 runner 上分別建置 `aarch64-apple-darwin` 與 `x86_64-apple-darwin`，用 `lipo` 合成 universal binary，包成一個 `.app`、一個 `.dmg`。以 Developer ID Application 憑證簽章，用 `xcrun notarytool` 送 notarization 並 staple。
 - Linux：x86_64 與 aarch64（使用 `ubuntu-24.04-arm` runner）分別建置，以 `cargo-deb`、`cargo-generate-rpm` 打包，另附 tarball。
+  - 用 `cargo zigbuild` 指定 glibc 2.28 連結，讓套件能裝在 `tests/docker` 的每個發行版上（最舊的是 Rocky 8）。runner 上的共享函式庫引用了較新的 glibc，所以連結時加上 `--allow-shlib-undefined`；執行時用的是目標系統自己的函式庫。
+  - GUI 以 `dlopen` 載入 Vulkan 與 Wayland，自動偵測看不到，deb 與 rpm 都手動列出。cargo-generate-rpm 內建的偵測會把建置機上的間接依賴與 soname 寫進去，所以 rpm 關閉自動偵測，改列 GUI 實際連結的 soname。
 - Homebrew：release 對 tap repo 開 PR 更新 cask；AUR：推送更新後的 PKGBUILD。
 - `release.yml` 提供 `workflow_dispatch` 的 dry-run 模式：只建置與打包，略過簽章與發布，用來在沒有 secrets 時驗證流程。
+- `.app` 的 bundle ID 為 `tw.xinshou.rosamta`，執行檔以 `MACOSX_DEPLOYMENT_TARGET=13.0` 建置。CLI 放在 `Contents/MacOS/rosamta`，由 cask 的 `binary` 連到 PATH，`rsmt` 也一樣。
+- deb 用 cargo-deb 的 symlink asset 建立 `rsmt`；cargo-generate-rpm 沒有 symlink asset，rpm 改在安裝後的腳本建立，完整移除時刪除。
+- 需要的 secrets：`MACOS_CERT_P12`、`MACOS_CERT_PASSWORD`、`MACOS_SIGN_IDENTITY`、`MACOS_NOTARY_KEY`、`MACOS_NOTARY_KEY_ID`、`MACOS_NOTARY_ISSUER`、`HOMEBREW_TAP_TOKEN`、`AUR_SSH_PRIVATE_KEY`；variables：`HOMEBREW_TAP`、`AUR_USERNAME`、`AUR_EMAIL`。
 
 ### Dependabot
 
-`cargo` 與 `github-actions` 每週一次，minor 與 patch 合成一個 group PR；`gpui-component` 與 `gpui-pre` 列入 ignore，它們的升級依 ADR 0005 另開 change。
+`cargo` 與 `github-actions` 每週一次，minor 與 patch 合成一個 group PR；`gpui-kit`、`gpui-component` 與 `gpui-pre*` 列入 ignore，它們的升級依 ADR 0005 另開 change。
 
 ### 安裝程式 fixture
 

@@ -1,0 +1,16 @@
+# Third-party notices
+
+rosamta includes the following crates. Regenerate this file with `cargo about generate --workspace about.md.hbs -o THIRD_PARTY_NOTICES.md`.
+
+{{#each licenses}}
+## {{name}}
+
+{{#each used_by}}
+- {{crate.name}} {{crate.version}}
+{{/each}}
+
+```
+{{{text}}}
+```
+
+{{/each}}

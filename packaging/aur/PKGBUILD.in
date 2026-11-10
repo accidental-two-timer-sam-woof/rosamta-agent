@@ -1,0 +1,21 @@
+pkgname=rosamta-bin
+pkgver=@VERSION@
+pkgrel=1
+pkgdesc="Cross-shell, cross-host dotfile manager"
+arch=('x86_64' 'aarch64')
+url="https://github.com/@REPO@"
+license=('Apache-2.0')
+depends=('libxcb' 'libxkbcommon-x11' 'vulkan-icd-loader' 'wayland')
+provides=('rosamta')
+conflicts=('rosamta')
+source_x86_64=("${url}/releases/download/v${pkgver}/rosamta-${pkgver}-linux-x86_64.tar.gz")
+source_aarch64=("${url}/releases/download/v${pkgver}/rosamta-${pkgver}-linux-aarch64.tar.gz")
+sha256sums_x86_64=('@SHA256_X86_64@')
+sha256sums_aarch64=('@SHA256_AARCH64@')
+
+package() {
+  cd "rosamta-${pkgver}-linux-${CARCH}"
+  install -Dm755 rosamta rosamta-gui -t "${pkgdir}/usr/bin/"
+  ln -s rosamta "${pkgdir}/usr/bin/rsmt"
+  install -Dm644 THIRD_PARTY_NOTICES.md -t "${pkgdir}/usr/share/doc/rosamta/"
+}
