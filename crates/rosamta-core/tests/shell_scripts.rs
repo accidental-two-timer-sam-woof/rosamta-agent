@@ -171,6 +171,28 @@ fn path_entries_are_ordered_and_never_duplicated() {
     }
 }
 
+/// An empty PATH entry means the current directory.
+#[test]
+fn path_entries_that_expand_to_nothing_are_skipped() {
+    let module = "[path]\nprepend = [\"$PNPM_HOME\"]\nappend = [\"${UNSET_VAR}\"]";
+    let rendered = Rendered::new(&[("pnpm", module)]);
+    for runner in runners() {
+        let print = match runner.dialect {
+            Shell::Fish => "string join : $PATH",
+            _ => "echo \"$PATH\"",
+        };
+        let loaders: Vec<String> = ["env", "profile"]
+            .iter()
+            .map(|name| rendered.file(runner.dialect, name))
+            .filter(|file| Path::new(file).exists())
+            .map(|file| source(&runner, &file))
+            .collect();
+        let script = format!("{}; {print}", loaders.join("; "));
+        let out = stdout(&run(&runner, &script, &[], &rendered.root));
+        assert_eq!(out.trim(), "/usr/bin:/bin", "{}", runner.label);
+    }
+}
+
 #[test]
 fn env_runs_once_per_process_tree() {
     let rendered = Rendered::new(&[(

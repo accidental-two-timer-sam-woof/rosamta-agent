@@ -26,6 +26,10 @@ generated script 不存在或無法讀取時，shell SHALL 正常啟動，且不
 - **WHEN** 開啟同時讀取 `~/.bash_profile` 與 `~/.bashrc` 的 login bash
 - **THEN** PATH 中沒有因重複載入而產生的重複項目
 
+#### Scenario: Debian profile
+- **WHEN** `~/.profile` 在 bash 中載入 `~/.bashrc`（Debian 與 Ubuntu 的預設），使用者開啟 login bash
+- **THEN** env 階段與互動階段各只執行一次
+
 ### Requirement: Startup overhead budget
 在沒有任何 module 的情況下，hook 與 loader 讓每個 shell 啟動時間增加的中位數 SHALL 不超過 5 ms。
 
