@@ -50,6 +50,8 @@ impl Home {
         for var in OUTSIDE {
             cmd.env_remove(var);
         }
+        // Never touch the developer's keychain.
+        cmd.env("ROSAMTA_NO_KEYCHAIN", "1");
         git_env(&mut cmd);
         cmd
     }

@@ -41,6 +41,11 @@ impl Paths {
         self.config.join("host.toml")
     }
 
+    /// The GitHub token, on hosts without a keychain.
+    pub fn github_token(&self) -> PathBuf {
+        self.config.join("github-token")
+    }
+
     pub fn repo(&self) -> PathBuf {
         self.data.join("repo")
     }
