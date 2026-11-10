@@ -1127,10 +1127,19 @@ pub fn plan_undo(ctx: &Context, id: u32) -> Result<Undo> {
 
 /// The file with the adopted lines back in place.
 fn put_back(text: &str, adoption: &Adoption) -> String {
+    // A file's last line had no newline; it needs one if anything follows now.
+    let removed = |rest: &str| {
+        let mut removed = adoption.removed.clone();
+        if !rest.is_empty() && !removed.ends_with('\n') {
+            removed.push('\n');
+        }
+        removed
+    };
     if let Some(replacement) = &adoption.replacement
-        && text.contains(replacement.as_str())
+        && let Some(at) = text.find(replacement.as_str())
     {
-        return text.replacen(replacement.as_str(), &adoption.removed, 1);
+        let rest = &text[at + replacement.len()..];
+        return format!("{}{}{rest}", &text[..at], removed(rest));
     }
     let lines: Vec<&str> = text.split_inclusive('\n').collect();
     let matches_at = |at: usize, context: &[String]| {
@@ -1162,8 +1171,9 @@ fn put_back(text: &str, adoption: &Adoption) -> String {
     if !out.is_empty() && !out.ends_with('\n') {
         out.push('\n');
     }
-    out.push_str(&adoption.removed);
-    out.push_str(&lines[at..].concat());
+    let rest = lines[at..].concat();
+    out.push_str(&removed(&rest));
+    out.push_str(&rest);
     out
 }
 
@@ -1247,6 +1257,40 @@ mod tests {
 
     fn module(text: &str) -> Module {
         toml::from_str(text).unwrap()
+    }
+
+    fn adoption(removed: &str, replacement: Option<&str>, before: &[&str]) -> Adoption {
+        let lines: Vec<String> = before.iter().map(|line| line.to_string()).collect();
+        Adoption {
+            id: 1,
+            shell: Shell::Zsh,
+            file: PathBuf::from("/home/me/.zshrc"),
+            line: 2,
+            before: lines.clone(),
+            after: Vec::new(),
+            kept_before: lines,
+            kept_after: Vec::new(),
+            removed: removed.into(),
+            replacement: replacement.map(str::to_string),
+            hash: String::new(),
+            name: None,
+            module: None,
+            local: false,
+            commit: None,
+            order: 0,
+            at: 0,
+        }
+    }
+
+    #[test]
+    fn a_last_line_without_a_newline_goes_back_on_its_own_line() {
+        let deleted = adoption("x", None, &["a\n"]);
+        assert_eq!(put_back("a\nb\n", &deleted), "a\nx\nb\n");
+        assert_eq!(put_back("a\n", &deleted), "a\nx");
+        let block = format!("{} → m\n# x\n", segment::COMMENTED);
+        let commented = adoption("x", Some(&block), &[]);
+        assert_eq!(put_back(&format!("a\n{block}b\n"), &commented), "a\nx\nb\n");
+        assert_eq!(put_back(&format!("a\n{block}"), &commented), "a\nx");
     }
 
     #[test]
