@@ -6,11 +6,15 @@
 ## Requirements
 
 ### Requirement: Watched files
-rosamta SHALL 掃描下列檔案中 hook 以外的內容：`~/.profile`、`~/.bash_profile`、`~/.bash_login`、`~/.bashrc`、`$ZDOTDIR` 下的 `.zshenv`、`.zprofile`、`.zshrc`、`.zlogin`、fish 的 `config.fish`，以及 fish `conf.d` 中 rosamta 以外的檔案。
+rosamta SHALL 掃描下列檔案中 hook 以外的內容：`~/.profile`、`~/.bash_profile`、`~/.bash_login`、`~/.bashrc`、`$ZDOTDIR` 下的 `.zshenv`、`.zprofile`、`.zshrc`、`.zlogin`、fish 的 `config.fish`，以及 fish `conf.d` 中 rosamta 以外的檔案。不是 UTF-8 文字的檔案 SHALL 略過且不被修改。
 
 #### Scenario: Installer adds a fish conf.d file
 - **WHEN** 某個安裝程式新增 `conf.d/foo.fish`
 - **THEN** 下一次掃描把整個檔案列為可接管的內容
+
+#### Scenario: File that is not UTF-8
+- **WHEN** `~/.zlogin` 含有不是 UTF-8 的位元組
+- **THEN** 掃描不列出它的內容，檔案的每個位元組維持原樣
 
 ### Requirement: Segmentation
 rosamta SHALL 把連續的非空白行切成一段，並把緊接在上方的註解併入該段；以成對 marker 包住的區塊（例如 `# >>> conda initialize >>>` 到 `# <<< conda initialize <<<`）SHALL 整塊視為一段。

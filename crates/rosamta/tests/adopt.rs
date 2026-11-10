@@ -605,6 +605,21 @@ fn an_ignored_snippet_keeps_path_order() {
     assert_eq!(order(), "/opt/b/bin /opt/a/bin");
 }
 
+/// A file that is not UTF-8 is left exactly as it is.
+#[test]
+fn files_that_are_not_utf8_are_left_alone() {
+    if !has("zsh") {
+        return;
+    }
+    let home = hooked(&[]);
+    let zlogin = b"export A=1\n# caf\xe9\n".to_vec();
+    fs::write(home.root.join(".zlogin"), &zlogin).unwrap();
+    assert!(review(&home).is_empty());
+    run(&home, &["adopt", "--yes"]);
+    assert_eq!(fs::read(home.root.join(".zlogin")).unwrap(), zlogin);
+    assert!(adopted(&home).is_empty());
+}
+
 fn adoptions_json(home: &Home) -> String {
     read(home, ".local/state/rosamta/adoptions.json")
 }

@@ -97,9 +97,10 @@ pub fn lock(ctx: &Context) -> Result<Lock> {
     Ok(Lock(file))
 }
 
+/// Fails on a file that is not UTF-8, so its bytes are never rewritten.
 fn read(path: &Path) -> Result<String> {
-    match std::fs::read(path) {
-        Ok(bytes) => Ok(String::from_utf8_lossy(&bytes).into_owned()),
+    match std::fs::read_to_string(path) {
+        Ok(text) => Ok(text),
         Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(String::new()),
         Err(err) => Err(Error::Read {
             path: path.to_path_buf(),
@@ -151,7 +152,12 @@ pub fn scan(ctx: &Context) -> Result<Vec<Candidate>> {
         if hooks::hooked_files(watched.source.owner(), &env)?.is_empty() {
             continue;
         }
-        let text = read(&watched.path)?;
+        let text = match read(&watched.path) {
+            Err(Error::Read { source, .. }) if source.kind() == std::io::ErrorKind::InvalidData => {
+                continue;
+            }
+            text => text?,
+        };
         let exe = installed
             .iter()
             .find(|found| found.shell == watched.source.owner())
