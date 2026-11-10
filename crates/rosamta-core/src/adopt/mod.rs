@@ -18,10 +18,10 @@ pub use segment::{Source, Watched, watched_files};
 pub use store::{Adoption, QueueItem};
 
 use crate::apply::{self, Context};
-use crate::config::{AdoptPolicy, HostConfig, Module, OriginalLines, Phase, Shell};
+use crate::config::{AdoptPolicy, HostConfig, HostFacts, Module, OriginalLines, Phase, Shell};
 use crate::error::{Error, Result};
 use crate::hooks::{self, FileChange};
-use crate::{generated, git, host, render};
+use crate::{generated, git, host, render, repo};
 use segment::Segment;
 use store::{Queue, Store, now};
 
@@ -97,9 +97,10 @@ pub fn lock(ctx: &Context) -> Result<Lock> {
     Ok(Lock(file))
 }
 
+/// Fails on a file that is not UTF-8, so its bytes are never rewritten.
 fn read(path: &Path) -> Result<String> {
-    match std::fs::read(path) {
-        Ok(bytes) => Ok(String::from_utf8_lossy(&bytes).into_owned()),
+    match std::fs::read_to_string(path) {
+        Ok(text) => Ok(text),
         Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(String::new()),
         Err(err) => Err(Error::Read {
             path: path.to_path_buf(),
@@ -142,6 +143,8 @@ pub fn scan(ctx: &Context) -> Result<Vec<Candidate>> {
     let ignored = store.ignored()?;
     let existing = existing_modules(ctx)?;
     let mut taken: Vec<String> = existing.iter().map(|(name, _)| name.clone()).collect();
+    // Only modules that load on this host stand in for its lines.
+    let loaded = render::select(existing, &HostFacts::current(&host_config(ctx)?));
     let recognizers = recognizers();
     let mut out = Vec::new();
     for watched in segment::watched_files(&env) {
@@ -149,7 +152,12 @@ pub fn scan(ctx: &Context) -> Result<Vec<Candidate>> {
         if hooks::hooked_files(watched.source.owner(), &env)?.is_empty() {
             continue;
         }
-        let text = read(&watched.path)?;
+        let text = match read(&watched.path) {
+            Err(Error::Read { source, .. }) if source.kind() == std::io::ErrorKind::InvalidData => {
+                continue;
+            }
+            text => text?,
+        };
         let exe = installed
             .iter()
             .find(|found| found.shell == watched.source.owner())
@@ -170,11 +178,12 @@ pub fn scan(ctx: &Context) -> Result<Vec<Candidate>> {
             .map(|adoption| adoption.order)
             .max()
             .unwrap_or(watched.rank * 1000);
-        // Structured PATH entries load in the env phase and are put back in
-        // front at the end of `.zprofile`, while snippets keep their place.
-        // A snippet may change PATH unseen (eval, source), so PATH changes
-        // stay snippets where moving them would reorder PATH: after a snippet
-        // in a late file, and anywhere in a login file that has one.
+        // Structured env and PATH load in the env phase (PATH is put back in
+        // front at the end of `.zprofile`), while snippets keep their place.
+        // A snippet may change either unseen (eval, source), so they stay
+        // snippets where moving them would change the order: after a snippet
+        // or ignored lines in a late file, and anywhere in a login file that
+        // has a snippet.
         let mut barrier = watched.phase == Phase::Login
             && segments.iter().any(|segment| {
                 !segment.comment_only()
@@ -187,7 +196,12 @@ pub fn scan(ctx: &Context) -> Result<Vec<Candidate>> {
             let seed = watched.path.ends_with(".bash_profile") && text == hooks::BASH_PROFILE_SEED;
             let fish_default =
                 watched.path.ends_with("config.fish") && segment::fish_default(&text);
-            if seed || fish_default || ignored.hashes.contains(&hash) {
+            if seed || fish_default {
+                continue;
+            }
+            if ignored.hashes.contains(&hash) {
+                // Ignored lines stay and run in place, like a snippet.
+                barrier |= watched.phase != Phase::Env && !segment.comment_only();
                 continue;
             }
             let mut candidate = Candidate {
@@ -205,7 +219,23 @@ pub fn scan(ctx: &Context) -> Result<Vec<Candidate>> {
                 content: None,
                 order: 0,
             };
-            if let Some(adoption) = adoptions.adoptions.iter().find(|a| a.hash == hash) {
+            let shells = watched.source.shells();
+            // Back in its own file, or in a file whose shells the module serves.
+            let replaces = |adoption: &Adoption| {
+                adoption.file == watched.path
+                    || loaded.iter().any(|(name, module)| {
+                        adoption
+                            .module
+                            .as_deref()
+                            .is_some_and(|path| repo::module_name(path) == *name)
+                            && runs_in(module, shells)
+                    })
+            };
+            if let Some(adoption) = adoptions
+                .adoptions
+                .iter()
+                .find(|a| a.hash == hash && replaces(a))
+            {
                 candidate.kind = Kind::Duplicate;
                 candidate.module = adoption.module.clone();
                 out.push(candidate);
@@ -217,7 +247,9 @@ pub fn scan(ctx: &Context) -> Result<Vec<Candidate>> {
             }
             let module = structured(ctx, &segment, &watched, &recognizers, barrier);
             if let Some(module) = &module
-                && let Some((name, _)) = existing.iter().find(|(_, m)| covers(m, module))
+                && let Some((name, _)) = loaded
+                    .iter()
+                    .find(|(_, m)| runs_in(m, shells) && covers(m, module))
             {
                 candidate.kind = Kind::Duplicate;
                 candidate.module = Some(PathBuf::from(name));
@@ -281,8 +313,10 @@ fn structured(
         return None;
     }
     if watched.phase != Phase::Env {
-        let touches_path = !module.path.prepend.is_empty() || !module.path.append.is_empty();
-        if (barrier && touches_path) || reads_late_variables(&module) {
+        let moves_to_env = !module.env.is_empty()
+            || !module.path.prepend.is_empty()
+            || !module.path.append.is_empty();
+        if (barrier && moves_to_env) || reads_late_variables(&module) {
             return None;
         }
     }
@@ -317,17 +351,26 @@ fn home_value(value: &str, home: &str) -> String {
 }
 
 /// Variables a late file's values read that the env phase may not have yet:
-/// anything but HOME, USER, LOGNAME, PATH and the module's own variables.
+/// anything but HOME, USER, LOGNAME, PATH and the module's other variables.
+/// `X="a:$X"` reads the old X, which is not the module's.
 fn reads_late_variables(module: &Module) -> bool {
     let known = ["HOME", "USER", "LOGNAME", "PATH"];
-    let values = module
+    let env = module
         .env
-        .values()
-        .chain(&module.path.prepend)
-        .chain(&module.path.append);
-    values
-        .flat_map(|value| variables(value))
-        .any(|name| !known.contains(&name.as_str()) && !module.env.contains_key(&name))
+        .iter()
+        .map(|(name, value)| (Some(name.as_str()), value));
+    let path = module
+        .path
+        .prepend
+        .iter()
+        .chain(&module.path.append)
+        .map(|value| (None, value));
+    env.chain(path).any(|(own, value)| {
+        variables(value).iter().any(|name| {
+            !known.contains(&name.as_str())
+                && (own == Some(name.as_str()) || !module.env.contains_key(name))
+        })
+    })
 }
 
 fn variables(value: &str) -> Vec<String> {
@@ -363,6 +406,19 @@ fn snippet(ctx: &Context, text: &str, watched: &Watched) -> Module {
         module.phase = Some(watched.phase);
     }
     module
+}
+
+/// Whether `module` does its work in each of `shells`: structured content
+/// wherever the module renders, raw code only where it is written.
+fn runs_in(module: &Module, shells: &[Shell]) -> bool {
+    let structured = !module.env.is_empty()
+        || !module.path.prepend.is_empty()
+        || !module.path.append.is_empty()
+        || !module.aliases.is_empty();
+    shells.iter().all(|&shell| {
+        (module.shells.is_empty() || module.shells.contains(&shell))
+            && (structured || module.raw.get(shell).is_some())
+    })
 }
 
 /// True when `existing` already sets everything `new` does.
@@ -624,10 +680,7 @@ fn edit_file(
                 .map(|range| format!("{}\n", range.concat()))
                 != Some(candidate.text.clone())
         {
-            return Err(Error::Usage(format!(
-                "{} changed while rosamta was reading it; try again",
-                candidate.file.display()
-            )));
+            return Err(changed(&candidate.file));
         }
         let comment = mode == OriginalLines::Comment
             && matches!(
@@ -713,6 +766,32 @@ fn edit_file(
     Ok((after, records))
 }
 
+fn changed(path: &Path) -> Error {
+    Error::Usage(format!(
+        "{} changed while rosamta was reading it; try again",
+        path.display()
+    ))
+}
+
+/// Fails when `path` no longer holds `before`, so an edit made since the
+/// plan is never overwritten.
+fn unchanged(path: &Path, before: Option<&str>) -> Result<()> {
+    let now = match std::fs::read(path) {
+        Ok(bytes) => Some(bytes),
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => None,
+        Err(err) => {
+            return Err(Error::Read {
+                path: path.to_path_buf(),
+                source: err,
+            });
+        }
+    };
+    if now.as_deref() != before.map(str::as_bytes) {
+        return Err(changed(path));
+    }
+    Ok(())
+}
+
 fn write_text(path: &Path, text: Option<&str>) -> Result<()> {
     match text {
         Some(text) => {
@@ -728,6 +807,15 @@ fn write_text(path: &Path, text: Option<&str>) -> Result<()> {
             }),
             _ => Ok(()),
         },
+    }
+}
+
+/// Local modules can hold secrets, so only their owner may read them.
+fn write_module(ctx: &Context, path: &Path, text: &str) -> Result<()> {
+    if path.starts_with(local_dir(ctx)) {
+        crate::edit::write_private(path, text)
+    } else {
+        write_text(path, Some(text))
     }
 }
 
@@ -752,9 +840,14 @@ pub fn execute(ctx: &Context, plan: Plan) -> Result<Vec<Adoption>> {
         .map(|change| change.path.clone())
         .collect();
     snapshots.save(&changed, "adopt")?;
+    let mut written = false;
     let write = || -> Result<()> {
+        for change in &plan.files {
+            unchanged(&change.path, change.before.as_deref())?;
+        }
+        written = true;
         for (path, text) in &plan.modules {
-            write_text(path, Some(text))?;
+            write_module(ctx, path, text)?;
         }
         for change in &plan.files {
             write_text(&change.path, change.after.as_deref())?;
@@ -762,57 +855,35 @@ pub fn execute(ctx: &Context, plan: Plan) -> Result<Vec<Adoption>> {
         Ok(())
     };
     if let Err(err) = apply::apply_after(ctx, write) {
-        for change in &plan.files {
-            let _ = write_text(&change.path, change.before.as_deref());
-        }
-        for (path, _) in &plan.modules {
-            let _ = std::fs::remove_file(path);
+        if written {
+            for change in &plan.files {
+                let _ = write_text(&change.path, change.before.as_deref());
+            }
+            for (path, _) in &plan.modules {
+                let _ = std::fs::remove_file(path);
+            }
         }
         return Err(err);
     }
     let store = Store::new(ctx.paths.state());
     let mut adoptions = store.adoptions()?;
     let mut done = Vec::new();
-    // After a signing failure, the rest stays uncommitted too.
-    let mut can_commit = true;
-    for mut record in plan.records {
-        let candidate = plan
-            .candidates
+    let candidate_of = |record: &Adoption| {
+        plan.candidates
             .iter()
             .find(|candidate| candidate.hash == record.hash && candidate.file == record.file)
-            .expect("each record comes from a candidate");
-        if matches!(candidate.kind, Kind::Comment | Kind::Duplicate) {
-            done.push(record);
-            continue;
+            .expect("each record comes from a candidate")
+    };
+    for mut record in plan.records {
+        if !matches!(candidate_of(&record).kind, Kind::Comment | Kind::Duplicate) {
+            adoptions.next_id = adoptions.next_id.max(1);
+            record.id = adoptions.next_id;
+            adoptions.next_id += 1;
+            adoptions.adoptions.push(record.clone());
         }
-        if can_commit
-            && !record.local
-            && let Some(module) = &record.module
-        {
-            let repo_dir = ctx.paths.repo();
-            let rel = module.to_string_lossy();
-            let message = commit_message(candidate, &ctx.home, &host.id);
-            match git::commit(&repo_dir, &message, &[&rel])? {
-                git::Commit::Created => {
-                    record.commit = Some(
-                        git::run(&repo_dir, &["rev-parse", "HEAD"])?
-                            .trim()
-                            .to_string(),
-                    )
-                }
-                git::Commit::Clean => {}
-                git::Commit::SigningFailed(reason) => {
-                    crate::sync::signing_blocked(ctx, &reason)?;
-                    can_commit = false;
-                }
-            }
-        }
-        adoptions.next_id = adoptions.next_id.max(1);
-        record.id = adoptions.next_id;
-        adoptions.next_id += 1;
-        adoptions.adoptions.push(record.clone());
         done.push(record);
     }
+    // Saved before committing: the files are written whatever git does.
     store.save_adoptions(&adoptions)?;
     let mut queue = store.queue()?;
     let listed = queue.items.len();
@@ -826,6 +897,41 @@ pub fn execute(ctx: &Context, plan: Plan) -> Result<Vec<Adoption>> {
         store.save_queue(&queue)?;
     }
     update_notice(&store, &host, queue.items.len())?;
+    let repo_dir = ctx.paths.repo();
+    for record in done
+        .iter_mut()
+        .filter(|record| record.id > 0 && !record.local)
+    {
+        let Some(module) = &record.module else {
+            continue;
+        };
+        let message = commit_message(candidate_of(record), &ctx.home, &host.id);
+        // After a failed commit, the rest stays uncommitted too.
+        match git::commit(&repo_dir, &message, &[&module.to_string_lossy()]) {
+            Ok(git::Commit::Created) => {
+                record.commit = Some(
+                    git::run(&repo_dir, &["rev-parse", "HEAD"])?
+                        .trim()
+                        .to_string(),
+                )
+            }
+            Ok(git::Commit::Clean) => {}
+            Ok(git::Commit::SigningFailed(reason)) => {
+                crate::sync::signing_blocked(ctx, &reason)?;
+                break;
+            }
+            Err(err) => {
+                crate::sync::commit_blocked(ctx, &err)?;
+                break;
+            }
+        }
+    }
+    for record in done.iter().filter(|record| record.commit.is_some()) {
+        if let Some(saved) = adoptions.adoptions.iter_mut().find(|a| a.id == record.id) {
+            saved.commit.clone_from(&record.commit);
+        }
+    }
+    store.save_adoptions(&adoptions)?;
     Ok(done)
 }
 
@@ -1036,10 +1142,19 @@ pub fn plan_undo(ctx: &Context, id: u32) -> Result<Undo> {
 
 /// The file with the adopted lines back in place.
 fn put_back(text: &str, adoption: &Adoption) -> String {
+    // A file's last line had no newline; it needs one if anything follows now.
+    let removed = |rest: &str| {
+        let mut removed = adoption.removed.clone();
+        if !rest.is_empty() && !removed.ends_with('\n') {
+            removed.push('\n');
+        }
+        removed
+    };
     if let Some(replacement) = &adoption.replacement
-        && text.contains(replacement.as_str())
+        && let Some(at) = text.find(replacement.as_str())
     {
-        return text.replacen(replacement.as_str(), &adoption.removed, 1);
+        let rest = &text[at + replacement.len()..];
+        return format!("{}{}{rest}", &text[..at], removed(rest));
     }
     let lines: Vec<&str> = text.split_inclusive('\n').collect();
     let matches_at = |at: usize, context: &[String]| {
@@ -1071,8 +1186,9 @@ fn put_back(text: &str, adoption: &Adoption) -> String {
     if !out.is_empty() && !out.ends_with('\n') {
         out.push('\n');
     }
-    out.push_str(&adoption.removed);
-    out.push_str(&lines[at..].concat());
+    let rest = lines[at..].concat();
+    out.push_str(&removed(&rest));
+    out.push_str(&rest);
     out
 }
 
@@ -1085,7 +1201,13 @@ pub fn undo(ctx: &Context, plan: Undo) -> Result<()> {
         std::slice::from_ref(&plan.file.path),
         &format!("restore adoption {}", plan.adoption.id),
     )?;
+    let mut written = false;
     let write = || -> Result<()> {
+        unchanged(&plan.file.path, plan.file.before.as_deref())?;
+        if let Some((path, text)) = &plan.module {
+            unchanged(path, Some(text))?;
+        }
+        written = true;
         write_text(&plan.file.path, plan.file.after.as_deref())?;
         if let Some((path, _)) = &plan.module {
             write_text(path, None)?;
@@ -1093,27 +1215,15 @@ pub fn undo(ctx: &Context, plan: Undo) -> Result<()> {
         Ok(())
     };
     if let Err(err) = apply::apply_after(ctx, write) {
-        let _ = write_text(&plan.file.path, plan.file.before.as_deref());
-        if let Some((path, text)) = &plan.module {
-            let _ = write_text(path, Some(text));
+        if written {
+            let _ = write_text(&plan.file.path, plan.file.before.as_deref());
+            if let Some((path, text)) = &plan.module {
+                let _ = write_module(ctx, path, text);
+            }
         }
         return Err(err);
     }
-    if let (Some(module), false) = (&plan.adoption.module, plan.adoption.local) {
-        let rel = module.to_string_lossy();
-        let name = plan.adoption.name.as_deref().unwrap_or("adopted");
-        let message = format!(
-            "restore({}): put back {name} in {} on {}",
-            plan.adoption.shell,
-            display(&plan.adoption.file, &ctx.home),
-            host.id
-        );
-        if let git::Commit::SigningFailed(reason) =
-            git::commit(&ctx.paths.repo(), &message, &[&rel])?
-        {
-            crate::sync::signing_blocked(ctx, &reason)?;
-        }
-    }
+    // Saved before committing: the files are written whatever git does.
     let store = Store::new(ctx.paths.state());
     let mut adoptions = store.adoptions()?;
     adoptions
@@ -1124,7 +1234,23 @@ pub fn undo(ctx: &Context, plan: Undo) -> Result<()> {
     if !ignored.hashes.contains(&plan.adoption.hash) {
         ignored.hashes.push(plan.adoption.hash.clone());
     }
-    store.save_ignored(&ignored)
+    store.save_ignored(&ignored)?;
+    if let (Some(module), false) = (&plan.adoption.module, plan.adoption.local) {
+        let rel = module.to_string_lossy();
+        let name = plan.adoption.name.as_deref().unwrap_or("adopted");
+        let message = format!(
+            "restore({}): put back {name} in {} on {}",
+            plan.adoption.shell,
+            display(&plan.adoption.file, &ctx.home),
+            host.id
+        );
+        match git::commit(&ctx.paths.repo(), &message, &[&rel]) {
+            Ok(git::Commit::SigningFailed(reason)) => crate::sync::signing_blocked(ctx, &reason)?,
+            Ok(_) => {}
+            Err(err) => crate::sync::commit_blocked(ctx, &err)?,
+        }
+    }
+    Ok(())
 }
 
 pub fn queue(ctx: &Context) -> Result<Vec<QueueItem>> {
@@ -1138,4 +1264,55 @@ pub fn notice_path(ctx: &Context) -> PathBuf {
 /// For tests and the GUI: the adoption records.
 pub fn adoptions(ctx: &Context) -> Result<Vec<Adoption>> {
     Ok(Store::new(ctx.paths.state()).adoptions()?.adoptions)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn module(text: &str) -> Module {
+        toml::from_str(text).unwrap()
+    }
+
+    fn adoption(removed: &str, replacement: Option<&str>, before: &[&str]) -> Adoption {
+        let lines: Vec<String> = before.iter().map(|line| line.to_string()).collect();
+        Adoption {
+            id: 1,
+            shell: Shell::Zsh,
+            file: PathBuf::from("/home/me/.zshrc"),
+            line: 2,
+            before: lines.clone(),
+            after: Vec::new(),
+            kept_before: lines,
+            kept_after: Vec::new(),
+            removed: removed.into(),
+            replacement: replacement.map(str::to_string),
+            hash: String::new(),
+            name: None,
+            module: None,
+            local: false,
+            commit: None,
+            order: 0,
+            at: 0,
+        }
+    }
+
+    #[test]
+    fn a_last_line_without_a_newline_goes_back_on_its_own_line() {
+        let deleted = adoption("x", None, &["a\n"]);
+        assert_eq!(put_back("a\nb\n", &deleted), "a\nx\nb\n");
+        assert_eq!(put_back("a\n", &deleted), "a\nx");
+        let block = format!("{} → m\n# x\n", segment::COMMENTED);
+        let commented = adoption("x", Some(&block), &[]);
+        assert_eq!(put_back(&format!("a\n{block}b\n"), &commented), "a\nx\nb\n");
+        assert_eq!(put_back(&format!("a\n{block}"), &commented), "a\nx");
+    }
+
+    #[test]
+    fn a_value_that_reads_its_own_old_value_is_late() {
+        assert!(reads_late_variables(&module("[env]\nX = \"a:$X\"")));
+        assert!(!reads_late_variables(&module(
+            "[env]\nA = \"$HOME/a\"\nB = \"$A/b\"\n[path]\nprepend = [\"$B/bin\"]"
+        )));
+    }
 }

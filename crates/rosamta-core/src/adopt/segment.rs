@@ -163,7 +163,8 @@ pub fn segments(text: &str, complete: &dyn Fn(&str) -> bool) -> Vec<Segment> {
     let lines: Vec<&str> = text.split_inclusive('\n').collect();
     let hook = hooks::find_block(text).map(|(start, end)| {
         let line_of = |offset: usize| text[..offset].matches('\n').count();
-        (line_of(start), line_of(end))
+        // `end` is past the END line, which may be the last and lack a newline.
+        (line_of(start), line_of(end - 1) + 1)
     });
     let mut out = Vec::new();
     let mut current: Option<Segment> = None;
@@ -205,7 +206,8 @@ pub fn segments(text: &str, complete: &dyn Fn(&str) -> bool) -> Vec<Segment> {
         }
         if line.trim().is_empty() {
             match &mut current {
-                Some(segment) if !complete(&segment.text()) => {
+                // `sh -n` accepts an unterminated heredoc, so check that first.
+                Some(segment) if heredoc_open(&segment.text()) || !complete(&segment.text()) => {
                     segment.end = index + 1;
                     segment.lines.push(line.to_string());
                 }
@@ -217,7 +219,9 @@ pub fn segments(text: &str, complete: &dyn Fn(&str) -> bool) -> Vec<Segment> {
             let after_block = current.as_ref().is_some_and(|segment| {
                 let last = segment.lines.last().map_or("", |line| line.trim());
                 let last = last.trim_end_matches(';').trim();
-                ["fi", "done", "esac", "}", "end"].contains(&last) && complete(&segment.text())
+                ["fi", "done", "esac", "}", "end"].contains(&last)
+                    && !heredoc_open(&segment.text())
+                    && complete(&segment.text())
             });
             if after_block {
                 flush(&mut current, &mut out);
@@ -240,7 +244,8 @@ pub fn segments(text: &str, complete: &dyn Fn(&str) -> bool) -> Vec<Segment> {
 /// The whole file as one segment (fish `conf.d`), or `None` when it is blank.
 pub fn whole(text: &str) -> Option<Segment> {
     let lines: Vec<String> = text.split_inclusive('\n').map(str::to_string).collect();
-    if lines.iter().all(|line| line.trim().is_empty()) {
+    // Comment mode already adopted it.
+    if lines.iter().all(|line| line.trim().is_empty()) || text.trim_start().starts_with(COMMENTED) {
         return None;
     }
     Some(Segment {
@@ -249,6 +254,106 @@ pub fn whole(text: &str) -> Option<Segment> {
         lines,
         marker: None,
     })
+}
+
+/// The heredocs `line` opens, in order: the delimiter, and whether `<<-`
+/// strips leading tabs. Not `<<<`, nor `<<` in quotes, comments or `((…))`.
+fn heredocs(line: &str) -> Vec<(String, bool)> {
+    let mut out = Vec::new();
+    let (mut single, mut double, mut escaped) = (false, false, false);
+    let mut arithmetic = 0;
+    let mut prev = ' ';
+    let mut rest = line;
+    while let Some(c) = rest.chars().next() {
+        if !single && !double && !escaped {
+            if c == '#' && prev.is_whitespace() {
+                break;
+            }
+            if let Some(after) = rest.strip_prefix("((") {
+                arithmetic += 1;
+                (prev, rest) = ('(', after);
+                continue;
+            }
+            if arithmetic > 0
+                && let Some(after) = rest.strip_prefix("))")
+            {
+                arithmetic -= 1;
+                (prev, rest) = (')', after);
+                continue;
+            }
+            if let Some(after) = rest.strip_prefix("<<") {
+                let after = match after.strip_prefix('<') {
+                    Some(after) => after,
+                    None if arithmetic == 0 => {
+                        let spec = after.strip_prefix('-').unwrap_or(after).trim_start();
+                        let len = spec
+                            .find(|c: char| c.is_whitespace() || ";&|<>()".contains(c))
+                            .unwrap_or(spec.len());
+                        let word: String = spec[..len]
+                            .chars()
+                            .filter(|c| !"'\"\\".contains(*c))
+                            .collect();
+                        if !word.is_empty() {
+                            out.push((word, after.starts_with('-')));
+                        }
+                        after
+                    }
+                    None => after,
+                };
+                (prev, rest) = ('<', after);
+                continue;
+            }
+        }
+        match c {
+            _ if escaped => escaped = false,
+            '\\' if !single => escaped = true,
+            '\'' if !double => single = !single,
+            '"' if !single => double = !double,
+            _ => {}
+        }
+        prev = c;
+        rest = &rest[c.len_utf8()..];
+    }
+    out
+}
+
+/// How far into `rest` the bodies of `pending` heredocs run, through their
+/// closing lines; `None` while one is still open.
+fn heredoc_end(rest: &str, pending: &[(String, bool)]) -> Option<usize> {
+    let mut pending = pending.iter();
+    let Some(mut want) = pending.next() else {
+        return Some(0);
+    };
+    let mut len = 0;
+    for line in rest.split_inclusive('\n') {
+        len += line.len();
+        let body = line.trim_end_matches(['\n', '\r']);
+        let body = if want.1 {
+            body.trim_start_matches('\t')
+        } else {
+            body
+        };
+        if body == want.0 {
+            match pending.next() {
+                Some(next) => want = next,
+                None => return Some(len),
+            }
+        }
+    }
+    None
+}
+
+/// Whether `text` ends inside a heredoc body.
+fn heredoc_open(text: &str) -> bool {
+    let mut rest = text;
+    while !rest.is_empty() {
+        let (line, after) = rest.split_once('\n').unwrap_or((rest, ""));
+        match heredoc_end(after, &heredocs(line)) {
+            Some(len) => rest = &after[len..],
+            None => return true,
+        }
+    }
+    false
 }
 
 /// Replace absolute paths under `home` with `$HOME` wherever that keeps the
@@ -263,7 +368,18 @@ pub fn rewrite_home(text: &str, home: &Path, fish: bool) -> String {
     // `$(` starts fresh quoting; the outer state comes back at its `)`.
     let mut outer: Vec<(bool, bool)> = Vec::new();
     let mut rest = text;
+    let mut line_start = 0;
     while let Some(c) = rest.chars().next() {
+        if c == '\n' && !fish && !single && !double && !escaped {
+            // Heredoc bodies are data, and `<<'EOF'` keeps `$HOME` literal.
+            let at = text.len() - rest.len();
+            let body = &rest[1..];
+            let len = heredoc_end(body, &heredocs(&text[line_start..at])).unwrap_or(body.len());
+            out.push_str(&rest[..=len]);
+            rest = &body[len..];
+            line_start = text.len() - rest.len();
+            continue;
+        }
         if !single && !escaped {
             let opens = if fish { "(" } else { "$(" };
             if rest.starts_with(opens) && (!fish || !double) {
@@ -375,6 +491,32 @@ mod tests {
     }
 
     #[test]
+    fn hook_end_on_a_last_line_without_a_newline_is_skipped() {
+        let text = format!("a\n{}\nx\n{}", hooks::BEGIN, hooks::END);
+        assert_eq!(spans(&text), [(1, 1)]);
+    }
+
+    #[test]
+    fn blank_lines_inside_a_heredoc_do_not_split() {
+        assert_eq!(spans("cat <<EOF\na\n\nb\nEOF\n\nc\n"), [(1, 5), (7, 7)]);
+        assert_eq!(
+            spans("cat <<-'END' >x\n\ta\n\n\t}\n\tEND\n\nc\n"),
+            [(1, 5), (7, 7)]
+        );
+        // Neither a here-string, a shift nor a comment opens one.
+        assert_eq!(
+            spans("cat <<<x\n\ny=$((1 << 2))\n\nz # <<EOF\n\nw\n"),
+            [(1, 1), (3, 3), (5, 5), (7, 7)]
+        );
+    }
+
+    #[test]
+    fn a_commented_out_file_is_not_a_segment() {
+        assert!(whole(&format!("{COMMENTED} → x.toml\n# a\n")).is_none());
+        assert!(whole("# a\n").is_some());
+    }
+
+    #[test]
     fn blank_lines_inside_unfinished_code_do_not_split() {
         let text = "if x; then\n  a\n\n  b\nfi\n\nc\n";
         let complete = |code: &str| code.matches("if ").count() == code.matches("fi").count();
@@ -453,6 +595,11 @@ mod tests {
         );
         assert_eq!(rewrite("a=\"$(/Users/me/c)\""), "a=\"$(\"$HOME\"/c)\"");
         assert_eq!(rewrite_home("/Users/me/x", home, true), "$HOME/x");
+        // Heredoc bodies stay as written.
+        assert_eq!(
+            rewrite("cat <<'EOF'\n/Users/me/x it's\nEOF\n. /Users/me/y\n"),
+            "cat <<'EOF'\n/Users/me/x it's\nEOF\n. \"$HOME\"/y\n"
+        );
     }
 
     #[test]

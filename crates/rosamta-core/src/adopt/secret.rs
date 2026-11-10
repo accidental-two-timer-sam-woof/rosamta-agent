@@ -28,19 +28,23 @@ fn known_format(text: &str) -> Option<&'static str> {
         .map(|((id, _, _), _)| *id)
 }
 
-/// `NAME=literal` (POSIX) or `set ... NAME literal` (fish): a value with no
-/// expansion in it, which a secret-looking name makes suspicious.
+/// `NAME=literal` (POSIX), `NAME = "literal"` (TOML, key maybe quoted) or
+/// `set ... NAME literal` (fish): a value with no expansion in it, which a
+/// secret-looking name makes suspicious. With spaces around `=` only a
+/// quoted value counts, so INI lines such as `signingkey = ABCD` do not.
 fn literal_assignments() -> &'static [Regex; 2] {
     static RULES: OnceLock<[Regex; 2]> = OnceLock::new();
     RULES.get_or_init(|| {
-        let value = r#"(?:'[^']+'|"[^"$`\\]+"|[^\s'"$`\\;()]+)\s*(?:;|#|$)"#;
+        let quoted = r#"(?:'[^']+'|"[^"$`\\]+")"#;
+        let value = format!(r#"(?:{quoted}|[^\s'"$`\\;()]+)"#);
+        let end = r"\s*(?:;|#|$)";
         [
             Regex::new(&format!(
-                r"(?m)^\s*(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)={value}"
+                r#"(?m)^\s*(?:export\s+)?["']?([A-Za-z_][A-Za-z0-9_]*)["']?(?:={value}|\s*=\s*{quoted}){end}"#
             ))
             .unwrap(),
             Regex::new(&format!(
-                r"(?m)^\s*set\s+(?:-{{1,2}}[A-Za-z]+\s+)*([A-Za-z_][A-Za-z0-9_]*)\s+{value}"
+                r"(?m)^\s*set\s+(?:-{{1,2}}[A-Za-z]+\s+)*([A-Za-z_][A-Za-z0-9_]*)\s+{value}{end}"
             ))
             .unwrap(),
         ]
@@ -131,6 +135,28 @@ mod tests {
         ));
         assert!(!looks_secret("export SSH_KEY_PATH=$HOME/.ssh/id"));
         assert!(!looks_secret("export TOKEN_FILE=`cat x`"));
+    }
+
+    /// The pre-push scan reads module TOML, where `=` has spaces around it.
+    #[test]
+    fn toml_assignments() {
+        for text in [
+            "MY_API_KEY = \"abc123\"",
+            "DB_PASSWORD = 'hunter2'",
+            "\"SERVICE_SECRET\" = \"abc123\"",
+            // Hex never passes the entropy rule, so the name has to catch it.
+            "DEPLOY_KEY = \"0123456789abcdef0123456789abcdef\"",
+        ] {
+            assert_eq!(secret_rule(text), Some("secret-name"), "{text}");
+        }
+        for text in [
+            "SSH_KEY_PATH = \"$HOME/.ssh/id\"",
+            "API_KEY_REQUIRED = true",
+            "\tsigningkey = ABCDEF0123456789",
+            "keybind = ctrl+a=new_tab",
+        ] {
+            assert!(!looks_secret(text), "{text}");
+        }
     }
 
     #[test]
