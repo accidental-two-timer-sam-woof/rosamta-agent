@@ -219,15 +219,13 @@ fn a_locked_key_is_notified_once() {
     );
 }
 
-#[test]
-fn new_vars_in_host_toml_render_a_waiting_template() {
-    crate::git::tests::isolate();
-    let dir = tempfile::tempdir().unwrap();
-    let (mut daemon, shown) = daemon(dir.path());
+/// A host that applied once, with `.npmrc` rendered from `template`;
+/// returns `host.toml` as file events name it.
+fn with_template(daemon: &Daemon, template: &str) -> PathBuf {
     crate::repo::init_new(&daemon.ctx.paths).unwrap();
     let repo = daemon.ctx.paths.repo();
     std::fs::create_dir(repo.join("home")).unwrap();
-    std::fs::write(repo.join("home/.npmrc"), "email={{ vars.email }}\n").unwrap();
+    std::fs::write(repo.join("home/.npmrc"), template).unwrap();
     std::fs::write(
         repo.join(dotfiles::MANIFEST),
         "[[dotfile]]\npath = \".npmrc\"\ndeploy = \"template\"\n",
@@ -236,11 +234,50 @@ fn new_vars_in_host_toml_render_a_waiting_template() {
     let host = daemon.ctx.paths.host_config();
     std::fs::create_dir_all(host.parent().unwrap()).unwrap();
     std::fs::write(&host, "id = \"test\"\n").unwrap();
-    // A host that applied once.
     let generated = daemon.ctx.paths.generated();
     std::fs::create_dir_all(generated.join("v1")).unwrap();
     std::os::unix::fs::symlink("v1", generated.join(crate::generated::CURRENT)).unwrap();
-    let host = real(host.parent().unwrap()).join("host.toml");
+    real(host.parent().unwrap()).join("host.toml")
+}
+
+#[test]
+fn a_locked_tool_is_waited_for_not_unlocked() {
+    use std::os::unix::fs::PermissionsExt;
+    crate::git::tests::isolate();
+    let dir = tempfile::tempdir().unwrap();
+    let (mut daemon, shown) = daemon(dir.path());
+    let host = with_template(&daemon, "pw={{ bitwarden(\"GitHub\") }}\n");
+    let bin = dir.path().join("bin");
+    std::fs::create_dir(&bin).unwrap();
+    std::fs::write(
+        bin.join("rbw"),
+        "#!/bin/sh\necho \"rbw $*\" >> \"$(dirname \"$0\")/calls\"\ncase \"$1\" in\n\
+         config) echo \'{\"email\":\"me@example.com\"}\' ;;\nunlocked) exit 1 ;;\nesac\n",
+    )
+    .unwrap();
+    std::fs::set_permissions(bin.join("rbw"), std::fs::Permissions::from_mode(0o755)).unwrap();
+    daemon.ctx.path_var = bin.display().to_string();
+
+    daemon.changed(std::slice::from_ref(&host));
+    daemon.announce();
+    assert_eq!(
+        *shown.lock().unwrap(),
+        ["~/.npmrc: waiting for rbw to unlock"]
+    );
+    let calls = std::fs::read_to_string(bin.join("calls")).unwrap();
+    assert!(
+        !calls.contains("rbw unlock\n") && !calls.contains("rbw get"),
+        "{calls}"
+    );
+    assert!(!dir.path().join(".npmrc").exists());
+}
+
+#[test]
+fn new_vars_in_host_toml_render_a_waiting_template() {
+    crate::git::tests::isolate();
+    let dir = tempfile::tempdir().unwrap();
+    let (mut daemon, shown) = daemon(dir.path());
+    let host = with_template(&daemon, "email={{ vars.email }}\n");
 
     daemon.changed(std::slice::from_ref(&host));
     daemon.announce();
