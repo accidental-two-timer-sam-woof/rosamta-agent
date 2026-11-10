@@ -24,6 +24,13 @@
 - **WHEN** 背景服務已在執行時，使用者再執行 `rsmt daemon run`
 - **THEN** 新的程序說明已有實例在執行並以 1 結束
 
+### Requirement: Waits for setup
+背景服務在尚未執行 `rsmt init` 的 host 上啟動時，SHALL 持續執行並等待，在 repo 與 `host.toml` 出現後開始監看，而不是結束後被反覆重新啟動。
+
+#### Scenario: Enabled before init
+- **WHEN** 背景服務在使用者執行 `rsmt init` 之前啟動，之後使用者執行 `rsmt init`
+- **THEN** 背景服務不需要重新啟動，就開始處理 rc 檔的變動
+
 ### Requirement: Login shell environment
 背景服務啟動時 SHALL 從使用者的 login shell 讀取一次環境變數，並以這組環境執行 git 與 shell 相關的操作。
 
