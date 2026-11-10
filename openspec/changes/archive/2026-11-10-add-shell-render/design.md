@@ -41,13 +41,13 @@ hook 只檢查檔案存在後 source loader，例如 zsh 的 `.zshrc`：
 
 ```zsh
 # >>> rosamta >>>
-_rosamta="${ROSAMTA_CURRENT:-${XDG_DATA_HOME:-$HOME/.local/share}/rosamta/generated/current}/zsh"
+_rosamta="${ROSAMTA_CURRENT:-${_rosamta_version:-$HOME/.local/share/rosamta/generated/current}}/zsh"
 [ -r "$_rosamta/rc.zsh" ] && . "$_rosamta/rc.zsh"
-unset _rosamta
+unset _rosamta _rosamta_version
 # <<< rosamta <<<
 ```
 
-`ROSAMTA_CURRENT` 讓 smoke test 把 shell 指向候選版本，使用者不需要設定。
+`ROSAMTA_CURRENT` 讓 smoke test 把 shell 指向候選版本，使用者不需要設定。generated 目錄的位置在安裝 hook 時寫進區塊（在 HOME 底下時寫成 `$HOME/...`），因為 shell 啟動時不一定看得到 rosamta 執行時的 `XDG_DATA_HOME`。env loader 把自己的版本目錄記在 `_rosamta_version`，同一個 shell 之後的 hook（zsh 的 `.zprofile`、`.zshrc`，bash 的 `~/.bashrc`）沿用它，所以套用途中啟動的 shell 不會混用兩個版本；最後一個階段的 hook 把它刪掉，之後重新載入 rc 檔時讀的是最新版本。
 
 ### Loader
 

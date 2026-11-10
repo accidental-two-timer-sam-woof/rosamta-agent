@@ -154,7 +154,7 @@ fn fish_value(value: &str) -> String {
         .collect()
 }
 
-fn fish_quote(text: &str) -> String {
+pub(crate) fn fish_quote(text: &str) -> String {
     format!("'{}'", text.replace('\\', r"\\").replace('\'', r"\'"))
 }
 
@@ -392,6 +392,13 @@ fn loader(shell: Shell, stage: Stage, frags: &[&Fragment], dir: &Path, layout: &
     }
 
     if stage == Stage::Env {
+        // The hooks of later stages load this version too, even after an apply.
+        writeln!(
+            out,
+            "_rosamta_version={}",
+            posix_quote(&layout.version_dir.display().to_string())
+        )
+        .unwrap();
         // An exported marker keeps env from running twice in one process tree.
         writeln!(
             out,

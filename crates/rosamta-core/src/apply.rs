@@ -51,7 +51,12 @@ impl Context {
                 .find(|found| found.shell == shell)
                 .map(|found| found.path.as_path())
         };
-        HookEnv::detect(&self.home, exe(Shell::Zsh), exe(Shell::Fish))
+        HookEnv::detect(
+            &self.home,
+            &self.paths.generated().join(CURRENT),
+            exe(Shell::Zsh),
+            exe(Shell::Fish),
+        )
     }
 
     fn unhooked_file(&self) -> PathBuf {
