@@ -1,0 +1,9 @@
+# Load starship only on macOS laptops tagged "work".
+phase = "prompt"
+order = 10
+
+[when]
+os = ["macos"]
+arch = ["aarch64", "x86_64"]
+hosts = ["mbp"]
+tags = ["work"]
