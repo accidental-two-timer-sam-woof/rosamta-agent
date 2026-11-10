@@ -271,12 +271,14 @@ fn profiling_logs_per_module_or_total() {
         let log = rendered.layout.profile_log.clone();
         let _ = std::fs::remove_file(&log);
         let script = source(&runner, &rendered.file(runner.dialect, "env"));
-        stdout(&run(
+        let out = run(
             &runner,
             &script,
             &[("ROSAMTA_PROFILE", "1")],
             &rendered.root,
-        ));
+        );
+        stdout(&out);
+        assert!(out.stderr.is_empty(), "{}: {:?}", runner.label, out.stderr);
         let text = std::fs::read_to_string(&log).unwrap_or_default();
         let has_clock = runner.dialect == Shell::Zsh
             || stdout(&run(
@@ -297,7 +299,10 @@ fn profiling_logs_per_module_or_total() {
         } else {
             assert!(!text.contains(" one "), "{}: {text}", runner.label);
         }
-        let perl = which("perl", "/usr/bin:/bin").is_some();
+        let perl = Command::new("perl")
+            .args(["-MTime::HiRes", "-e", "1"])
+            .output()
+            .is_ok_and(|out| out.status.success());
         if has_clock || perl {
             assert!(text.contains(" total "), "{}: {text}", runner.label);
         }
