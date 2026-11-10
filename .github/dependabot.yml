@@ -1,0 +1,22 @@
+version: 2
+updates:
+  - package-ecosystem: cargo
+    directory: /
+    schedule:
+      interval: weekly
+    # GPUI upgrades are separate changes (ADR 0005).
+    ignore:
+      - dependency-name: gpui-kit
+      - dependency-name: gpui-component
+      - dependency-name: "gpui-pre*"
+    groups:
+      minor-and-patch:
+        update-types: [minor, patch]
+
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    groups:
+      minor-and-patch:
+        update-types: [minor, patch]
