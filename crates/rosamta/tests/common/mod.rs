@@ -54,16 +54,18 @@ impl Home {
         cmd
     }
 
-    /// Start a shell the way a terminal would, inside this HOME.
+    /// Start a shell the way a terminal would, inside this HOME, with a
+    /// minimal environment: nothing from the developer's leaks in or out.
     pub fn shell(&self, argv: &[String]) -> std::process::Output {
         let mut cmd = Command::new(&argv[0]);
         cmd.args(&argv[1..])
+            .env_clear()
             .env("HOME", &self.root)
             .env("TERM", "dumb")
+            .env("PATH", std::env::var_os("PATH").unwrap_or_default())
+            .env("USER", "tester")
+            .env("LOGNAME", "tester")
             .timeout(Duration::from_secs(20));
-        for var in OUTSIDE {
-            cmd.env_remove(var);
-        }
         cmd.output().unwrap()
     }
 
@@ -114,4 +116,28 @@ pub fn git(dir: &Path, args: &[&str]) {
     let mut cmd = Command::new("git");
     git_env(&mut cmd);
     cmd.arg("-C").arg(dir).args(args).assert().success();
+}
+
+pub fn has(shell: &str) -> bool {
+    rosamta_core::shells::which(shell, &std::env::var("PATH").unwrap_or_default()).is_some()
+}
+
+/// Each installed shell started as a terminal would, running `posix` (fish: `fish`).
+pub fn sessions(posix: &str, fish: &str) -> Vec<Vec<String>> {
+    let argv = |args: &[&str]| args.iter().map(|arg| arg.to_string()).collect();
+    let mut out = Vec::new();
+    if has("sh") {
+        out.push(argv(&["sh", "-l", "-c", posix]));
+    }
+    if has("bash") {
+        out.push(argv(&["bash", "-l", "-i", "-c", posix]));
+        out.push(argv(&["bash", "-i", "-c", posix]));
+    }
+    if has("zsh") {
+        out.push(argv(&["zsh", "-l", "-i", "-c", posix]));
+    }
+    if has("fish") {
+        out.push(argv(&["fish", "-l", "-i", "-c", fish]));
+    }
+    out
 }
