@@ -85,7 +85,9 @@ fn schemas_reject_what_parsing_rejects() {
     assert!(!schema_errors(Kind::Module, "phse = \"tools\"").is_empty());
     assert!(!schema_errors(Kind::Module, "[when]\nos = [\"darwin\"]").is_empty());
     assert!(!schema_errors(Kind::Repo, "hosts = []").is_empty());
-    assert!(!schema_errors(Kind::Host, "id = \"mbp\"\npull_interval = 0").is_empty());
+    let zero_interval = "id = \"mbp\"\npull_interval = 0";
+    assert!(toml::from_str::<HostConfig>(zero_interval).is_err());
+    assert!(!schema_errors(Kind::Host, zero_interval).is_empty());
     for bad in [
         "[[dotfile]]\ndeploy = \"copy\"",
         "[[dotfile]]\npath = \"x\"\ndeploy = \"hardlink\"",
