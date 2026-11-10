@@ -272,6 +272,25 @@ mod tests {
     }
 
     #[test]
+    fn editor_lock_and_hidden_files_are_not_modules() {
+        let dir = repo(&[
+            ("rosamta.toml", "format = 1\n"),
+            ("modules/bun.toml", ""),
+            ("modules/.bun.toml", "broken ="),
+        ]);
+        // Emacs's lock file: a dangling symlink.
+        std::os::unix::fs::symlink("me@host.1234:1", dir.path().join("modules/.#bun.toml"))
+            .unwrap();
+        std::os::unix::fs::symlink("gone", dir.path().join("modules/x.toml")).unwrap();
+        let report = validate(dir.path()).unwrap();
+        assert!(report.is_valid());
+        assert_eq!(
+            repo::module_files(dir.path()).unwrap(),
+            [dir.path().join("modules/bun.toml")]
+        );
+    }
+
+    #[test]
     fn bad_os_lists_allowed_values() {
         let dir = repo(&[
             ("rosamta.toml", "format = 1\n"),
