@@ -12,7 +12,10 @@ use serde::Serialize;
 use super::review::{self, DotfileItem, Reason};
 use super::state::{self, Deployed, Record, Sides};
 use super::tree::{self, Content};
-use super::{Choice, history};
+use super::{Choice, crypt, history};
+
+/// Why an encrypted dotfile waits.
+pub(crate) const LOCKED: &str = "encrypted; the key is not unlocked on this host";
 use crate::apply::Context;
 use crate::config::{AdoptPolicy, Deploy, Dotfile, HostFacts};
 use crate::error::{Error, Result};
@@ -257,11 +260,11 @@ fn plan_copy(env: &Env, path: &Path, entry: &Dotfile) -> Result<Planned> {
             Work::Keep(entry.clone()),
         ));
     }
-    let Some(desired) = desired(&env.repo, entry)? else {
+    let Some(desired) = desired(env.ctx, entry)? else {
         return Ok(step(
             path,
             Action::Skipped,
-            Some("encrypted dotfiles are not supported yet".into()),
+            Some(LOCKED.into()),
             Work::Nothing,
         ));
     };
@@ -298,11 +301,15 @@ fn plan_copy(env: &Env, path: &Path, entry: &Dotfile) -> Result<Planned> {
     Ok(wait(path, Action::Conflict, local, repo_hash))
 }
 
-fn desired(repo: &Path, entry: &Dotfile) -> Result<Option<Desired>> {
-    if entry.encrypted {
-        return Ok(None);
+/// What a copy should hold; `None` when it is encrypted and this host has
+/// no key yet.
+fn desired(ctx: &Context, entry: &Dotfile) -> Result<Option<Desired>> {
+    let source = ctx.paths.repo().join(entry.source());
+    if !entry.encrypted {
+        return Ok(Some(Desired::Source(source)));
     }
-    Ok(Some(Desired::Source(repo.join(entry.source()))))
+    let sealed = std::fs::read(&source).map_err(Error::read(&source))?;
+    Ok(crypt::decrypt(ctx, &sealed)?.map(Desired::Bytes))
 }
 
 fn write(
@@ -377,18 +384,23 @@ pub fn deploy(ctx: &Context) -> Result<Vec<Step>> {
     Ok(steps)
 }
 
+/// Write what `target` holds to `source` in the repo, encrypted when declared so.
+pub(crate) fn save(ctx: &Context, entry: &Dotfile, target: &Path, source: &Path) -> Result<()> {
+    if !entry.encrypted {
+        return tree::put(Content::Tree(target), source);
+    }
+    let plain = std::fs::read(target).map_err(Error::read(target))?;
+    tree::put(Content::Bytes(&crypt::encrypt(ctx, &plain)?), source)
+}
+
 /// Put the repo's version at `path`, keeping what was there in a snapshot.
 pub(crate) fn force(ctx: &Context, path: &Path, entry: &Dotfile) -> Result<()> {
     let repo = ctx.paths.repo();
     let work = match entry.deploy {
         Deploy::Link => Work::Link(entry.clone()),
-        Deploy::Copy => match desired(&repo, entry)? {
+        Deploy::Copy => match desired(ctx, entry)? {
             Some(desired) => Work::Write(entry.clone(), desired),
-            None => {
-                return Err(Error::Usage(
-                    "encrypted dotfiles are not supported yet".into(),
-                ));
-            }
+            None => return Err(Error::Usage(LOCKED.into())),
         },
         Deploy::Template => {
             return Err(Error::Usage("template deploy is not supported yet".into()));
@@ -433,7 +445,7 @@ fn run(ctx: &Context, repo: &Path, deployed: &mut Deployed, path: &Path, work: W
         }
         Work::Save(entry) => {
             let source = repo.join(entry.source());
-            tree::put(Content::Tree(&target), &source)?;
+            save(ctx, &entry, &target, &source)?;
             if entry.deploy == Deploy::Link {
                 tree::link(&source, &target)?;
             }
