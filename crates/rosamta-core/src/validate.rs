@@ -95,13 +95,12 @@ pub fn validate(repo_dir: &Path) -> Result<Report> {
     let mut names: BTreeMap<String, Vec<PathBuf>> = BTreeMap::new();
     for path in repo::module_files(repo_dir)? {
         let rel = relative(repo_dir, &path);
-        let text = read(&path)?;
         report.file(rel.clone());
         names
             .entry(repo::module_name(&path))
             .or_default()
             .push(rel.clone());
-        match parse::<Module>(&text) {
+        match read(&path)?.and_then(|text| parse::<Module>(&text)) {
             Ok(module) => {
                 let problems = crate::render::check(&module).into_iter().map(Issue::at);
                 report.file(rel.clone()).errors.extend(problems);
@@ -135,7 +134,7 @@ pub fn validate(repo_dir: &Path) -> Result<Report> {
     let path = repo_dir.join(crate::dotfiles::MANIFEST);
     if path.is_file() {
         let rel = PathBuf::from(crate::dotfiles::MANIFEST);
-        match parse::<DotfileManifest>(&read(&path)?) {
+        match read(&path)?.and_then(|text| parse::<DotfileManifest>(&text)) {
             Ok(manifest) => {
                 let problems = crate::dotfiles::check(&manifest, repo_dir);
                 report
@@ -157,7 +156,9 @@ pub fn validate(repo_dir: &Path) -> Result<Report> {
     // Its fields belong to a later change; for now only the syntax is checked.
     let path = repo_dir.join("packages.toml");
     if path.is_file() {
-        let issues = parse::<toml::Table>(&read(&path)?).err();
+        let issues = read(&path)?
+            .and_then(|text| parse::<toml::Table>(&text))
+            .err();
         report
             .file(PathBuf::from("packages.toml"))
             .errors
@@ -168,7 +169,7 @@ pub fn validate(repo_dir: &Path) -> Result<Report> {
 
 fn check_manifest(repo_dir: &Path, report: &mut Report) -> Result<Option<RepoManifest>> {
     let path = repo_dir.join(repo::MANIFEST);
-    if !path.is_file() {
+    if !path.try_exists().map_err(Error::read(&path))? {
         return Err(Error::Usage(format!(
             "{} is not a rosamta repo: missing {}",
             repo_dir.display(),
@@ -176,7 +177,7 @@ fn check_manifest(repo_dir: &Path, report: &mut Report) -> Result<Option<RepoMan
         )));
     }
     let file = report.file(PathBuf::from(repo::MANIFEST));
-    match parse::<RepoManifest>(&read(&path)?) {
+    match read(&path)?.and_then(|text| parse::<RepoManifest>(&text)) {
         Ok(manifest) => {
             repo::ensure_supported(manifest.format)?;
             if manifest.format == 0 {
@@ -197,8 +198,18 @@ fn check_manifest(repo_dir: &Path, report: &mut Report) -> Result<Option<RepoMan
     }
 }
 
-fn read(path: &Path) -> Result<String> {
-    std::fs::read_to_string(path).map_err(Error::read(path))
+/// The text of `path`; text that is not UTF-8 is an issue in the file.
+fn read(path: &Path) -> Result<Result<String, Issue>> {
+    let bytes = std::fs::read(path).map_err(Error::read(path))?;
+    Ok(String::from_utf8(bytes).map_err(|err| {
+        let valid = err.utf8_error().valid_up_to();
+        let (line, column) = line_col(&String::from_utf8_lossy(&err.as_bytes()[..valid]), valid);
+        Issue {
+            line: Some(line),
+            column: Some(column),
+            message: "not valid UTF-8".into(),
+        }
+    }))
 }
 
 fn relative(root: &Path, path: &Path) -> PathBuf {
@@ -288,6 +299,22 @@ mod tests {
             repo::module_files(dir.path()).unwrap(),
             [dir.path().join("modules/bun.toml")]
         );
+    }
+
+    #[test]
+    fn non_utf8_file_is_a_file_error() {
+        let dir = repo(&[("rosamta.toml", "format = 1\n"), ("modules/ok.toml", "")]);
+        fs::write(
+            dir.path().join("modules/bad.toml"),
+            b"# ok\nphase = \"\xff\"\n",
+        )
+        .unwrap();
+        let report = validate(dir.path()).unwrap();
+        assert!(!report.is_valid());
+        let issue = &errors(&report, "modules/bad.toml")[0];
+        assert_eq!((issue.line, issue.column), (Some(2), Some(10)));
+        assert!(issue.message.contains("UTF-8"), "{issue:?}");
+        assert!(errors(&report, "modules/ok.toml").is_empty());
     }
 
     #[test]
