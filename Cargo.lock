@@ -4655,6 +4655,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "minijinja"
+version = "3.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "509eeb2603a84eccabb4d75f6ec8ba23b46bbf441aaeb863d6b83a5887fd51e4"
+
+[[package]]
 name = "minimal-lexical"
 version = "0.2.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -6626,6 +6632,7 @@ dependencies = [
  "jsonschema",
  "keyring",
  "libc",
+ "minijinja",
  "notify-debouncer-full",
  "notify-rust",
  "objc2 0.6.5",

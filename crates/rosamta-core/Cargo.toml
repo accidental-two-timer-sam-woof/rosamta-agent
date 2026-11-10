@@ -10,6 +10,7 @@ age = { version = "0.11.2", features = ["armor"] }
 indexmap = { version = "2.14.2", features = ["serde"] }
 keyring = "4.2.0"
 libc = "0.2.191"
+minijinja = "3.1.0"
 notify-debouncer-full = "0.7.0"
 regex = "1.13.1"
 schemars = { version = "1.2.3", features = ["indexmap2"] }
