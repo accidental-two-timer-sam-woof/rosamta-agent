@@ -2,7 +2,7 @@
 
 ## Context
 
-repo 目前只有規劃文件。相關的既定決策：GPUI 透過 `gpui-component` 引入並鎖定版本（ADR 0005）、不提供 Flatpak 與 Snap（ADR 0009）、macOS 最低版本 13、授權為 Apache-2.0。
+repo 目前只有規劃文件。相關的既定決策：GPUI 透過 `gpui-kit`（內含 `gpui-component`）引入並鎖定版本（ADR 0005）、不提供 Flatpak 與 Snap（ADR 0009）、macOS 最低版本 13、授權為 Apache-2.0。
 
 ## Goals / Non-Goals
 
@@ -23,7 +23,7 @@ repo 目前只有規劃文件。相關的既定決策：GPUI 透過 `gpui-compon
 
 ### 兩個命令名稱
 
-`crates/rosamta` 宣告兩個 `[[bin]]`（`rosamta` 與 `rsmt`），共用同一個 `main.rs`，讓 `cargo install` 的使用者也能直接用兩個名稱。發布的套件只放 `rosamta`，`rsmt` 以 symlink 建立，避免重複佔用空間。
+`crates/rosamta` 有 `rosamta` 與 `rsmt` 兩個 bin，入口放在 `src/lib.rs`，`src/main.rs` 與 `src/bin/rsmt.rs` 都只呼叫它（兩個 bin 指向同一個檔案時 cargo 每次建置都會警告），讓 `cargo install` 的使用者也能直接用兩個名稱。發布的套件只放 `rosamta`，`rsmt` 以 symlink 建立，避免重複佔用空間。
 
 替代方案是只有一個執行檔、由使用者自己設定 alias，但這樣文件裡的 `rsmt` 指令在 `cargo install` 的環境下會失效。
 
@@ -46,7 +46,7 @@ repo 目前只有規劃文件。相關的既定決策：GPUI 透過 `gpui-compon
 
 ### Dependabot
 
-`cargo` 與 `github-actions` 每週一次，minor 與 patch 合成一個 group PR；`gpui-component` 與 `gpui-pre` 列入 ignore，它們的升級依 ADR 0005 另開 change。
+`cargo` 與 `github-actions` 每週一次，minor 與 patch 合成一個 group PR；`gpui-kit`、`gpui-component` 與 `gpui-pre*` 列入 ignore，它們的升級依 ADR 0005 另開 change。
 
 ### 安裝程式 fixture
 
