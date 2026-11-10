@@ -2,8 +2,8 @@
 
 ## 1. Renderer 核心
 
-- [ ] 1.1 定義結構化與片段 module 的欄位（env、path、aliases、raw、phase、order、shells），確認範例檔解析測試通過
-- [ ] 1.2 實作 module 篩選（套用範圍）與排序（phase、order、名稱），以表格驅動測試確認順序
+- [x] 1.1 定義結構化與片段 module 的欄位（env、path、aliases、raw、phase、order、shells），確認範例檔解析測試通過
+- [x] 1.2 實作 module 篩選（套用範圍）與排序（phase、order、名稱），以表格驅動測試確認順序
 - [ ] 1.3 實作 shell 版本偵測與快取，在 Docker 映像中確認四種 shell 都能取得版本，低於下限時回報警告
 
 ## 2. 各 shell 的語法

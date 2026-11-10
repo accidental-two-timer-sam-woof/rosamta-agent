@@ -6,7 +6,8 @@
 set -eu
 here=$(cd "$(dirname "$0")" && pwd)
 # Same architecture as the CI runners, so one x86_64 musl build serves every image.
-export DOCKER_DEFAULT_PLATFORM=linux/amd64
+# Set DOCKER_DEFAULT_PLATFORM=linux/arm64 to run natively on Apple Silicon.
+export DOCKER_DEFAULT_PLATFORM="${DOCKER_DEFAULT_PLATFORM:-linux/amd64}"
 
 if [ $# -eq 0 ]; then
   for f in "${here}"/*.Dockerfile; do
