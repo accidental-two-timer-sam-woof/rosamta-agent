@@ -1,18 +1,103 @@
-# rosamta
+<div align="center">
 
-跨 shell、跨主機的 dotfile 管理工具：設定宣告在 git repo 裡，render 成各 shell 載入的腳本，並持續把主機上出現的新變動接管回 repo。目前仍在開發中。
+<img width="2000" src=".github/assets/banner.png" alt="rosamta" />
 
-命令列程式有 `rosamta` 與 `rsmt` 兩個名稱，用法完全相同。
+<br>
+
+[![License](https://img.shields.io/github/license/accidental-two-timer-sam-woof/rosamta-agent?style=for-the-badge)](LICENSE)
+[![Version](https://img.shields.io/badge/Version-v0.1.0--rc.1-00BB00?style=for-the-badge)](https://github.com/accidental-two-timer-sam-woof/rosamta-agent/releases)
+[![macOS](https://img.shields.io/badge/macOS-13%2B-black?style=for-the-badge&logo=apple&logoColor=white)](#系統需求)
+[![Linux](https://img.shields.io/badge/Linux-x86__64%20%7C%20aarch64-FCC624?style=for-the-badge&logo=linux&logoColor=black)](#系統需求)
+
+</div>
+
+## 總覽
+
+rosamta 是跨 shell、跨主機的 dotfile 管理工具。設定宣告在 git repo 裡，render 成各 shell 載入的腳本；安裝程式之後寫進 shell 設定檔的內容，也會被接管回 repo。命令列程式有 `rosamta` 與 `rsmt` 兩個名稱，用法完全相同；macOS 另有桌面 App。目前仍在開發中。
+
+### 🐚 **一份設定，四種 shell**
+- module 以 TOML 宣告環境變數、PATH 與 alias，同一份套用到 sh、bash、zsh 與 fish
+- 只適用於特定 shell 的程式碼放在 `[raw]`；可依主機、作業系統、架構或標籤限定套用範圍
+- 套用前先以新的設定啟動每個 shell，出現新的錯誤就取消，shell 繼續使用原本的設定
+
+### 📥 **接管設定檔**
+- 把 `~/.zshrc` 等設定檔原有的內容搬進 repo，搬完後設定檔只剩 rosamta 的區塊
+- 安裝程式之後寫入的內容列入待處理清單，可接管到這台主機或所有主機，也可以忽略
+- 看起來像 API key 或 token 的內容不進 repo，只留在這台主機
+
+### 🗂️ **設定檔部署**
+- 以 symlink 或複製部署 `~/.config` 等設定檔，個別主機可以有自己的版本
+- 敏感的設定檔加密後存進 repo，私鑰以密碼保護
+- 目標位置已有不同內容時不覆蓋，顯示差異讓你決定
+
+### 🔄 **多主機同步**
+- 每次變更都是一個 commit，自動推送，並定時拉取其他主機的變更
+- 推送前檢查 API key 與 token，發現時停止推送
+- 登入 GitHub 後可直接建立 private repo 作為遠端
+
+### 🛰️ **背景服務**
+- 登入後自動啟動：macOS 為登入項目，Linux 為 systemd 使用者服務
+- 出現待處理的內容時發出通知；macOS 上可以直接選擇接管、忽略或查看差異
+
+### 🖥️ **桌面 App**（macOS）
+- 總覽、待處理項目的差異、module 開關、設定檔狀態、提交紀錄與快照、本機設定
+- 跟隨系統的淺色與深色外觀
+
+### ↩️ **隨時退出**
+- 修改設定檔前先存快照，可還原單次接管，或全部還原成使用 rosamta 之前的內容
+- `rsmt eject` 把目前的設定寫回設定檔，移除 rosamta 後 shell 的行為不變
+
+## 示例圖
+
+<details>
+<summary><strong>展開查看 App 示例圖</strong></summary>
+
+<br>
+
+<div align="center">
+
+| 總覽 | 待處理 | 設定 |
+|:---:|:---:|:---:|
+| <img width="300" src=".github/assets/screenshots/overview-light.png" alt="總覽" /> | <img width="300" src=".github/assets/screenshots/review-light.png" alt="待處理" /> | <img width="300" src=".github/assets/screenshots/settings-light.png" alt="設定" /> |
+
+| 模組 | 設定檔 | 歷史 |
+|:---:|:---:|:---:|
+| <img width="300" src=".github/assets/screenshots/modules-dark.png" alt="模組" /> | <img width="300" src=".github/assets/screenshots/dotfiles-dark.png" alt="設定檔" /> | <img width="300" src=".github/assets/screenshots/history-dark.png" alt="歷史" /> |
+
+</div>
+
+</details>
+
+<br/>
 
 ## 安裝
 
-從 [Releases](https://github.com/accidental-two-timer-sam-woof/rosamta-agent/releases) 下載 macOS 的 `.dmg`，或 Linux 的 `.deb`、`.rpm`、tarball；也可以從原始碼安裝：
+從 [Releases](https://github.com/accidental-two-timer-sam-woof/rosamta-agent/releases) 下載：
+
+| 平台 | 檔案 |
+|---|---|
+| macOS | `.dmg`，含桌面 App 與背景服務 |
+| Linux | `.deb`、`.rpm` 或 tarball，含命令列程式與背景服務 |
+
+也可以從原始碼安裝命令列程式：
 
 ```sh
 cargo install --locked --git https://github.com/accidental-two-timer-sam-woof/rosamta-agent rosamta
 ```
 
-## 開始使用
+## 系統需求
+
+| 項目 | 需求 |
+|------|------|
+| macOS | 13 以上，Apple 晶片或 Intel |
+| Linux | x86_64 或 aarch64；背景服務需要 systemd 使用者服務，否則自行執行 `rsmt daemon run` |
+| shell | sh、bash、zsh、fish |
+| git | 必要 |
+| keychain（選用） | Linux 為 Secret Service；沒有時 GitHub token 存成只有你能讀取的檔案 |
+
+## 使用方式
+
+### 開始使用
 
 建立新的 repo：
 
@@ -28,7 +113,7 @@ repo 建在 `~/.local/share/rosamta/repo`，本機設定寫在 `~/.config/rosamt
 rsmt init git@github.com:<你的帳號>/dotfiles.git
 ```
 
-## 檢查設定
+### 檢查設定
 
 ```sh
 rsmt validate
@@ -46,7 +131,7 @@ rsmt validate
 rsmt validate --json
 ```
 
-## 撰寫 module
+### 撰寫 module
 
 每個 module 是 repo 中 `modules/` 底下的一個 TOML 檔，例如 `modules/editor.toml`：
 
@@ -70,7 +155,7 @@ bindkey -e
 '''
 ```
 
-## 套用
+### 套用
 
 ```sh
 rsmt apply --dry-run
@@ -85,7 +170,7 @@ Debian 與 Ubuntu 預設的 `~/.bashrc` 開頭會讓非互動的 bash 直接結�
 
 套用前會先以新的設定啟動每個 shell；啟動時若出現新的錯誤，這次套用會取消並列出造成錯誤的 module，shell 繼續使用原本的設定。
 
-## 接管設定檔的內容
+### 接管設定檔的內容
 
 ```sh
 rsmt adopt
@@ -117,7 +202,7 @@ rsmt review ignore <編號>
 | `adopt_original` | `delete`：刪除原內容（預設）；`comment`：改成註解 |
 | `shell_notice` | `true`：開 shell 時提醒（預設）；`false` |
 
-## 管理設定檔
+### 管理設定檔
 
 ```sh
 rsmt add ~/.config/nvim ~/.gitconfig
@@ -175,7 +260,7 @@ rsmt forget ~/.config/nvim
 
 宣告與 repo 中的內容會被移除，設定檔以一般檔案留在原位；其他主機下次套用時也一樣。
 
-### 加密
+#### 加密
 
 ```sh
 rsmt add --encrypt ~/.ssh/config
@@ -183,7 +268,7 @@ rsmt add --encrypt ~/.ssh/config
 
 第一次加密時要設定密碼。加密用的私鑰以這個密碼加密後存成 repo 的 `key.age`，這台主機的副本存在 `~/.config/rosamta/age.key`。新主機第一次在終端機執行 `rsmt apply` 時輸入一次密碼即可；背景服務不會詢問密碼，會先略過加密的設定檔。密碼遺失後無法找回，只有已經解開私鑰的主機還能讀取加密的設定檔。
 
-## 同步到其他主機
+### 同步到其他主機
 
 ```sh
 rsmt sync
@@ -209,7 +294,7 @@ rsmt publish
 
 拉取時，這台主機還沒推送的 commit 會接在遠端的變更之後。兩台主機改到同一個檔案的同一處時，拉取會中止並列出這些檔案，repo 維持拉取前的狀態；在 repo 中用 git 合併後，再執行 `rsmt sync`。拉取到的 module 讓 shell 啟動時出現新的錯誤時，repo 保留新內容，shell 繼續使用原本的設定。
 
-### 推送受阻
+#### 推送受阻
 
 推送前會檢查要推送的內容。看起來像 API key 或 token 時，推送會停止並列出檔案、行號與符合的規則，手動修改的內容也不會被 commit；把該內容移出 repo 後再推送一次。內容如果已經在 commit 中，要先修改那個 commit。
 
@@ -219,7 +304,7 @@ rsmt publish
 | 遠端拒絕存取 | 不推送；確認 SSH 金鑰或 GitHub 登入後再推送 |
 | 連不上遠端 | commit 留在本機，下一次 `rsmt sync` 時推送 |
 
-## 連結 GitHub
+### 連結 GitHub
 
 ```sh
 rsmt remote github login
@@ -247,7 +332,7 @@ SSH 金鑰能通過 GitHub 驗證時使用 SSH；否則以登入的 token 走 HT
 rsmt remote github logout
 ```
 
-## 背景服務
+### 背景服務
 
 ```sh
 rsmt daemon enable
@@ -278,7 +363,7 @@ rsmt daemon disable
 | `pull` | `auto`：定時同步，電腦從睡眠喚醒後也會同步一次（預設）；`manual`：只在執行 `rsmt sync` 或 `rsmt pull` 時拉取 |
 | `pull_interval` | 定時同步的間隔，單位為分鐘（預設 15，至少 1） |
 
-## 移除 hook
+### 移除 hook
 
 ```sh
 rsmt unhook zsh
@@ -290,7 +375,7 @@ rsmt unhook zsh
 rsmt hook zsh
 ```
 
-## 停止使用
+### 停止使用
 
 ```sh
 rsmt eject
@@ -306,7 +391,7 @@ rsmt restore --original
 
 兩個指令都會先顯示差異並要求確認；不在終端機中執行時，要加上 `--yes`。
 
-## 編輯器支援
+### 編輯器支援
 
 `rsmt schema` 輸出各種檔案的 JSON Schema，種類有 `repo`（`rosamta.toml`）、`module`、`host`（`host.toml`）與 `dotfiles`（`dotfiles.toml`）：
 
@@ -316,7 +401,7 @@ rsmt schema module > module.schema.json
 
 在 TOML 檔第一行加上 `#:schema ./module.schema.json`，Taplo 或 Tombi 等編輯器外掛就能提示欄位並即時檢查。
 
-## 檔案位置
+### 檔案位置
 
 所有平台都使用 XDG 路徑；對應的環境變數未設定或不是絕對路徑時，使用括號中的預設值。
 
@@ -327,7 +412,7 @@ rsmt schema module > module.schema.json
 | 產生的腳本 | `$XDG_DATA_HOME/rosamta/generated`（`~/.local/share`） |
 | 狀態 | `$XDG_STATE_HOME/rosamta`（`~/.local/state`） |
 
-## 結束碼
+### 結束碼
 
 | 結束碼 | 意義 |
 |---|---|
@@ -335,6 +420,78 @@ rsmt schema module > module.schema.json
 | 2 | 指令用法或設定有誤 |
 | 1 | 其他錯誤，例如無法讀取檔案 |
 
-## 授權
+<br/><br/>
 
+---
+
+<br/><br/>
+
+## 開發環境建置
+[![Rust](https://img.shields.io/badge/Rust-1.99-000000?style=for-the-badge&logo=rust&logoColor=white)](https://www.rust-lang.org)
+
+### 需求
+- Rust：版本由 `rust-toolchain.toml` 決定，第一次執行 `cargo` 時自動下載
+- macOS：建置桌面 App 需要 Xcode 與 Metal 編譯器
+- Linux：建置桌面 App 需要的系統套件見 [CONTRIBUTING.md](CONTRIBUTING.md)
+- Docker 或 OrbStack：發行版測試需要
+
+### 建置與執行
+```bash
+git clone https://github.com/accidental-two-timer-sam-woof/rosamta-agent.git
+cd rosamta-agent
+
+# 命令列程式
+cargo run -p rosamta --bin rsmt -- --help
+
+# 桌面 App
+cargo run -p rosamta-gui
+
+# 測試
+cargo test --workspace --locked
+```
+
+> 💡 送 PR 前的完整檢查、發行版測試與安裝程式 fixture 的擷取方式，見 [CONTRIBUTING.md](CONTRIBUTING.md)。
+
+## 專案架構
+
+```
+rosamta-agent/
+├── crates/
+│   ├── rosamta-core/             # 核心邏輯，命令列程式、App 與背景服務共用
+│   │   ├── locales/              # 使用者看到的文字（繁體中文、英文）
+│   │   └── src/
+│   │       ├── adopt/            # 接管設定檔、待處理清單、秘密偵測
+│   │       ├── daemon/           # 背景服務、login shell 環境、通知
+│   │       ├── dotfiles/         # 設定檔部署、加密、衝突處理
+│   │       ├── github/           # GitHub 登入與 token 保存
+│   │       ├── sync/             # 拉取、推送與推送前檢查
+│   │       ├── render.rs         # 把 module render 成各 shell 的腳本
+│   │       ├── apply.rs          # 套用與 shell 啟動檢查
+│   │       ├── hooks.rs          # 設定檔中的 rosamta 區塊
+│   │       ├── snapshot.rs       # 修改前的快照與還原
+│   │       └── validate.rs       # TOML 檢查與 JSON Schema
+│   ├── rosamta/                  # 命令列程式（rosamta / rsmt）
+│   └── rosamta-gui/              # 桌面 App（GPUI）
+│       └── src/pages/            # 總覽、待處理、模組、設定檔、歷史、設定
+├── assets/                       # App 圖示
+├── packaging/                    # macOS App bundle、Homebrew、AUR
+├── tests/
+│   ├── docker/                   # 各發行版的 shell 測試映像
+│   └── fixtures/installers/      # 安裝程式寫入設定檔前後的內容
+├── docs/adr/                     # 架構決策紀錄
+├── openspec/                     # 功能規格與變更提案
+├── GLOSSARY.md                   # 用語定義
+└── .github/workflows/            # CI 與發行
+```
+
+## 貢獻
+歡迎 PR 與 Issue！
+
+送出前請確認
+1. 依 [CONTRIBUTING.md](CONTRIBUTING.md) 在本機跑過格式、clippy、測試與 `cargo deny`
+2. 用語以 [GLOSSARY.md](GLOSSARY.md) 為準，設計不違反 [docs/adr](docs/adr) 的決策
+3. 影響架構或跨多次工作階段的變更，先在 `openspec/changes/` 以 [OpenSpec](https://github.com/Fission-AI/OpenSpec) 規劃
+4. commit message 使用英文的 Conventional Commits
+
+## 授權
 [Apache-2.0](LICENSE)。第三方套件的授權見 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)。
