@@ -1035,6 +1035,47 @@ mod templates {
     }
 
     #[test]
+    fn a_terminal_unlocks_bw_once_for_the_whole_run() {
+        let mut home = Home::new("ask");
+        let bin = home.ctx.home.join("bin");
+        write(
+            &bin.join("bw"),
+            r#"#!/bin/sh
+echo "bw $*" >> "$(dirname "$0")/calls"
+case "$1" in
+status) [ "$BW_SESSION" = s3ss ] && echo '{"status":"unlocked"}' || echo '{"status":"locked"}' ;;
+unlock) echo s3ss ;;
+list) [ "$BW_SESSION" = s3ss ] || exit 1
+  echo '[{"name":"GitHub","login":{"username":"me","password":"pw"}}]' ;;
+esac
+"#,
+        );
+        fs::set_permissions(bin.join("bw"), fs::Permissions::from_mode(0o755)).unwrap();
+        home.ctx.path_var = bin.display().to_string();
+        let host = home.ctx.paths.host_config();
+        fs::write(
+            &host,
+            format!("{}[secrets]\nbitwarden = [\"bw\"]\n", read(&host)),
+        )
+        .unwrap();
+        home.repo_write("home/.a", "{{ bitwarden(\"GitHub\") }}\n");
+        home.repo_write("home/.b", "{{ bitwarden(\"GitHub\", \"username\") }}\n");
+        home.repo_write(
+            "dotfiles.toml",
+            "[[dotfile]]\npath = \".a\"\ndeploy = \"template\"\n\n\
+             [[dotfile]]\npath = \".b\"\ndeploy = \"template\"\n",
+        );
+        home.ctx.interactive = true;
+        home.deploy();
+        home.deploy();
+        assert_eq!(read(&home.at(".a")), "pw\n");
+        assert_eq!(read(&home.at(".b")), "me\n");
+        let calls = read(&bin.join("calls"));
+        assert_eq!(calls.matches("bw unlock").count(), 1, "{calls}");
+        assert_eq!(calls.matches("bw list").count(), 1, "{calls}");
+    }
+
+    #[test]
     fn output_holding_secrets_is_not_kept_in_the_repo() {
         let mut home = Home::new("ask");
         let log = with_secret(&mut home);
