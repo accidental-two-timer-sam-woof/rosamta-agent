@@ -45,7 +45,7 @@ pub fn render(app: &Rosamta, cx: &mut Context<Rosamta>) -> impl IntoElement {
                         .gap(px(S12))
                         .child(div().flex_1().text_sm().child(t("setup.new")))
                         .child(
-                            crate::pages::prominent(Button::new("create"))
+                            super::prominent(Button::new("create"))
                                 .label(t("setup.create"))
                                 .loading(busy)
                                 .on_click(cx.listener(|this, _, window, cx| {
@@ -60,7 +60,7 @@ pub fn render(app: &Rosamta, cx: &mut Context<Rosamta>) -> impl IntoElement {
                         .gap(px(S8))
                         .child(div().flex_1().child(Input::new(&app.url)))
                         .child(
-                            crate::pages::glass(Button::new("join"), cx)
+                            super::glass(Button::new("join"), cx)
                                 .label(t("setup.join_button"))
                                 .disabled(busy)
                                 .on_click(cx.listener(|this, _, window, cx| {

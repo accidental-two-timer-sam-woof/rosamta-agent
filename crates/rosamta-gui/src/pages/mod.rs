@@ -150,41 +150,34 @@ pub fn section(title: SharedString, body: impl IntoElement, cx: &App) -> impl In
         )
 }
 
-/// Buttons are capsules.
-const CAPSULE: f32 = 999.;
-
 /// The main action: a filled capsule in the accent color.
 pub fn prominent(button: Button) -> Button {
-    button.primary().rounded(px(CAPSULE)).shadow_sm()
+    button.primary().rounded_full().shadow_sm()
 }
 
 /// Every other action: a translucent capsule with a hairline edge, like
-/// glass over the page. gpui-kit shows a fifth of the custom color at rest.
+/// glass over the page. gpui-kit edges a custom button in its color and
+/// fills it with a fifth of that color at rest.
 pub fn glass(button: Button, cx: &App) -> Button {
     let p = palette(cx);
     let white = |alpha| hsla(0., 0., 1., alpha);
-    let (fill, hover, active) = if cx.theme().is_dark() {
-        (white(0.4), white(0.12), white(0.04))
+    let (hover, active) = if cx.theme().is_dark() {
+        (white(0.12), white(0.04))
     } else {
-        (white(0.7), white(1.), p.line)
+        (p.panel, p.line)
     };
-    button
-        .rounded(px(CAPSULE))
-        .border_1()
-        .border_color(p.line)
-        .custom(
-            ButtonCustomVariant::new(cx)
-                .color(fill)
-                .foreground(p.text)
-                .hover(hover)
-                .active(active)
-                .shadow(true),
-        )
+    button.rounded_full().border_1().custom(
+        ButtonCustomVariant::new(cx)
+            .color(p.line)
+            .foreground(p.text)
+            .hover(hover)
+            .active(active),
+    )
 }
 
 /// A quiet action: text only until hovered.
 pub fn ghost(button: Button) -> Button {
-    button.ghost().rounded(px(CAPSULE))
+    button.ghost().rounded_full()
 }
 
 /// A choice of one value: a capsule track holding a pill per option.
@@ -193,18 +186,23 @@ pub fn segments(group: ButtonGroup, cx: &App) -> ButtonGroup {
         .p(px(2.))
         .gap(px(2.))
         .rounded_full()
-        .bg(palette(cx).panel)
+        .bg(palette(cx).line)
 }
 
-/// One option of `segments`: the chosen one is an accent pill. Its color is
-/// set here because a selected primary button would show its pressed shade.
+/// One option of `segments`: the chosen one is a raised pill. Its colors
+/// are the button's own so they hold while the choice is disabled.
 pub fn segment(button: Button, selected: bool, cx: &App) -> Button {
-    let button = button.selected(selected).rounded_full();
-    if selected {
-        button.primary().bg(palette(cx).accent).shadow_sm()
-    } else {
-        button.ghost()
+    let button = button.selected(selected).ghost().rounded_full();
+    if !selected {
+        return button;
     }
+    let p = palette(cx);
+    let pill = if cx.theme().is_dark() {
+        hsla(0., 0., 1., 0.14)
+    } else {
+        p.surface
+    };
+    button.bg(pill).text_color(p.text).shadow_sm()
 }
 
 /// One line inside a section, ruled from the next.
