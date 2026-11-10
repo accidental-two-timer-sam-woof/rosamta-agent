@@ -365,6 +365,50 @@ fn a_commit_a_hook_stops_is_not_made_and_says_why() {
     );
 }
 
+/// What was scanned is what gets committed, even when the file changes
+/// right after the scan.
+#[test]
+fn an_edit_after_the_scan_is_not_committed() {
+    let hosts = hosts();
+    run(&hosts.a, &["pull"]);
+    let repo = hosts.a.repo();
+    // The file as it is until it is staged; then as if a secret was written
+    // to it, with a new mtime so git reads it again.
+    let filter = hosts.a.root.join("filter.sh");
+    fs::write(
+        &filter,
+        "if grep -qa modules/zoxide.toml .git/index; then\n\
+         cat > /dev/null\n\
+         printf 'GH = \"ghp_0123456789abcdefghijABCDEFGHIJ012345\"\\n'\n\
+         else\n\
+         touch -t 203001010000 \"$1\"\n\
+         cat\n\
+         fi\n",
+    )
+    .unwrap();
+    git(
+        &repo,
+        &[
+            "config",
+            "filter.late.clean",
+            &format!("sh '{}' %f", filter.display()),
+        ],
+    );
+    fs::write(
+        repo.join(".git/info/attributes"),
+        "modules/zoxide.toml filter=late\n",
+    )
+    .unwrap();
+    hosts.a.write("modules/zoxide.toml", "[env]\n");
+    run(&hosts.a, &["publish"]);
+    let committed = git(&repo, &["show", "HEAD:modules/zoxide.toml"]);
+    assert_eq!(committed, "[env]\n");
+    assert_eq!(
+        git(&repo, &["status", "--porcelain"]),
+        " M modules/zoxide.toml\n"
+    );
+}
+
 #[test]
 fn without_a_remote_publish_is_a_usage_error() {
     let home = Home::new();
