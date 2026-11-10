@@ -67,7 +67,7 @@ pub fn watched_files(env: &HookEnv) -> Vec<Watched> {
         file(env.home.join(".bash_profile"), Source::Bash, Phase::Env, 2),
         file(env.home.join(".bash_login"), Source::Bash, Phase::Env, 3),
         file(env.zshenv_dir.join(".zshenv"), Source::Zsh, Phase::Env, 4),
-        file(env.zdotdir.join(".zprofile"), Source::Zsh, Phase::Env, 5),
+        file(env.zdotdir.join(".zprofile"), Source::Zsh, Phase::Login, 5),
         file(env.home.join(".bashrc"), Source::Bash, Phase::Late, 6),
         file(env.zdotdir.join(".zshrc"), Source::Zsh, Phase::Late, 7),
         file(env.zdotdir.join(".zlogin"), Source::Zsh, Phase::Late, 8),

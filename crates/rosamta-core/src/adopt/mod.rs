@@ -170,9 +170,16 @@ pub fn scan(ctx: &Context) -> Result<Vec<Candidate>> {
             .map(|adoption| adoption.order)
             .max()
             .unwrap_or(watched.rank * 1000);
-        // In late files a snippet may change PATH unseen (eval, source), so a
-        // later PATH change must stay a snippet to keep its place after it.
-        let mut barrier = false;
+        // Structured PATH entries load in the env phase and are put back in
+        // front at the end of `.zprofile`, while snippets keep their place.
+        // A snippet may change PATH unseen (eval, source), so PATH changes
+        // stay snippets where moving them would reorder PATH: after a snippet
+        // in a late file, and anywhere in a login file that has one.
+        let mut barrier = watched.phase == Phase::Login
+            && segments.iter().any(|segment| {
+                !segment.comment_only()
+                    && structured(ctx, segment, &watched, &recognizers, false).is_none()
+            });
         for segment in segments {
             let text = segment.text();
             let hash = segment::hash(&segment::normalize(&text, &ctx.home));
@@ -224,7 +231,7 @@ pub fn scan(ctx: &Context) -> Result<Vec<Candidate>> {
                 }
                 None => {
                     candidate.kind = Kind::Snippet;
-                    barrier |= watched.phase == Phase::Late;
+                    barrier |= watched.phase != Phase::Env;
                     snippet(ctx, &text, &watched)
                 }
             };
@@ -273,7 +280,7 @@ fn structured(
     if !render::check(&module).is_empty() {
         return None;
     }
-    if watched.phase == Phase::Late {
+    if watched.phase != Phase::Env {
         let touches_path = !module.path.prepend.is_empty() || !module.path.append.is_empty();
         if (barrier && touches_path) || reads_late_variables(&module) {
             return None;
@@ -352,8 +359,8 @@ fn snippet(ctx: &Context, text: &str, watched: &Watched) -> Module {
         };
         *slot = Some(text.clone());
     }
-    if watched.phase == Phase::Env {
-        module.phase = Some(Phase::Env);
+    if watched.phase != Phase::Late {
+        module.phase = Some(watched.phase);
     }
     module
 }

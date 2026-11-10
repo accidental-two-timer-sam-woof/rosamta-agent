@@ -139,6 +139,9 @@ pub enum Phase {
     Prompt,
     Aliases,
     Late,
+    /// zsh snippets only: loaded from `.zprofile` in login shells, after the
+    /// system zprofile. Last, so the other phases keep their numbers.
+    Login,
 }
 
 /// Where a module or dotfile applies. Values within a field are OR-ed,
