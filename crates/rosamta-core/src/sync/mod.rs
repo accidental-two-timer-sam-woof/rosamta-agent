@@ -217,9 +217,12 @@ fn remote_failure(
     });
     match recorded {
         Err(err) => err,
-        Ok(()) if outcome == Outcome::Offline && unpushed > 0 => Error::Sync(format!(
-            "{text}\n{unpushed} commit(s) will be pushed on the next sync"
-        )),
+        Ok(()) if outcome == Outcome::Offline && unpushed > 0 => {
+            let commits = if unpushed == 1 { "commit" } else { "commits" };
+            Error::Sync(format!(
+                "{text}\n{unpushed} {commits} will be pushed on the next sync"
+            ))
+        }
         Ok(()) => Error::Sync(text),
     }
 }
