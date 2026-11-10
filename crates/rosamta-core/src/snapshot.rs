@@ -117,6 +117,9 @@ impl Snapshots {
             .map(|path| path.display().to_string())
             .collect();
         let first = git::run(&self.dir, &["rev-parse", "--verify", "--quiet", "HEAD"]).is_err();
+        // The user's global hooks are for their own repos, not this one;
+        // set on every save so repos made before this setting get it too.
+        git::run(&self.dir, &["config", "core.hooksPath", "/dev/null"])?;
         git::commit_all(&self.dir, &format!("{reason}\n\n{}", names.join("\n")))?;
         if first {
             git::run(&self.dir, &["tag", "original"])?;
