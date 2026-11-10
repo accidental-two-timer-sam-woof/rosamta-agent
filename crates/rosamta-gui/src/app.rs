@@ -64,7 +64,7 @@ pub struct Rosamta {
 impl Rosamta {
     pub fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
         let search = cx.new(|cx| InputState::new(window, cx).placeholder(t("modules.search")));
-        let tag = cx.new(|cx| InputState::new(window, cx).placeholder(t("settings.tags")));
+        let tag = cx.new(|cx| InputState::new(window, cx));
         let host_id = cx.new(|cx| InputState::new(window, cx));
         let url = cx.new(|cx| InputState::new(window, cx).placeholder(t("setup.url")));
         let subscriptions = vec![

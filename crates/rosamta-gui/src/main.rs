@@ -1,6 +1,8 @@
 mod actions;
 mod app;
 mod pages;
+#[cfg(feature = "screenshot")]
+mod screenshot;
 mod state;
 mod text;
 mod theme;
@@ -28,11 +30,13 @@ fn main() {
             }),
             ..Default::default()
         };
-        open_window(options, cx, |window, cx| {
+        let (_window, _view) = open_window(options, cx, |window, cx| {
             theme::init(window, cx);
             cx.new(|cx| Rosamta::new(window, cx))
         })
         .expect("failed to open window");
+        #[cfg(feature = "screenshot")]
+        screenshot::start(_window, _view, cx);
         cx.on_window_closed(|cx, _| {
             if cx.windows().is_empty() {
                 cx.quit();

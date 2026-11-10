@@ -128,9 +128,16 @@ pub fn init(window: &mut Window, cx: &mut App) {
     ThemeRegistry::global_mut(cx)
         .load_themes_from_str(include_str!("theme.json"))
         .expect("the bundled theme is valid");
-    for name in ["rosamta Light", "rosamta Dark"] {
-        let config = ThemeRegistry::global(cx).themes()[name].clone();
-        Theme::global_mut(cx).apply_config(&config);
-    }
+    let themes = ThemeRegistry::global(cx).themes();
+    let (light, dark) = (
+        themes["rosamta Light"].clone(),
+        themes["rosamta Dark"].clone(),
+    );
+    let theme = Theme::global_mut(cx);
+    theme.light_theme = light;
+    theme.dark_theme = dark;
     Theme::sync_system_appearance(Some(window), cx);
+    window
+        .observe_window_appearance(|window, cx| Theme::sync_system_appearance(Some(window), cx))
+        .detach();
 }

@@ -8,7 +8,8 @@ pub mod review;
 pub mod settings;
 pub mod setup;
 
-use gpui_kit::component::{ActiveTheme, h_flex, v_flex};
+use gpui_kit::component::button::{Button, ButtonVariants};
+use gpui_kit::component::{ActiveTheme, Selectable, h_flex, v_flex};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 
@@ -132,8 +133,20 @@ pub fn section(title: SharedString, body: impl IntoElement, cx: &App) -> impl In
                 .border_1()
                 .border_color(p.line)
                 .bg(p.surface)
-                .child(body),
+                .overflow_hidden()
+                // Hides the last row's rule under the frame.
+                .child(div().mb(px(-1.)).child(body)),
         )
+}
+
+/// One button of a choice: the chosen one stands out.
+pub fn segment(button: Button, selected: bool) -> Button {
+    let button = button.selected(selected);
+    if selected {
+        button.primary()
+    } else {
+        button.outline()
+    }
 }
 
 /// One line inside a section, ruled from the next.
@@ -185,25 +198,28 @@ pub fn diff(text: &str, cx: &App) -> impl IntoElement {
         .py(px(S8))
         .font_family(font)
         .text_xs()
-        .children(text.lines().map(|line| {
-            let tint = if line.starts_with("+++") || line.starts_with("---") {
-                None
-            } else if line.starts_with('+') {
-                Some((p.ok_soft, p.ok))
-            } else if line.starts_with('-') {
-                Some((p.warn_soft, p.warn))
-            } else {
-                None
-            };
-            let muted =
-                line.starts_with("@@") || line.starts_with("+++") || line.starts_with("---");
-            div()
-                .px(px(S12))
-                .whitespace_nowrap()
-                .when_some(tint, |line, (bg, fg)| line.bg(bg).text_color(fg))
-                .when(muted, |line| line.text_color(p.muted))
-                .child(SharedString::from(line.to_string()))
-        }))
+        .children(
+            text.lines()
+                .filter(|line| !line.starts_with("--- ") && !line.starts_with("+++ "))
+                .map(|line| {
+                    let tint = if line.starts_with('+') {
+                        Some((p.ok_soft, p.ok))
+                    } else if line.starts_with('-') {
+                        Some((p.warn_soft, p.warn))
+                    } else {
+                        None
+                    };
+                    let muted = line.starts_with("@@")
+                        || line.starts_with("+++")
+                        || line.starts_with("---");
+                    div()
+                        .px(px(S12))
+                        .whitespace_nowrap()
+                        .when_some(tint, |line, (bg, fg)| line.bg(bg).text_color(fg))
+                        .when(muted, |line| line.text_color(p.muted))
+                        .child(SharedString::from(line.to_string()))
+                }),
+        )
 }
 
 /// A code block for whole files.
@@ -216,9 +232,13 @@ pub fn code(text: &str, cx: &App) -> impl IntoElement {
         .py(px(S8))
         .font_family(cx.theme().mono_font_family.clone())
         .text_xs()
-        .children(text.lines().map(|line| {
-            div()
-                .min_h(px(S16))
-                .child(SharedString::from(line.to_string()))
-        }))
+        .children(
+            text.lines()
+                .filter(|line| !line.starts_with("--- ") && !line.starts_with("+++ "))
+                .map(|line| {
+                    div()
+                        .min_h(px(S16))
+                        .child(SharedString::from(line.to_string()))
+                }),
+        )
 }

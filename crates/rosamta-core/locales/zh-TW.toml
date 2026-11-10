@@ -41,6 +41,7 @@ activity = "最近活動"
 view = "查看"
 
 [status]
+remote = "遠端"
 daemon = "背景服務"
 running = "執行中 · 自 {time}"
 stopped = "已停止"
@@ -74,6 +75,7 @@ raw = "片段"
 encrypted = "加密"
 
 [item]
+line = "第 {start} 行"
 lines = "第 {start}–{end} 行"
 rc = "rc 檔變更"
 module = "產生的模組"

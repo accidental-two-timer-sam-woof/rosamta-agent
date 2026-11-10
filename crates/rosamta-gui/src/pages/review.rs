@@ -4,7 +4,7 @@
 use std::path::Path;
 
 use gpui_kit::component::button::{Button, ButtonGroup, ButtonVariants};
-use gpui_kit::component::{Disableable, Selectable, h_flex, v_flex};
+use gpui_kit::component::{Disableable, h_flex, v_flex};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 use rosamta_core::adopt::{self, QueueItem, Scope};
@@ -85,7 +85,12 @@ pub fn item_meta(item: &QueueItem, home: &Path) -> String {
     if item.dotfile.is_none() {
         parts.push(adopt::display(&item.file, home));
         let (start, end) = (item.start.to_string(), item.end.to_string());
-        parts.push(tf("item.lines", &[("start", &start), ("end", &end)]).to_string());
+        let lines = if item.start == item.end {
+            tf("item.line", &[("start", &start)])
+        } else {
+            tf("item.lines", &[("start", &start), ("end", &end)])
+        };
+        parts.push(lines.to_string());
     }
     if item.detected_at > 0 {
         parts.push(when(item.detected_at));
@@ -123,7 +128,7 @@ pub fn render(app: &Rosamta, cx: &mut Context<Rosamta>) -> impl IntoElement {
                     .border_b_1()
                     .border_color(p.line)
                     .cursor_pointer()
-                    .when(selected, |card| card.bg(p.accent_soft))
+                    .when(selected, |card| card.bg(p.line))
                     .when(!selected, |card| card.hover(|style| style.bg(p.panel)))
                     .child(
                         h_flex()
@@ -196,16 +201,13 @@ fn selected(app: &Rosamta, cx: &mut Context<Rosamta>) -> Option<impl IntoElement
             .gap(px(S8))
             .child(
                 ButtonGroup::new("scope")
-                    .outline()
                     .child(
-                        Button::new("this-host")
-                            .label(t("item.this_host"))
-                            .selected(scope == Scope::Host),
+                        super::segment(Button::new("this-host"), scope == Scope::Host)
+                            .label(t("item.this_host")),
                     )
                     .child(
-                        Button::new("all-hosts")
+                        super::segment(Button::new("all-hosts"), scope == Scope::All)
                             .label(t("item.all_hosts"))
-                            .selected(scope == Scope::All)
                             // Lines holding a secret stay on this host.
                             .disabled(item.local),
                     )

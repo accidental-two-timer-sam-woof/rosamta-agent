@@ -3,7 +3,7 @@
 use gpui_kit::component::button::{Button, ButtonGroup, ButtonVariants};
 use gpui_kit::component::input::Input;
 use gpui_kit::component::switch::Switch;
-use gpui_kit::component::{Disableable, Selectable, Sizable, h_flex, v_flex};
+use gpui_kit::component::{Disableable, Sizable, h_flex, v_flex};
 use gpui_kit::*;
 use rosamta_core::adopt;
 use rosamta_core::config::{AdoptPolicy, OriginalLines, SyncPolicy};
@@ -131,13 +131,14 @@ pub fn render(
             .child(
                 row(cx).child(label(t("settings.pull_interval"), cx)).child(
                     ButtonGroup::new("pull_interval")
-                        .outline()
                         .small()
                         .children(INTERVALS.iter().enumerate().map(|(index, (key, minutes))| {
-                            Button::new(("pull_interval", index))
-                                .label(t(key))
-                                .selected(*minutes == interval)
-                                .disabled(busy)
+                            super::segment(
+                                Button::new(("pull_interval", index)),
+                                *minutes == interval,
+                            )
+                            .label(t(key))
+                            .disabled(busy)
                         }))
                         .on_click(cx.listener(|this, clicks: &Vec<usize>, window, cx| {
                             if let Some(&(_, minutes)) =
@@ -217,12 +218,10 @@ fn choice(
 ) -> impl IntoElement {
     row(cx).child(label(t(key), cx)).child(
         ButtonGroup::new(setting)
-            .outline()
             .small()
             .children(options.iter().enumerate().map(|(index, (label, value))| {
-                Button::new((setting, index))
+                super::segment(Button::new((setting, index)), *value == current)
                     .label(t(label))
-                    .selected(*value == current)
                     .disabled(busy)
             }))
             .on_click(cx.listener(move |this, clicks: &Vec<usize>, window, cx| {
