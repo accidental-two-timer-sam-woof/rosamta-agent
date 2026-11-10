@@ -24,6 +24,9 @@ pub struct DaemonState {
     /// Problems already notified, by kind and reason, until they clear.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub notified: Vec<String>,
+    /// Review items already announced and still waiting.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub announced: Vec<u32>,
 }
 
 /// Held for the daemon's lifetime; the lock goes with the process.

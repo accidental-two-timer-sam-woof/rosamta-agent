@@ -106,6 +106,39 @@ fn a_second_instance_exits_with_1() {
 }
 
 #[test]
+fn the_state_directory_comes_from_the_login_shell() {
+    let home = hooked();
+    append(
+        &home.root.join(".profile"),
+        "export XDG_STATE_HOME=\"$HOME/state\"\n",
+    );
+    let state = home.root.join("state");
+    let _daemon = Daemon(home.spawn("rsmt", &["daemon", "run"]));
+    let log = || fs::read_to_string(state.join("rosamta/daemon.log")).unwrap_or_default();
+    let start = Instant::now();
+    while !log().contains("scanned rc files") {
+        assert!(start.elapsed() < Duration::from_secs(20), "{}", log());
+        std::thread::sleep(Duration::from_millis(200));
+    }
+    let running = home
+        .cmd("rsmt")
+        .args(["daemon", "status", "--json"])
+        .env("XDG_STATE_HOME", &state)
+        .output()
+        .unwrap();
+    let running: serde_json::Value = serde_json::from_slice(&running.stdout).unwrap();
+    assert_eq!(running["running"], true);
+    assert!(running["pid"].is_u64(), "{running}");
+    home.cmd("rsmt")
+        .args(["daemon", "run"])
+        .env("SHELL", "/bin/sh")
+        .timeout(Duration::from_secs(20))
+        .assert()
+        .code(1)
+        .stderr(predicate::str::contains("already running (pid"));
+}
+
+#[test]
 fn installer_lines_are_queued_and_left_in_place() {
     let home = hooked();
     let profile = home.root.join(".profile");
@@ -156,6 +189,64 @@ fn adopting_does_not_trigger_another_scan() {
         "{}",
         log(&home)
     );
+}
+
+#[test]
+fn lines_a_failed_scan_missed_are_queued_once_the_repo_applies() {
+    let home = hooked();
+    let _daemon = start(&home);
+    home.write("modules/broken.toml", "[env\n");
+    wait_for(&home, Duration::from_secs(20), || {
+        log(&home).contains("notified:")
+    });
+    append(&home.root.join(".profile"), "export LATER=1\n");
+    wait_for(&home, Duration::from_secs(20), || {
+        log(&home).contains("scan failed")
+    });
+    fs::remove_file(home.repo().join("modules/broken.toml")).unwrap();
+    wait_for(&home, Duration::from_secs(20), || {
+        queue(&home)["items"].as_array().unwrap().len() == 1
+    });
+}
+
+/// Make pushes to `remote` take a few seconds; `pushing` appears when one starts.
+fn slow_down(remote: &Path, pushing: &Path) {
+    let hook = remote.join("hooks/pre-receive");
+    fs::write(
+        &hook,
+        format!("#!/bin/sh\ntouch '{}'\nsleep 6\n", pushing.display()),
+    )
+    .unwrap();
+    fs::set_permissions(&hook, std::os::unix::fs::PermissionsExt::from_mode(0o755)).unwrap();
+}
+
+#[test]
+fn an_edit_during_a_slow_push_is_adopted_too() {
+    let home = Home::new();
+    // A host ID from the hostname can look like a secret and stop the push.
+    home.write_host("test");
+    append(&home.host_config(), "adopt = \"auto\"\n");
+    home.cmd("rsmt").arg("init").assert().success();
+    home.cmd("rsmt").arg("apply").assert().success();
+    let remote = home.root.join("remote.git");
+    let pushing = home.root.join("pushing");
+    common::git(&home.root, &["init", "--quiet", "--bare", "remote.git"]);
+    common::git(
+        &home.repo(),
+        &["remote", "add", "origin", remote.to_str().unwrap()],
+    );
+    common::git(&home.repo(), &["push", "--quiet", "-u", "origin", "HEAD"]);
+    slow_down(&remote, &pushing);
+    let profile = home.root.join(".profile");
+    let _daemon = start(&home);
+    append(&profile, "export FIRST=1\n");
+    wait_for(&home, Duration::from_secs(20), || pushing.exists());
+    append(&profile, "export DURING_PUSH=1\n");
+    wait_for(&home, Duration::from_secs(40), || {
+        !fs::read_to_string(&profile)
+            .unwrap()
+            .contains("DURING_PUSH")
+    });
 }
 
 #[test]
@@ -244,6 +335,24 @@ fn changes_close_together_share_one_notification() {
 }
 
 #[test]
+fn a_restart_does_not_announce_the_same_items_again() {
+    let home = hooked();
+    let daemon = start(&home);
+    append(&home.root.join(".profile"), "export ONCE=1\n");
+    wait_for(&home, Duration::from_secs(30), || {
+        log(&home).contains("notified:")
+    });
+    drop(daemon);
+    let _daemon = Daemon(home.spawn("rsmt", &["daemon", "run"]));
+    wait_for(&home, Duration::from_secs(20), || {
+        log(&home).matches("scanned rc files").count() == 3
+    });
+    // Past the batch window, when a new item would be announced.
+    std::thread::sleep(Duration::from_secs(15));
+    assert_eq!(log(&home).matches("notified:").count(), 1, "{}", log(&home));
+}
+
+#[test]
 fn a_problem_is_notified_once_until_it_clears() {
     let home = hooked();
     let _daemon = start(&home);
@@ -276,4 +385,21 @@ fn before_init_the_daemon_waits() {
         log(&home).contains("scanned rc files")
     });
     assert_eq!(status(&home)["running"], true);
+}
+
+#[test]
+fn an_invalid_host_toml_is_waited_out() {
+    let home = hooked();
+    let valid = fs::read_to_string(home.host_config()).unwrap();
+    fs::write(home.host_config(), "adopt = [\n").unwrap();
+    let mut daemon = Daemon(home.spawn("rsmt", &["daemon", "run"]));
+    wait_for(&home, Duration::from_secs(20), || {
+        log(&home).contains("host.toml")
+    });
+    std::thread::sleep(Duration::from_secs(1));
+    assert!(daemon.0.try_wait().unwrap().is_none(), "{}", log(&home));
+    fs::write(home.host_config(), valid).unwrap();
+    wait_for(&home, Duration::from_secs(20), || {
+        log(&home).contains("scanned rc files")
+    });
 }

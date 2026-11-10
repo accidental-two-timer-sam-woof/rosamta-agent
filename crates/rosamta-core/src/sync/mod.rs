@@ -500,7 +500,13 @@ fn pull_locked(ctx: &Context, commit_edits: bool) -> Result<Pulled> {
             })
         }
         Err(err) => {
-            record_pull(ctx, Attempt::new(Outcome::Failed, Some(err.to_string())))?;
+            record_pull(
+                ctx,
+                Attempt {
+                    applying: true,
+                    ..Attempt::new(Outcome::Failed, Some(err.to_string()))
+                },
+            )?;
             Err(err)
         }
     }

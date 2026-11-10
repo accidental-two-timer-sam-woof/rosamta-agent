@@ -31,6 +31,9 @@ pub struct Attempt {
     /// Files to look at, relative to the repo: conflicts or possible secrets.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub files: Vec<String>,
+    /// Pulling worked; applying what came in failed.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub applying: bool,
 }
 
 impl Attempt {
@@ -44,6 +47,7 @@ impl Attempt {
             outcome,
             reason,
             files: Vec::new(),
+            applying: false,
         }
     }
 }

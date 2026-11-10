@@ -24,11 +24,15 @@
 - **THEN** 新的程序說明已有實例在執行並以 1 結束
 
 ### Requirement: Waits for setup
-背景服務在尚未執行 `rsmt init` 的 host 上啟動時，SHALL 持續執行並等待，在 repo 與 `host.toml` 出現後開始監看，而不是結束後被反覆重新啟動。
+背景服務在尚未執行 `rsmt init` 的 host 上啟動時，SHALL 持續執行並等待，在 repo 與 `host.toml` 出現後開始監看，而不是結束後被反覆重新啟動。啟動時 `host.toml` 格式錯誤，SHALL 同樣持續執行，把原因記錄在 `daemon.log`，等檔案被修改後再讀一次。
 
 #### Scenario: Enabled before init
 - **WHEN** 背景服務在使用者執行 `rsmt init` 之前啟動，之後使用者執行 `rsmt init`
 - **THEN** 背景服務不需要重新啟動，就開始處理 rc 檔的變動
+
+#### Scenario: Invalid host.toml at startup
+- **WHEN** 背景服務啟動時 `host.toml` 格式錯誤，之後使用者修正它
+- **THEN** 背景服務沒有結束，`daemon.log` 記錄了錯誤，修正後開始處理 rc 檔的變動
 
 ### Requirement: Login shell environment
 背景服務啟動時 SHALL 從使用者的 login shell 讀取一次環境變數，並以這組環境執行 git 與 shell 相關的操作。
@@ -56,11 +60,15 @@ repo 的內容被修改（使用者手動編輯或拉取）後，背景服務 SH
 - **THEN** 新開的 shell 已使用新的 alias，且推送偏好為「自動」時遠端也已更新
 
 ### Requirement: Periodic sync
-拉取偏好為「自動」時，背景服務 SHALL 依設定的間隔執行同步；電腦從睡眠喚醒後 SHALL 立即同步一次。推送偏好為「手動」時，這些同步 SHALL 只拉取，不推送，也不 commit 使用者手動的修改。
+拉取偏好為「自動」時，背景服務 SHALL 依設定的間隔執行同步；電腦從睡眠喚醒後 SHALL 立即同步一次，連不上遠端時 SHALL 在約 30 秒與 2 分鐘後各重試一次，之後回到設定的間隔。推送偏好為「手動」時，這些同步 SHALL 只拉取，不推送，也不 commit 使用者手動的修改。
 
 #### Scenario: Interval
 - **WHEN** 拉取間隔為 15 分鐘
 - **THEN** 背景服務大約每 15 分鐘執行一次同步
+
+#### Scenario: Network not back after waking
+- **WHEN** 電腦從睡眠喚醒時網路還沒恢復
+- **THEN** 背景服務在約 30 秒與 2 分鐘後再同步，不必等到下一個間隔
 
 ### Requirement: Settings reload
 `host.toml` 被修改後，背景服務 SHALL 不需重新啟動就套用新的設定。

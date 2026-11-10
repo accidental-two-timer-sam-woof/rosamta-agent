@@ -7,7 +7,7 @@ pub mod instance;
 pub mod notify;
 pub mod service;
 
-use std::collections::HashSet;
+use std::collections::BTreeSet;
 use std::hash::{DefaultHasher, Hash, Hasher};
 use std::io::Write;
 use std::path::{Path, PathBuf};
@@ -21,6 +21,7 @@ use crate::adopt::{self, Scope};
 use crate::apply::{self, Context};
 use crate::config::{HostConfig, SyncPolicy};
 use crate::error::Result;
+use crate::hooks::HookEnv;
 use crate::i18n::{self, Lang};
 use crate::sync::{self, Outcome};
 use crate::{generated, host, validate};
@@ -48,13 +49,14 @@ const BATCH: Duration = Duration::from_secs(10);
 const TICK: Duration = Duration::from_secs(5);
 /// Wall time running this far ahead of monotonic time means the host slept.
 const SLEPT: Duration = Duration::from_secs(60);
+/// After waking, the network often takes a while to come back.
+const WAKE_RETRIES: [Duration; 2] = [Duration::from_secs(30), Duration::from_secs(120)];
 const LOG_LIMIT: u64 = 1 << 20;
 
 /// Directories to watch: the parents of watched files, without recursion,
 /// so an installer writing a new file and renaming it over the old one is
 /// seen; the repo and the config directory, recursively.
-fn watch_list(ctx: &Context) -> Vec<(PathBuf, RecursiveMode)> {
-    let env = ctx.hook_env(&ctx.installed());
+fn watch_list(ctx: &Context, env: &HookEnv) -> Vec<(PathBuf, RecursiveMode)> {
     let mut out: Vec<(PathBuf, RecursiveMode)> = Vec::new();
     for dir in [
         env.home.clone(),
@@ -144,7 +146,8 @@ struct Routes {
     rc: bool,
 }
 
-fn route(ctx: &Context, paths: &[PathBuf]) -> Routes {
+/// `rc` lists the watched rc files, as [`Daemon::rc_files`] names them.
+fn route(ctx: &Context, rc: &[PathBuf], paths: &[PathBuf]) -> Routes {
     let repo = real(&ctx.paths.repo());
     let local = real(&ctx.paths.local());
     let host = real(&ctx.paths.host_config());
@@ -155,11 +158,8 @@ fn route(ctx: &Context, paths: &[PathBuf]) -> Routes {
     Routes {
         host: paths.contains(&host),
         repo: paths.iter().any(in_repo),
-        // Everything else comes from the rc file directories; the scan
-        // decides whether a watched file really changed.
-        rc: paths
-            .iter()
-            .any(|path| !in_repo(path) && *path != host && !path.starts_with(&repo)),
+        // Not everything in HOME: shell history changes after each command.
+        rc: paths.iter().any(|path| rc.contains(path)),
     }
 }
 
@@ -175,20 +175,37 @@ fn set_up(ctx: &Context) -> bool {
     ctx.paths.host_config().is_file() && ctx.paths.repo().join(".git").exists()
 }
 
+/// Sleep until `ready`; `Some` when the executable was replaced meanwhile.
+fn wait_until(exe: &Option<(PathBuf, Identity)>, ready: impl Fn() -> bool) -> Option<Stop> {
+    while !ready() {
+        std::thread::sleep(TICK);
+        if let Some(stop) = replaced(exe) {
+            return Some(stop);
+        }
+    }
+    None
+}
+
 struct Daemon {
     ctx: Context,
     host: HostConfig,
     lang: Lang,
     notifier: Box<dyn Notifier>,
+    /// Where the shells read rc files; asking them is slow.
+    env: HookEnv,
     /// Watched rc files as of the last scan.
     rc_seen: Option<u64>,
+    /// Which files those were, so a deleted one is noticed.
+    rc_known: Vec<PathBuf>,
     /// Repo and local modules as of the last apply.
     repo_seen: Option<u64>,
-    /// Review items already announced.
-    announced: HashSet<u32>,
+    /// Review items already announced, also before a restart.
+    announced: BTreeSet<u32>,
     batch: Vec<u32>,
     batch_since: Option<Instant>,
     next_sync: Instant,
+    /// Retries left for a sync after waking that found no network.
+    wake_retries: &'static [Duration],
     clock: (Instant, SystemTime),
     exe: Option<(PathBuf, Identity)>,
     /// A problem found by applying the repo: kind and reason.
@@ -204,17 +221,27 @@ pub fn run(
     receiver: Receiver<Event>,
 ) -> Result<Stop> {
     let exe = exe_identity();
-    // Started at login before `rsmt init`: wait instead of failing over and
-    // over under launchd's KeepAlive.
+    // Started at login before `rsmt init`, or with a broken host.toml: wait
+    // instead of failing over and over under launchd's KeepAlive.
     if !set_up(&ctx) {
         log(&ctx, "waiting for `rsmt init`");
-        while !set_up(&ctx) {
-            std::thread::sleep(TICK);
-            if let Some(stop) = replaced(&exe) {
-                return Ok(stop);
-            }
+        if let Some(stop) = wait_until(&exe, || set_up(&ctx)) {
+            return Ok(stop);
         }
     }
+    let host_config = [ctx.paths.host_config()];
+    let host = loop {
+        let seen = fingerprint(&host_config);
+        match host::load(&host_config[0]) {
+            Ok(host) => break host,
+            Err(err) => {
+                log(&ctx, &format!("waiting for host.toml to be fixed: {err}"));
+                if let Some(stop) = wait_until(&exe, || fingerprint(&host_config) != seen) {
+                    return Ok(stop);
+                }
+            }
+        }
+    };
     let watcher_events = events.clone();
     let mut debouncer = new_debouncer(DEBOUNCE, None, move |result: DebounceEventResult| {
         if let Ok(batch) = result {
@@ -226,29 +253,17 @@ pub fn run(
         }
     })
     .map_err(|err| crate::Error::Daemon(format!("cannot watch files: {err}")))?;
-    for (dir, mode) in watch_list(&ctx) {
+    let mut daemon = Daemon {
+        exe,
+        ..Daemon::new(ctx, host, notifier)
+    };
+    for (dir, mode) in watch_list(&daemon.ctx, &daemon.env) {
         if let Err(err) = debouncer.watch(&dir, mode) {
-            log(&ctx, &format!("cannot watch {}: {err}", dir.display()));
+            daemon.log(&format!("cannot watch {}: {err}", dir.display()));
         }
     }
     drop(events);
-    let host = host::load(&ctx.paths.host_config())?;
-    let mut daemon = Daemon {
-        next_sync: Instant::now(),
-        host,
-        lang: Lang::system(),
-        notifier,
-        rc_seen: None,
-        repo_seen: None,
-        announced: HashSet::new(),
-        batch: Vec::new(),
-        batch_since: None,
-        clock: (Instant::now(), SystemTime::now()),
-        exe,
-        repo_problem: None,
-        ctx,
-    };
-    log(&daemon.ctx, "started");
+    daemon.log("started");
     // Catch up on whatever changed while the daemon was not running.
     daemon.repo_changed();
     daemon.rc_changed();
@@ -292,12 +307,37 @@ pub fn log_to(state: &Path, message: &str) {
 }
 
 impl Daemon {
+    fn new(ctx: Context, host: HostConfig, notifier: Box<dyn Notifier>) -> Self {
+        let previous = instance::load(ctx.paths.state()).ok().flatten();
+        Self {
+            next_sync: Instant::now(),
+            wake_retries: &[],
+            host,
+            lang: Lang::system(),
+            notifier,
+            env: ctx.hook_env(&ctx.installed()),
+            rc_seen: None,
+            rc_known: Vec::new(),
+            repo_seen: None,
+            announced: previous
+                .map_or_else(BTreeSet::new, |state| state.announced.into_iter().collect()),
+            batch: Vec::new(),
+            batch_since: None,
+            clock: (Instant::now(), SystemTime::now()),
+            exe: None,
+            repo_problem: None,
+            ctx,
+        }
+    }
+
     fn log(&self, message: &str) {
         log(&self.ctx, message);
     }
 
     fn changed(&mut self, paths: &[PathBuf]) {
-        let routes = route(&self.ctx, paths);
+        let mut rc = self.rc_files();
+        rc.extend_from_slice(&self.rc_known);
+        let routes = route(&self.ctx, &rc, paths);
         if routes.host {
             let host = self.ctx.paths.host_config();
             match host::load(&host) {
@@ -317,11 +357,17 @@ impl Daemon {
         }
     }
 
+    /// Watched rc files that exist, named as file events name them: the
+    /// directory resolved, not the file, which may be a symlink.
     fn rc_files(&self) -> Vec<PathBuf> {
-        let env = self.ctx.hook_env(&self.ctx.installed());
-        adopt::watched_files(&env)
+        adopt::watched_files(&self.env)
             .into_iter()
-            .map(|watched| watched.path)
+            .map(
+                |watched| match (watched.path.parent(), watched.path.file_name()) {
+                    (Some(dir), Some(name)) => real(dir).join(name),
+                    _ => watched.path,
+                },
+            )
             .collect()
     }
 
@@ -329,31 +375,29 @@ impl Daemon {
     fn rc_changed(&mut self) {
         // Taken before the scan: a write during the scan then still differs
         // from it when its own event arrives.
-        let seen = fingerprint(&self.rc_files());
+        let mut files = self.rc_files();
+        let mut seen = fingerprint(&files);
         if self.rc_seen == Some(seen) {
             return;
         }
         let result = (|| {
             let lock = adopt::lock(&self.ctx)?;
             let reviewed = adopt::refresh(&self.ctx)?;
-            if !reviewed.adopted.is_empty()
-                && let Err(err) = sync::publish_if_auto(&self.ctx, &lock)
-            {
-                self.log(&err.to_string());
+            if !reviewed.adopted.is_empty() {
+                // Adopting rewrote the files; that write is rosamta's own,
+                // an edit made while the push runs is not.
+                files = self.rc_files();
+                seen = fingerprint(&files);
+                if let Err(err) = sync::publish_if_auto(&self.ctx, &lock) {
+                    self.log(&err.to_string());
+                }
             }
             Ok::<_, crate::Error>(reviewed)
         })();
-        let adopted = result
-            .as_ref()
-            .is_ok_and(|reviewed| !reviewed.adopted.is_empty());
-        // Adopting rewrote the files; that write is rosamta's own.
-        self.rc_seen = Some(if adopted {
-            fingerprint(&self.rc_files())
-        } else {
-            seen
-        });
         match result {
             Ok(reviewed) => {
+                self.rc_seen = Some(seen);
+                self.rc_known = files;
                 self.log(&format!(
                     "scanned rc files: {} adopted, {} to review",
                     reviewed.adopted.len(),
@@ -366,6 +410,7 @@ impl Daemon {
                     }
                 }
             }
+            // Not counted as seen: the next change or repo apply scans again.
             Err(err) => self.log(&format!("scan failed: {err}")),
         }
         self.report_problems();
@@ -396,6 +441,12 @@ impl Daemon {
             self.log(&err.to_string());
         }
         self.report_problems();
+        // Applying may have hooked another shell, and a scan that failed on
+        // the previous repo can work now.
+        if self.repo_problem.is_none() {
+            self.env = self.ctx.hook_env(&self.ctx.installed());
+            self.rc_changed();
+        }
     }
 
     fn apply_repo(&self) -> std::result::Result<(), (&'static str, String)> {
@@ -440,6 +491,7 @@ impl Daemon {
 
     fn act(&mut self, action: Action, ids: &[u32]) {
         self.log(&format!("clicked {} for {ids:?}", action.id()));
+        let mut seen = None;
         let result = (|| {
             let lock = adopt::lock(&self.ctx)?;
             for &id in ids {
@@ -454,6 +506,8 @@ impl Daemon {
                 }
             }
             if action == Action::Adopt {
+                // Adopting rewrote the files; that write is rosamta's own.
+                seen = Some(fingerprint(&self.rc_files()));
                 sync::publish_if_auto(&self.ctx, &lock)?;
             }
             Ok::<_, crate::Error>(())
@@ -466,7 +520,9 @@ impl Daemon {
         {
             open(&format!("rosamta://review/{id}"));
         }
-        self.rc_seen = Some(fingerprint(&self.rc_files()));
+        if seen.is_some() {
+            self.rc_seen = seen;
+        }
         self.report_problems();
     }
 
@@ -478,9 +534,20 @@ impl Daemon {
         let wall_elapsed = now.1.duration_since(wall).unwrap_or_default();
         let woke = wall_elapsed > now.0.duration_since(mono) + SLEPT;
         self.clock = now;
+        if woke {
+            self.wake_retries = &WAKE_RETRIES;
+        }
         if woke || now.0 >= self.next_sync {
             self.next_sync = now.0 + Duration::from_secs(u64::from(self.host.pull_interval) * 60);
+            let started = crate::time::now();
             self.sync_now();
+            match self.wake_retries.split_first() {
+                Some((delay, rest)) if self.offline_since(started) => {
+                    self.next_sync = now.0 + *delay;
+                    self.wake_retries = rest;
+                }
+                _ => self.wake_retries = &[],
+            }
         }
         if self
             .batch_since
@@ -491,10 +558,33 @@ impl Daemon {
         replaced(&self.exe)
     }
 
+    /// Whether a sync from `started` on could not reach the remote.
+    fn offline_since(&self, started: u64) -> bool {
+        sync::load_state(self.ctx.paths.state()).is_ok_and(|state| {
+            [state.publish, state.pull]
+                .into_iter()
+                .flatten()
+                .any(|attempt| attempt.at >= started && attempt.outcome == Outcome::Offline)
+        })
+    }
+
     fn announce(&mut self) {
         let ids = std::mem::take(&mut self.batch);
         self.batch_since = None;
         let queue = adopt::queue(&self.ctx).unwrap_or_default();
+        // Queue IDs are never reused, so ones that left can be forgotten.
+        self.announced
+            .retain(|id| queue.iter().any(|item| item.id == *id));
+        let state_dir = self.ctx.paths.state();
+        if let Ok(Some(mut state)) = instance::load(state_dir) {
+            let announced: Vec<u32> = self.announced.iter().copied().collect();
+            if state.announced != announced {
+                state.announced = announced;
+                if let Err(err) = instance::save(state_dir, &state) {
+                    self.log(&err.to_string());
+                }
+            }
+        }
         let waiting: Vec<_> = queue.iter().filter(|item| ids.contains(&item.id)).collect();
         let body = match waiting.as_slice() {
             [] => return,
@@ -531,18 +621,24 @@ impl Daemon {
     fn report_problems(&mut self) {
         let mut problems: Vec<(&'static str, String)> = self.repo_problem.iter().cloned().collect();
         if let Ok(state) = sync::load_state(self.ctx.paths.state()) {
-            for attempt in [&state.publish, &state.pull].into_iter().flatten() {
+            for (attempt, pull) in [(&state.publish, false), (&state.pull, true)] {
+                let Some(attempt) = attempt else {
+                    continue;
+                };
                 let reason = attempt.reason.clone().unwrap_or_default();
                 let first = reason.lines().next().unwrap_or_default().to_string();
-                match attempt.outcome {
-                    Outcome::Blocked => problems.push(("publish_blocked", first)),
-                    Outcome::Conflict => problems.push(("conflict", attempt.files.join(", "))),
-                    Outcome::Failed if reason.contains("upgrade rosamta") => {
-                        problems.push(("upgrade", String::new()))
+                problems.push(match (attempt.outcome, pull) {
+                    (Outcome::Ok | Outcome::Offline, _) => continue,
+                    (Outcome::Conflict, _) => ("conflict", attempt.files.join(", ")),
+                    (Outcome::Failed, _) if reason.contains("upgrade rosamta") => {
+                        ("upgrade", String::new())
                     }
-                    Outcome::Failed => problems.push(("apply_failed", first)),
-                    Outcome::Ok | Outcome::Offline => {}
-                }
+                    (Outcome::Failed, true) if attempt.applying => ("apply_failed", first),
+                    (Outcome::Failed, true) => ("pull_failed", first),
+                    (Outcome::Failed, false) => ("publish_failed", first),
+                    (Outcome::Blocked, true) => ("pull_blocked", first),
+                    (Outcome::Blocked, false) => ("publish_blocked", first),
+                });
             }
         }
         // Pull and Publish can stop for the same reason.
@@ -551,12 +647,14 @@ impl Daemon {
         let Ok(Some(mut state)) = instance::load(&state_dir) else {
             return;
         };
-        let keys: Vec<String> = problems
-            .iter()
-            .map(|(kind, reason)| format!("{kind}:{reason}"))
-            .collect();
-        for ((kind, reason), key) in problems.iter().zip(&keys) {
-            if !state.notified.contains(key) {
+        let mut keys: Vec<String> = Vec::new();
+        for (kind, reason) in &problems {
+            // The daemon's own apply can fail the same way a pull's did.
+            let key = format!("{kind}:{reason}");
+            if keys.contains(&key) {
+                continue;
+            }
+            if !state.notified.contains(&key) {
                 let arg = if *kind == "conflict" {
                     "files"
                 } else {
@@ -569,6 +667,7 @@ impl Daemon {
                     items: Vec::new(),
                 });
             }
+            keys.push(key);
         }
         if state.notified != keys {
             state.notified = keys;
