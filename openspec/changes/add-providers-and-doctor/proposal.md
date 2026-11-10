@@ -40,6 +40,7 @@
 
 - `adopt`: 加入 provider 辨識器。
 - `shell-render`: render provider module。
+- GUI：在 `add-gui` 建立的 app 中加入本 change 對應的頁面或步驟。
 
 ## Impact
 
