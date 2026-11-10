@@ -18,7 +18,7 @@
 - [x] 3.1 把 template 接進 dotfile 部署：輸入雜湊、render、加密 template 的解密、新檔案 0600、snapshot，與 `--dry-run`、`--json` 輸出
 - [x] 3.2 互動的 `rsmt apply` 每次 render 全部 template、鎖住時執行解鎖指令；非互動與背景服務只 render 輸入改變的 template
 - [x] 3.3 render 結果被修改時進入待處理清單；`accept` 存成本機專用的 copy 宣告、`discard` 重新 render
-- [ ] 3.4 `rsmt add --template`
+- [x] 3.4 `rsmt add --template`
 
 ## 4. 等待項目與背景服務
 

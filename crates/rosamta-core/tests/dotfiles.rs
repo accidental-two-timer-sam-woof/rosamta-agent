@@ -8,6 +8,7 @@ use std::process::Command;
 use std::sync::Once;
 
 use rosamta_core::apply::Context;
+use rosamta_core::config::Deploy;
 use rosamta_core::dotfiles::{self, Action};
 use rosamta_core::paths::Paths;
 
@@ -644,7 +645,13 @@ mod manage {
     fn add_links_a_directory_and_commits() {
         let home = committed();
         write(&home.at(".config/ghostty/config"), "theme = dark\n");
-        let added = manage::add(&home.ctx, &[home.at(".config/ghostty")], false, false).unwrap();
+        let added = manage::add(
+            &home.ctx,
+            &[home.at(".config/ghostty")],
+            Deploy::Link,
+            false,
+        )
+        .unwrap();
         assert_eq!(added, [PathBuf::from(".config/ghostty")]);
         let source = home.repo().join("home/.config/ghostty");
         assert_eq!(read(&source.join("config")), "theme = dark\n");
@@ -662,7 +669,7 @@ mod manage {
         let home = committed();
         write(&home.at(".ssh/config"), "Host lab\n");
         fs::set_permissions(home.at(".ssh/config"), fs::Permissions::from_mode(0o600)).unwrap();
-        manage::add(&home.ctx, &[home.at(".ssh/config")], true, false).unwrap();
+        manage::add(&home.ctx, &[home.at(".ssh/config")], Deploy::Copy, false).unwrap();
         let manifest = read(&home.repo().join("dotfiles.toml"));
         assert!(
             manifest.contains("deploy = \"copy\"") && manifest.contains("permissions = \"0600\""),
@@ -682,29 +689,42 @@ mod manage {
             &home.at(".config/gh/hosts.yml"),
             "oauth_token: ghp_0123456789abcdefghijklmnopqrstuvwxyzAB\n",
         );
-        let err =
-            manage::add(&home.ctx, &[home.at(".config/gh/hosts.yml")], false, false).unwrap_err();
+        let err = manage::add(
+            &home.ctx,
+            &[home.at(".config/gh/hosts.yml")],
+            Deploy::Link,
+            false,
+        )
+        .unwrap_err();
         assert!(err.to_string().contains("add it with --encrypt"), "{err}");
-        let err = manage::add(&home.ctx, &[PathBuf::from("/etc/hosts")], false, false).unwrap_err();
+        let err = manage::add(
+            &home.ctx,
+            &[PathBuf::from("/etc/hosts")],
+            Deploy::Link,
+            false,
+        )
+        .unwrap_err();
         assert!(
             err.to_string().contains("not inside the home directory"),
             "{err}"
         );
-        let err = manage::add(&home.ctx, &[home.at(".config")], false, false).unwrap_err();
+        let err = manage::add(&home.ctx, &[home.at(".config")], Deploy::Link, false).unwrap_err();
         assert!(err.to_string().contains("rosamta's own files"), "{err}");
         write(&home.at(".vimrc"), "set nu\n");
-        manage::add(&home.ctx, &[home.at(".vimrc")], false, false).unwrap();
-        let err = manage::add(&home.ctx, &[home.at(".vimrc")], false, false).unwrap_err();
+        manage::add(&home.ctx, &[home.at(".vimrc")], Deploy::Link, false).unwrap();
+        let err = manage::add(&home.ctx, &[home.at(".vimrc")], Deploy::Link, false).unwrap_err();
         assert!(err.to_string().contains("already managed"), "{err}");
         assert!(!home.repo().join("home/.config/gh").exists());
         write(&home.at(".zshrc"), "alias ll='ls -l'\n");
-        let err = manage::add(&home.ctx, &[home.at(".zshrc")], false, false).unwrap_err();
+        let err = manage::add(&home.ctx, &[home.at(".zshrc")], Deploy::Link, false).unwrap_err();
         assert!(err.to_string().contains("shell startup file"), "{err}");
         write(&home.at(".config/fish/config.fish"), "set -x A 1\n");
-        let err = manage::add(&home.ctx, &[home.at(".config/fish")], false, false).unwrap_err();
+        let err =
+            manage::add(&home.ctx, &[home.at(".config/fish")], Deploy::Link, false).unwrap_err();
         assert!(err.to_string().contains("config.fish"), "{err}");
         fs::create_dir_all(home.at(".config/empty")).unwrap();
-        let err = manage::add(&home.ctx, &[home.at(".config/empty")], false, false).unwrap_err();
+        let err =
+            manage::add(&home.ctx, &[home.at(".config/empty")], Deploy::Link, false).unwrap_err();
         assert!(err.to_string().contains("empty directory"), "{err}");
     }
 
@@ -716,7 +736,13 @@ mod manage {
             &home.at(".config/gh/hosts.yml"),
             "oauth_token: ghp_0123456789abcdefghijklmnopqrstuvwxyzAB\n",
         );
-        manage::add(&home.ctx, &[home.at(".config/gh/hosts.yml")], false, true).unwrap();
+        manage::add(
+            &home.ctx,
+            &[home.at(".config/gh/hosts.yml")],
+            Deploy::Link,
+            true,
+        )
+        .unwrap();
         let stored = read(&home.repo().join("home/.config/gh/hosts.yml"));
         assert!(stored.starts_with("-----BEGIN AGE ENCRYPTED FILE-----"));
         let log = log(&home);
@@ -734,7 +760,13 @@ mod manage {
     fn forget_leaves_a_regular_copy() {
         let home = committed();
         write(&home.at(".config/ghostty/config"), "theme = dark\n");
-        manage::add(&home.ctx, &[home.at(".config/ghostty")], false, false).unwrap();
+        manage::add(
+            &home.ctx,
+            &[home.at(".config/ghostty")],
+            Deploy::Link,
+            false,
+        )
+        .unwrap();
         manage::forget(&home.ctx, &home.at(".config/ghostty")).unwrap();
         let ghostty = home.at(".config/ghostty");
         assert!(!fs::symlink_metadata(&ghostty).unwrap().is_symlink());
@@ -884,6 +916,36 @@ mod templates {
         assert_eq!(read(&home.repo().join("home/.gitconfig")), TEMPLATE);
         assert!(adopt::queue(&home.ctx).unwrap().is_empty());
         assert_eq!(home.deploy(), one(".gitconfig", Action::Unchanged));
+    }
+
+    #[test]
+    fn add_template_keeps_the_file_and_renders_it_unchanged() {
+        let home = Home::new("ask");
+        write(&home.at(".npmrc"), "registry=https://example.com\n");
+        write(&home.at(".bad"), "{% if %}\n");
+        let err = rosamta_core::dotfiles::manage::add(
+            &home.ctx,
+            &[home.at(".bad")],
+            Deploy::Template,
+            false,
+        )
+        .unwrap_err();
+        assert!(err.to_string().contains("not a valid template"), "{err}");
+        rosamta_core::dotfiles::manage::add(
+            &home.ctx,
+            &[home.at(".npmrc")],
+            Deploy::Template,
+            false,
+        )
+        .unwrap();
+        let manifest = read(&home.repo().join("dotfiles.toml"));
+        assert!(manifest.contains("deploy = \"template\""), "{manifest}");
+        assert_eq!(
+            read(&home.repo().join("home/.npmrc")),
+            "registry=https://example.com\n"
+        );
+        assert!(fs::symlink_metadata(home.at(".npmrc")).unwrap().is_file());
+        assert_eq!(home.deploy(), one(".npmrc", Action::Unchanged));
     }
 
     #[test]

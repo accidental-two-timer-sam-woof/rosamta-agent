@@ -119,7 +119,12 @@ fn private_mode(path: &Path) -> Result<Option<String>> {
 /// Move each path into the repo's `home/`, declare it and deploy it back.
 /// Encrypted dotfiles need the key unlocked on this host. Returns the paths
 /// relative to the home directory. The caller holds the adopt lock.
-pub fn add(ctx: &Context, paths: &[PathBuf], copy: bool, encrypt: bool) -> Result<Vec<PathBuf>> {
+pub fn add(
+    ctx: &Context,
+    paths: &[PathBuf],
+    deploy: Deploy,
+    encrypt: bool,
+) -> Result<Vec<PathBuf>> {
     let repo = ctx.paths.repo();
     // Check every path before writing anything.
     let mut entries: Vec<(PathBuf, Dotfile)> = Vec::new();
@@ -151,6 +156,9 @@ pub fn add(ctx: &Context, paths: &[PathBuf], copy: bool, encrypt: bool) -> Resul
                 target.display()
             )));
         }
+        if deploy == Deploy::Template {
+            check_template(&target, &meta)?;
+        }
         if !encrypt && let Some((file, rule)) = review::secret_in(&target)? {
             return Err(Error::Usage(format!(
                 "{} looks like it contains a secret ({rule}); add it with --encrypt",
@@ -158,10 +166,10 @@ pub fn add(ctx: &Context, paths: &[PathBuf], copy: bool, encrypt: bool) -> Resul
             )));
         }
         let mut entry = Dotfile::new(&rel.to_string_lossy());
-        entry.deploy = if copy || encrypt {
-            Deploy::Copy
-        } else {
-            Deploy::Link
+        // An encrypted file cannot be a link.
+        entry.deploy = match deploy {
+            Deploy::Link if encrypt => Deploy::Copy,
+            deploy => deploy,
         };
         entry.encrypted = encrypt;
         entry.permissions = private_mode(&target)?;
@@ -201,6 +209,30 @@ pub fn add(ctx: &Context, paths: &[PathBuf], copy: bool, encrypt: bool) -> Resul
     )?;
     deploy::deploy(ctx)?;
     Ok(entries.into_iter().map(|(rel, _)| rel).collect())
+}
+
+/// A template is a text file minijinja can read; it is added as it is and
+/// the parts that differ by host are edited in the repo afterwards.
+fn check_template(target: &Path, meta: &std::fs::Metadata) -> Result<()> {
+    if meta.is_dir() {
+        return Err(Error::Usage(format!(
+            "{} is a directory; only files can be templates",
+            target.display()
+        )));
+    }
+    let bytes = std::fs::read(target).map_err(Error::read(target))?;
+    let text = String::from_utf8(bytes).map_err(|_| {
+        Error::Usage(format!(
+            "{} is not UTF-8 text; a template must be text",
+            target.display()
+        ))
+    })?;
+    crate::template::check(&target.display().to_string(), &text).map_err(|err| {
+        Error::Usage(format!(
+            "{} is not a valid template: {err}",
+            target.display()
+        ))
+    })
 }
 
 /// Stop managing `path` on every host: its declarations and repo content
