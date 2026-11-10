@@ -27,6 +27,6 @@
 
 ## 5. 安裝程式 fixture
 
-- [ ] 5.1 撰寫擷取腳本，在容器中執行安裝程式並保存 rc 檔前後內容，確認重跑可得到相同結構的 fixture
-- [ ] 5.2 手動擷取 OrbStack 與 JetBrains Toolbox 的寫入內容並移除個人路徑，確認 fixture 中沒有 `/Users/<name>` 這類路徑
-- [ ] 5.3 在 `CONTRIBUTING.md` 說明如何重新擷取 fixture，確認文件中的指令可照抄執行
+- [x] 5.1 撰寫擷取腳本，在容器中執行安裝程式並保存 rc 檔前後內容，確認重跑可得到相同結構的 fixture
+- [x] 5.2 手動擷取 OrbStack 與 JetBrains Toolbox 的寫入內容並移除個人路徑，確認 fixture 中沒有 `/Users/<name>` 這類路徑
+- [x] 5.3 在 `CONTRIBUTING.md` 說明如何重新擷取 fixture，確認文件中的指令可照抄執行
