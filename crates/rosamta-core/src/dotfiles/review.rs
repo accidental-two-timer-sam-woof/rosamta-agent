@@ -172,6 +172,12 @@ pub(crate) fn keep(ctx: &Context, id: u32, item: &DotfileItem, scope: Scope) -> 
         ));
     }
     let target = ctx.home.join(&item.path);
+    if template && !entry.encrypted && secret_template(ctx, &entry)? {
+        return Err(Error::Usage(format!(
+            "{} holds secrets from its template; it stays out of the repo",
+            target.display()
+        )));
+    }
     if !entry.encrypted
         && let Some((file, rule)) = secret_in(&target)?
     {
@@ -232,6 +238,13 @@ pub(crate) fn ignore(ctx: &Context, id: u32, item: &DotfileItem) -> Result<()> {
     unchanged(ctx, id, item)?;
     deploy::ignore(ctx, &item.path, item.sides.clone())?;
     deploy::deploy(ctx).map(drop)
+}
+
+/// Whether the template `entry` asks a secret source.
+fn secret_template(ctx: &Context, entry: &Dotfile) -> Result<bool> {
+    let text = deploy::template_text(ctx, entry)?.unwrap_or_default();
+    let names = crate::template::names(&entry.source(), &text).map_err(Error::Usage)?;
+    Ok(crate::template::uses_secrets(&names))
 }
 
 /// The first file under `path` whose content looks like a secret, and the rule.
@@ -296,13 +309,21 @@ pub(crate) fn append(repo: &Path, entry: &Dotfile) -> Result<()> {
     .map(drop)
 }
 
-/// A unified diff from this host's version of `item` to the repo's.
+/// A unified diff from this host's version of `item` to the repo's. A
+/// template's side is its output, or its text when rendering would show a
+/// secret.
 pub fn diff(ctx: &Context, item: &DotfileItem) -> Result<String> {
     let (entry, _) = current(ctx, &item.path)?;
     let target = ctx.home.join(&item.path);
     let local = contents(&target)?;
     let source = ctx.paths.repo().join(entry.source());
-    let repo = if entry.encrypted {
+    let output = match entry.deploy {
+        Deploy::Template => deploy::output(ctx, &entry)?,
+        _ => None,
+    };
+    let repo = if let Some(output) = output {
+        BTreeMap::from([(PathBuf::new(), output)])
+    } else if entry.encrypted {
         let sealed = std::fs::read(&source).map_err(Error::read(&source))?;
         let plain = super::crypt::decrypt(ctx, &sealed)?
             .ok_or_else(|| Error::Usage(deploy::LOCKED.into()))?;

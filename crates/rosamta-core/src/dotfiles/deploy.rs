@@ -129,9 +129,7 @@ struct Env<'a> {
 impl<'a> Env<'a> {
     fn new(ctx: &'a Context) -> Result<Self> {
         let host = host::load(&ctx.paths.host_config())?;
-        let secrets = Session::new(ctx, &host, ctx.interactive)
-            .map(Arc::new)
-            .map_err(|err| err.to_string());
+        let secrets = ctx.secrets(&host).map_err(|err| err.to_string());
         Ok(Self {
             ctx,
             repo: ctx.paths.repo(),
@@ -349,33 +347,35 @@ fn plan_template(env: &Env, path: &Path, entry: &Dotfile) -> Result<Planned> {
     };
     let input = input_hash(env, entry, &text)?;
     let local = tree::hash(&target)?;
-    let record = env
-        .deployed
-        .entries
-        .get(path)
-        .filter(|record| record.deploy == Deploy::Template);
+    // Any record says whether rosamta wrote what is there, even one from
+    // before this path became a template.
+    let record = env.deployed.entries.get(path);
     let untouched = record.is_some_and(|record| Some(&record.target_hash) == local.as_ref());
-    let same_input = record.is_some_and(|record| record.source_hash == input);
+    let same_input = record
+        .is_some_and(|record| record.deploy == Deploy::Template && record.source_hash == input);
     let keep = || Work::Template(entry.clone(), input.clone(), None);
     // Outside a terminal only a changed input renders again, so an
     // unchanged template never asks a secret source.
     if untouched && same_input && !env.ctx.interactive {
         return Ok(step(path, Action::Unchanged, None, keep()));
     }
-    // Output edited on this host cannot go back into the template.
-    if let (Some(local), Some(_), false) = (&local, record, untouched) {
-        if env.ignored(path, local, &input) {
-            return Ok(ignored(path));
-        }
-        return Ok(match (same_input, env.policy) {
-            (true, AdoptPolicy::Off) => step(
+    // Before rendering, so an ignored item asks no secret source.
+    if let Some(local) = &local
+        && env.ignored(path, local, &input)
+    {
+        return Ok(ignored(path));
+    }
+    // Output edited on this host cannot go back into the template. With a
+    // new input, rendering tells whether it already matches.
+    if let (Some(local), true, false) = (&local, same_input, untouched) {
+        return Ok(match env.policy {
+            AdoptPolicy::Off => step(
                 path,
                 Action::Skipped,
                 Some("changed on this host".into()),
                 Work::Nothing,
             ),
-            (true, _) => wait(path, Action::Changed, local.clone(), input),
-            (false, _) => wait(path, Action::Conflict, local.clone(), input),
+            _ => wait(path, Action::Changed, local.clone(), input),
         });
     }
     let (bytes, secret) = match render(env, entry, &text)? {
@@ -401,7 +401,6 @@ fn plan_template(env: &Env, path: &Path, entry: &Dotfile) -> Result<Planned> {
             return Ok(step(path, Action::Unchanged, None, keep()));
         }
         Some(_) if untouched => Action::Updated,
-        Some(local) if env.ignored(path, local, &input) => return Ok(ignored(path)),
         Some(local) => return Ok(wait(path, Action::Conflict, local.clone(), input)),
     };
     let mut planned = step(
@@ -423,7 +422,7 @@ fn plan_template(env: &Env, path: &Path, entry: &Dotfile) -> Result<Planned> {
 
 /// A template's text, decrypted when encrypted; `None` while this host has
 /// no key.
-fn template_text(ctx: &Context, entry: &Dotfile) -> Result<Option<String>> {
+pub(crate) fn template_text(ctx: &Context, entry: &Dotfile) -> Result<Option<String>> {
     let source = ctx.paths.repo().join(entry.source());
     let bytes = std::fs::read(&source).map_err(Error::read(&source))?;
     let bytes = match entry.encrypted {
@@ -441,16 +440,30 @@ fn template_text(ctx: &Context, entry: &Dotfile) -> Result<Option<String>> {
 /// What a template's output depends on, secrets aside: its text, this host,
 /// the vars it uses and, when it runs commands, their declarations.
 fn input_hash(env: &Env, entry: &Dotfile, text: &str) -> Result<String> {
+    let names = template::names(&entry.source(), text).map_err(Error::Usage)?;
     let used = template::used_vars(&entry.source(), text).map_err(Error::Usage)?;
-    let vars: BTreeMap<&String, Option<&String>> = used
-        .iter()
-        .map(|name| (name, env.host.vars.get(name)))
-        .collect();
-    let commands = if text.contains("secret(") {
+    // `vars["a"]` or a loop over `vars` reads them all.
+    let vars: BTreeMap<&String, Option<&String>> = if names.contains("vars") {
+        env.host
+            .vars
+            .iter()
+            .map(|(name, value)| (name, Some(value)))
+            .collect()
+    } else {
+        used.iter()
+            .map(|name| (name, env.host.vars.get(name)))
+            .collect()
+    };
+    // shortcut: every command counts, not only the ones this template runs;
+    // a per-name hash needs the names `secret()` is called with.
+    let commands = if names.contains("secret") {
         std::fs::read_to_string(env.repo.join(secrets::MANIFEST)).unwrap_or_default()
     } else {
         String::new()
     };
+    let socket = names
+        .contains("bitwarden_ssh_socket")
+        .then(|| secrets::bitwarden_ssh_socket(&env.ctx.home));
     let input = serde_json::json!({
         "text": text,
         "id": env.host.id,
@@ -460,6 +473,7 @@ fn input_hash(env: &Env, entry: &Dotfile, text: &str) -> Result<String> {
         "home": env.ctx.home,
         "vars": vars,
         "commands": commands,
+        "socket": socket,
     });
     Ok(tree::hash_bytes(input.to_string().as_bytes()))
 }
@@ -472,6 +486,23 @@ pub(crate) fn template_input(ctx: &Context, entry: &Dotfile) -> Result<Option<St
         Some(text) => input_hash(&env, entry, &text).map(Some),
         None => Ok(None),
     }
+}
+
+/// The output of a template that asks no secret source, as a deploy would
+/// write it; `None` for one that does, one still waiting, or one this host
+/// has no key for.
+pub(crate) fn output(ctx: &Context, entry: &Dotfile) -> Result<Option<Vec<u8>>> {
+    let Some(text) = template_text(ctx, entry)? else {
+        return Ok(None);
+    };
+    let names = template::names(&entry.source(), &text).map_err(Error::Usage)?;
+    if template::uses_secrets(&names) {
+        return Ok(None);
+    }
+    Ok(match render(&Env::new(ctx)?, entry, &text)? {
+        Rendered::Done { bytes, .. } => Some(bytes),
+        Rendered::Waiting(_) => None,
+    })
 }
 
 enum Rendered {

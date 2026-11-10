@@ -18,7 +18,7 @@
 - **THEN** `rsmt validate` 回報這兩筆宣告互相包含並以 2 結束
 
 ### Requirement: Host-specific declarations win
-同一個路徑有多筆宣告符合本機時，`when.hosts` 列出本機識別名稱的宣告 SHALL 優先；仍有多筆時，該路徑 SHALL 不部署並回報重複宣告，其他路徑照常部署。
+同一個路徑有多筆宣告符合本機時，`when.hosts` 只列本機識別名稱的宣告 SHALL 最優先，其次是 `when.hosts` 列出本機識別名稱的宣告；仍有多筆時，該路徑 SHALL 不部署並回報重複宣告，其他路徑照常部署。
 
 #### Scenario: Host variant
 - **WHEN** `.gitconfig` 有一筆沒有條件的宣告，和一筆 `when.hosts = ["mbp"]`、來源為 `hosts/mbp/.gitconfig` 的宣告，在 mbp 上套用

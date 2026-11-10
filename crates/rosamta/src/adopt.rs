@@ -1,5 +1,6 @@
 //! `rsmt adopt`, `rsmt review` and `rsmt restore <id>`.
 
+use std::io::IsTerminal;
 use std::process::ExitCode;
 
 use rosamta_core::Result;
@@ -172,7 +173,9 @@ pub fn ignore(json: bool, id: u32) -> Result<ExitCode> {
 }
 
 pub fn discard(json: bool, id: u32) -> Result<ExitCode> {
-    let ctx = Context::from_env()?;
+    let mut ctx = Context::from_env()?;
+    // Rendering the repo's version may unlock a tool or run a secret command.
+    ctx.interactive = !json && std::io::stdin().is_terminal();
     let _lock = adopt::lock(&ctx)?;
     let path = ctx.home.join(review::discard(&ctx, id)?);
     if json {

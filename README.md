@@ -238,7 +238,7 @@ when = { hosts = ["mbp"] }
 | `encrypted` | 加密後存在 repo 中，須搭配 `deploy = "copy"` |
 | `when` | 套用範圍，寫法與 module 相同 |
 
-同一個路徑有多筆宣告符合本機時，`when.hosts` 列出本機的那一筆優先。
+同一個路徑有多筆宣告符合本機時，`when.hosts` 只列本機的那一筆最優先，其次是列出本機的那一筆。
 
 - `link`：app 修改設定檔就是修改 repo。編輯器以新檔案取代 symlink 時，內容會寫回 repo，並重新建立 symlink。
 - `copy`：repo 改變時更新。本機的檔案被修改時依接管偏好處理：`auto` 寫回 repo，`ask` 列入待處理清單，`off` 不處理，之後也不覆蓋。

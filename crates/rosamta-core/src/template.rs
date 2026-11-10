@@ -2,7 +2,7 @@
 //! that cannot read files or run anything but the secret sources rosamta
 //! provides (ADR 0006).
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashSet};
 use std::path::Path;
 use std::sync::Arc;
 
@@ -39,15 +39,25 @@ pub fn check(name: &str, source: &str) -> Result<(), String> {
         .map_err(|err| describe(&err))
 }
 
-/// `vars.*` names the template uses, sorted. Static: a name inside an
-/// `if` counts even when that branch never runs.
-pub fn used_vars(name: &str, source: &str) -> Result<Vec<String>, String> {
+/// The names the template reads, as `vars.email`, or `vars` alone when it
+/// reads `vars` as a whole; functions rosamta provides appear by name.
+/// Static: a name inside an `if` counts even when that branch never runs.
+pub fn names(name: &str, source: &str) -> Result<HashSet<String>, String> {
     let env = environment();
     let template = env
         .template_from_named_str(name, source)
         .map_err(|err| describe(&err))?;
-    let mut used: Vec<String> = template
-        .undeclared_variables(true)
+    Ok(template.undeclared_variables(true))
+}
+
+/// Whether the template asks a secret source.
+pub fn uses_secrets(names: &HashSet<String>) -> bool {
+    names.contains("secret") || names.contains("bitwarden")
+}
+
+/// `vars.*` names the template uses, sorted.
+pub fn used_vars(name: &str, source: &str) -> Result<Vec<String>, String> {
+    let mut used: Vec<String> = names(name, source)?
         .iter()
         .filter_map(|used| used.strip_prefix("vars.")?.split('.').next())
         .map(str::to_string)
@@ -230,6 +240,21 @@ mod tests {
         let err = check("home/.npmrc", "ok\n{% if %}\n").unwrap_err();
         assert!(err.contains("home/.npmrc:2"), "{err}");
         assert!(check("t", "{{ vars.x }}").is_ok());
+    }
+
+    #[test]
+    fn names_show_secrets_and_whole_vars() {
+        let names = names("t", r#"{{ secret ("op", "x") }}{{ vars["a"] }}"#).unwrap();
+        assert!(uses_secrets(&names), "{names:?}");
+        assert!(names.contains("vars"), "{names:?}");
+        let names = names_of(r#"{{ bitwarden_ssh_socket() }}{{ vars.a }}"#);
+        assert!(!uses_secrets(&names), "{names:?}");
+        assert!(!names.contains("vars"), "{names:?}");
+        assert!(uses_secrets(&names_of(r#"{{ bitwarden("x") }}"#)));
+    }
+
+    fn names_of(text: &str) -> HashSet<String> {
+        names("t", text).unwrap()
     }
 
     #[test]
