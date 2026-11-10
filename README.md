@@ -115,6 +115,72 @@ rsmt review ignore <編號>
 | `adopt_original` | `delete`：刪除原內容（預設）；`comment`：改成註解 |
 | `shell_notice` | `true`：開 shell 時提醒（預設）；`false` |
 
+## 管理設定檔
+
+```sh
+rsmt add ~/.config/nvim ~/.gitconfig
+```
+
+把檔案或目錄移進 repo 的 `home/`，在 `dotfiles.toml` 加上宣告，再以 symlink 放回原位，並建立一個 commit。之後在其他主機執行 `rsmt apply` 也會部署這些設定檔。內容看起來像 API key 或 token 時，`rsmt add` 會拒絕，請改用 `--encrypt`。
+
+每個設定檔在 `dotfiles.toml` 有一筆宣告，例如：
+
+```toml
+[[dotfile]]
+path = ".config/nvim"
+
+[[dotfile]]
+path = ".ssh/config"
+deploy = "copy"
+permissions = "0600"
+encrypted = true
+
+[[dotfile]]
+path = ".gitconfig"
+source = "hosts/mbp/.gitconfig"
+when = { hosts = ["mbp"] }
+```
+
+| 欄位 | 說明 |
+|---|---|
+| `path` | 相對於家目錄的位置 |
+| `source` | repo 中的內容，預設為 `home/<path>` |
+| `deploy` | `link`：symlink 回 repo（預設）；`copy`：複製 |
+| `permissions` | 部署後設定的權限，例如 `"0600"` |
+| `encrypted` | 加密後存在 repo 中，以 `copy` 部署 |
+| `when` | 套用範圍，寫法與 module 相同 |
+
+同一個路徑有多筆宣告符合本機時，`when.hosts` 列出本機的那一筆優先。
+
+- `link`：app 修改設定檔就是修改 repo。編輯器以新檔案取代 symlink 時，內容會寫回 repo，並重新建立 symlink。
+- `copy`：repo 改變時更新。本機的檔案被修改時依接管偏好處理：`auto` 寫回 repo，`ask` 列入待處理清單，`off` 不處理，之後也不覆蓋。
+
+部署時，目標位置已有內容不同的檔案不會被覆蓋。在終端機執行 `rsmt apply` 時，會顯示差異並詢問要採用 repo 的版本、保留這台主機的版本，或稍後處理。稍後處理的衝突，以及非互動執行與背景服務遇到的衝突，都會列在待處理清單：
+
+```sh
+rsmt review accept <編號>
+rsmt review discard <編號>
+rsmt review ignore <編號>
+```
+
+`accept` 保留這台主機的版本，存在 repo 的 `hosts/<識別名稱>/` 並只用於這台主機；加上 `--scope all` 則用於所有主機。`discard` 採用 repo 的版本，原本的內容保存在 snapshot。`ignore` 讓兩邊維持原狀，直到其中一邊改變。
+
+不再管理某個設定檔：
+
+```sh
+rsmt forget ~/.config/nvim
+```
+
+宣告與 repo 中的內容會被移除，設定檔以一般檔案留在原位；其他主機下次套用時也一樣。
+
+### 加密
+
+```sh
+rsmt add --encrypt ~/.ssh/config
+```
+
+第一次加密時要設定密碼。加密用的私鑰以這個密碼加密後存成 repo 的 `key.age`，這台主機的副本存在 `~/.config/rosamta/age.key`。新主機第一次在終端機執行 `rsmt apply` 時輸入一次密碼即可；背景服務不會詢問密碼，會先略過加密的設定檔。密碼遺失後無法找回，只有已經解開私鑰的主機還能讀取加密的設定檔。
+
 ## 同步到其他主機
 
 ```sh
