@@ -450,6 +450,7 @@ PERFORMANCE OF THIS SOFTWARE.
 
 - gethostname 1.1.0
 - similar 2.7.0
+- similar 3.2.1
 
 ```
                               Apache License
