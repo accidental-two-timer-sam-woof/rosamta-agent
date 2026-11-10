@@ -249,33 +249,17 @@ pub fn run(
         }
     })
     .map_err(|err| crate::Error::Daemon(format!("cannot watch files: {err}")))?;
-    let env = ctx.hook_env(&ctx.installed());
-    for (dir, mode) in watch_list(&ctx, &env) {
+    let mut daemon = Daemon {
+        exe,
+        ..Daemon::new(ctx, host, notifier)
+    };
+    for (dir, mode) in watch_list(&daemon.ctx, &daemon.env) {
         if let Err(err) = debouncer.watch(&dir, mode) {
-            log(&ctx, &format!("cannot watch {}: {err}", dir.display()));
+            daemon.log(&format!("cannot watch {}: {err}", dir.display()));
         }
     }
     drop(events);
-    let previous = instance::load(ctx.paths.state()).ok().flatten();
-    let mut daemon = Daemon {
-        next_sync: Instant::now(),
-        host,
-        lang: Lang::system(),
-        notifier,
-        env,
-        rc_seen: None,
-        rc_known: Vec::new(),
-        repo_seen: None,
-        announced: previous
-            .map_or_else(BTreeSet::new, |state| state.announced.into_iter().collect()),
-        batch: Vec::new(),
-        batch_since: None,
-        clock: (Instant::now(), SystemTime::now()),
-        exe,
-        repo_problem: None,
-        ctx,
-    };
-    log(&daemon.ctx, "started");
+    daemon.log("started");
     // Catch up on whatever changed while the daemon was not running.
     daemon.repo_changed();
     daemon.rc_changed();
@@ -319,6 +303,28 @@ pub fn log_to(state: &Path, message: &str) {
 }
 
 impl Daemon {
+    fn new(ctx: Context, host: HostConfig, notifier: Box<dyn Notifier>) -> Self {
+        let previous = instance::load(ctx.paths.state()).ok().flatten();
+        Self {
+            next_sync: Instant::now(),
+            host,
+            lang: Lang::system(),
+            notifier,
+            env: ctx.hook_env(&ctx.installed()),
+            rc_seen: None,
+            rc_known: Vec::new(),
+            repo_seen: None,
+            announced: previous
+                .map_or_else(BTreeSet::new, |state| state.announced.into_iter().collect()),
+            batch: Vec::new(),
+            batch_since: None,
+            clock: (Instant::now(), SystemTime::now()),
+            exe: None,
+            repo_problem: None,
+            ctx,
+        }
+    }
+
     fn log(&self, message: &str) {
         log(&self.ctx, message);
     }
@@ -589,30 +595,38 @@ impl Daemon {
     fn report_problems(&mut self) {
         let mut problems: Vec<(&'static str, String)> = self.repo_problem.iter().cloned().collect();
         if let Ok(state) = sync::load_state(self.ctx.paths.state()) {
-            for attempt in [&state.publish, &state.pull].into_iter().flatten() {
+            for (attempt, pull) in [(&state.publish, false), (&state.pull, true)] {
+                let Some(attempt) = attempt else {
+                    continue;
+                };
                 let reason = attempt.reason.clone().unwrap_or_default();
                 let first = reason.lines().next().unwrap_or_default().to_string();
-                match attempt.outcome {
-                    Outcome::Blocked => problems.push(("publish_blocked", first)),
-                    Outcome::Conflict => problems.push(("conflict", attempt.files.join(", "))),
-                    Outcome::Failed if reason.contains("upgrade rosamta") => {
-                        problems.push(("upgrade", String::new()))
+                problems.push(match (attempt.outcome, pull) {
+                    (Outcome::Ok | Outcome::Offline, _) => continue,
+                    (Outcome::Conflict, _) => ("conflict", attempt.files.join(", ")),
+                    (Outcome::Failed, _) if reason.contains("upgrade rosamta") => {
+                        ("upgrade", String::new())
                     }
-                    Outcome::Failed => problems.push(("apply_failed", first)),
-                    Outcome::Ok | Outcome::Offline => {}
-                }
+                    (Outcome::Failed, true) if attempt.applying => ("apply_failed", first),
+                    (Outcome::Failed, true) => ("pull_failed", first),
+                    (Outcome::Failed, false) => ("publish_failed", first),
+                    (Outcome::Blocked, true) => ("pull_blocked", first),
+                    (Outcome::Blocked, false) => ("publish_blocked", first),
+                });
             }
         }
         let state_dir = self.ctx.paths.state().to_path_buf();
         let Ok(Some(mut state)) = instance::load(&state_dir) else {
             return;
         };
-        let keys: Vec<String> = problems
-            .iter()
-            .map(|(kind, reason)| format!("{kind}:{reason}"))
-            .collect();
-        for ((kind, reason), key) in problems.iter().zip(&keys) {
-            if !state.notified.contains(key) {
+        let mut keys: Vec<String> = Vec::new();
+        for (kind, reason) in &problems {
+            // The daemon's own apply can fail the same way a pull's did.
+            let key = format!("{kind}:{reason}");
+            if keys.contains(&key) {
+                continue;
+            }
+            if !state.notified.contains(&key) {
                 let arg = if *kind == "conflict" {
                     "files"
                 } else {
@@ -625,6 +639,7 @@ impl Daemon {
                     items: Vec::new(),
                 });
             }
+            keys.push(key);
         }
         if state.notified != keys {
             state.notified = keys;

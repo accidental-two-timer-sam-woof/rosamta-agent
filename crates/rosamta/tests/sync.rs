@@ -230,6 +230,7 @@ fn a_pulled_module_that_breaks_startup_is_not_applied() {
     assert!(hosts.a.repo().join("modules/noisy.toml").is_file());
     assert_eq!(current(&hosts.a), before);
     assert_eq!(state(&hosts.a)["pull"]["outcome"], "failed");
+    assert_eq!(state(&hosts.a)["pull"]["applying"], true);
 }
 
 #[test]
