@@ -1,6 +1,6 @@
 //! Writes that touch only the target fields, keeping comments and order.
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use toml_edit::{Array, DocumentMut, Item, Value};
 
@@ -8,17 +8,40 @@ use crate::error::{Error, Result};
 
 /// Apply `change` to the TOML file at `path`. Returns whether the file changed.
 pub fn edit_toml(path: &Path, change: impl FnOnce(&mut DocumentMut)) -> Result<bool> {
-    let text = std::fs::read_to_string(path).map_err(Error::read(path))?;
-    let mut doc: DocumentMut = text.parse().map_err(|err: toml_edit::TomlError| {
-        Error::Usage(format!("{}: {}", path.display(), err.message().trim()))
-    })?;
-    change(&mut doc);
-    let updated = doc.to_string();
-    if updated == text {
-        return Ok(false);
+    let mut file = TomlFile::read(path)?;
+    change(&mut file.doc);
+    file.save()
+}
+
+/// A TOML file parsed for editing, so several can be parsed before any is written.
+pub(crate) struct TomlFile {
+    pub path: PathBuf,
+    text: String,
+    pub doc: DocumentMut,
+}
+
+impl TomlFile {
+    pub(crate) fn read(path: &Path) -> Result<Self> {
+        let text = std::fs::read_to_string(path).map_err(Error::read(path))?;
+        let doc = text.parse().map_err(|err: toml_edit::TomlError| {
+            Error::Usage(format!("{}: {}", path.display(), err.message().trim()))
+        })?;
+        Ok(Self {
+            path: path.to_path_buf(),
+            text,
+            doc,
+        })
     }
-    write_atomic(path, &updated)?;
-    Ok(true)
+
+    /// Write the document back if it changed. Returns whether it did.
+    pub(crate) fn save(&self) -> Result<bool> {
+        let updated = self.doc.to_string();
+        if updated == self.text {
+            return Ok(false);
+        }
+        write_atomic(&self.path, &updated)?;
+        Ok(true)
+    }
 }
 
 /// Write `text` to a file only its owner can read.

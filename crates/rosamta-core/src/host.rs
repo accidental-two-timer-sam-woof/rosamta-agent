@@ -2,11 +2,11 @@
 
 use std::path::Path;
 
-use crate::config::HostConfig;
-use crate::edit::{self, array_mut, edit_toml, rename_in_array};
+use crate::config::{HostConfig, RepoManifest};
+use crate::edit::{self, TomlFile, array_mut, edit_toml, rename_in_array};
 use crate::error::{Error, Result};
 use crate::paths::Paths;
-use crate::{git, repo, validate};
+use crate::{repo, validate};
 
 pub fn load(path: &Path) -> Result<HostConfig> {
     let text = std::fs::read_to_string(path).map_err(Error::read(path))?;
@@ -19,19 +19,29 @@ pub fn load(path: &Path) -> Result<HostConfig> {
     })
 }
 
-/// Load `host.toml`, creating it with a fresh host ID the first time.
-/// Returns the config and whether it was created.
-pub fn load_or_create(paths: &Paths) -> Result<(HostConfig, bool)> {
+/// Load `host.toml`, creating it the first time with a fresh host ID that no
+/// host in `taken` has. Returns the config and, when it was created, the ID
+/// generated from the hostname (the config's own unless that one was taken).
+pub fn load_or_create(paths: &Paths, taken: &[String]) -> Result<(HostConfig, Option<String>)> {
     let path = paths.host_config();
     if path.exists() {
-        return Ok((load(&path)?, false));
+        return Ok((load(&path)?, None));
     }
-    let host = HostConfig::new(generate_id());
+    let generated = generate_id();
+    let host = HostConfig::new(unique_id(&generated, taken));
     let dir = path.parent().expect("host.toml has a parent directory");
     std::fs::create_dir_all(dir).map_err(Error::write(dir))?;
     let text = toml::to_string(&host).expect("HostConfig serializes");
     edit::write_atomic(&path, &text)?;
-    Ok((host, true))
+    Ok((host, Some(generated)))
+}
+
+/// `id`, or the first of `id-2`, `id-3`, ... that no host in `taken` has.
+fn unique_id(id: &str, taken: &[String]) -> String {
+    std::iter::once(id.to_string())
+        .chain((2..).map(|n| format!("{id}-{n}")))
+        .find(|candidate| !taken.contains(candidate))
+        .expect("taken is finite")
 }
 
 /// A host ID derived from this machine's name. Called only when `host.toml`
@@ -125,38 +135,61 @@ pub fn remove_tag(paths: &Paths, tag: &str) -> Result<bool> {
     })
 }
 
-/// Change the host ID everywhere: the repo's host list, every `when.hosts`,
-/// and `host.toml`. The repo change is one commit.
+/// Change the host ID everywhere: the repo's host list, every `when.hosts`
+/// in repo and local modules, and `host.toml`. The repo change is one commit.
 pub fn rename(paths: &Paths, new_id: &str) -> Result<()> {
     check_id(new_id)?;
-    let host = load(&paths.host_config())?;
-    let old_id = host.id;
+    let old_id = load(&paths.host_config())?.id;
     if old_id == new_id {
         return Ok(());
     }
     let repo_dir = paths.repo();
-    if repo_dir.join(repo::MANIFEST).is_file() {
-        repo::ensure_supported(repo::read_manifest(&repo_dir)?.format)?;
-        edit_toml(&repo_dir.join(repo::MANIFEST), |doc| {
-            if let Some(hosts) = doc["hosts"].as_array_mut() {
-                rename_in_array(hosts, &old_id, new_id);
-            }
-        })?;
-        for module in repo::module_files(&repo_dir)? {
-            edit_toml(&module, |doc| {
-                if let Some(hosts) = array_mut(&mut doc["when"], "hosts") {
-                    rename_in_array(hosts, &old_id, new_id);
-                }
-            })?;
+    let manifest = repo_dir.join(repo::MANIFEST);
+    let mut files = Vec::new();
+    if manifest.is_file() {
+        let RepoManifest { format, hosts } = repo::read_manifest(&repo_dir)?;
+        repo::ensure_supported(format)?;
+        if hosts.iter().any(|id| id == new_id) {
+            return Err(Error::Usage(format!(
+                "host ID `{new_id}` is already used by another host"
+            )));
         }
-        git::commit_all(
-            &repo_dir,
-            &format!("chore(repo): rename host {old_id} to {new_id}"),
-        )?;
+        files.push(manifest.clone());
+        files.extend(repo::module_files(&repo_dir)?);
     }
-    edit_toml(&paths.host_config(), |doc| {
-        edit::set_value(&mut doc["id"], new_id)
-    })?;
+    files.extend(repo::module_files(&paths.local())?);
+    // Parse every file before writing any, so a broken one leaves nothing half renamed.
+    let mut files: Vec<TomlFile> = files
+        .iter()
+        .map(|path| TomlFile::read(path))
+        .collect::<Result<_>>()?;
+    let mut host_file = TomlFile::read(&paths.host_config())?;
+
+    let mut changed = Vec::new();
+    for file in &mut files {
+        let hosts = if file.path == manifest {
+            file.doc["hosts"].as_array_mut()
+        } else {
+            array_mut(&mut file.doc["when"], "hosts")
+        };
+        if let Some(hosts) = hosts {
+            rename_in_array(hosts, &old_id, new_id);
+        }
+        if file.save()?
+            && let Ok(rel) = file.path.strip_prefix(&repo_dir)
+        {
+            changed.push(rel.to_string_lossy().into_owned());
+        }
+    }
+    edit::set_value(&mut host_file.doc["id"], new_id);
+    host_file.save()?;
+    // Last, so a failed commit leaves the rename done, only not committed yet.
+    let changed: Vec<&str> = changed.iter().map(String::as_str).collect();
+    repo::commit_files(
+        &repo_dir,
+        &format!("chore(repo): rename host {old_id} to {new_id}"),
+        &changed,
+    )?;
     Ok(())
 }
 
@@ -176,6 +209,13 @@ mod tests {
     #[test]
     fn generated_id_is_usable() {
         assert!(check_id(&generate_id()).is_ok());
+    }
+
+    #[test]
+    fn unique_ids_skip_taken_ones() {
+        let taken = ["mbp", "mbp-2", "lab"].map(String::from);
+        assert_eq!(unique_id("mbp", &taken), "mbp-3");
+        assert_eq!(unique_id("work", &taken), "work");
     }
 
     #[test]

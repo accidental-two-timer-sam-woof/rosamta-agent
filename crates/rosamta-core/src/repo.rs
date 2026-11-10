@@ -5,6 +5,7 @@ use std::path::{Path, PathBuf};
 use crate::config::{CURRENT_FORMAT, RepoManifest};
 use crate::edit::{edit_toml, set_value};
 use crate::error::{Error, Result};
+use crate::git::Commit;
 use crate::paths::Paths;
 use crate::{git, host, validate};
 
@@ -118,8 +119,27 @@ pub fn register_host(repo_dir: &Path, id: &str) -> Result<bool> {
             None => set_value(&mut doc["hosts"], toml_edit::Array::from_iter([id])),
         }
     })?;
-    git::commit_all(repo_dir, &format!("chore(repo): add host {id}"))?;
+    commit_files(
+        repo_dir,
+        &format!("chore(repo): add host {id}"),
+        &[MANIFEST],
+    )?;
     Ok(true)
+}
+
+/// Commit only `files`, relative to the repo, so edits made by hand stay out.
+pub(crate) fn commit_files(repo_dir: &Path, message: &str, files: &[&str]) -> Result<bool> {
+    if files.is_empty() {
+        return Ok(false);
+    }
+    match git::commit(repo_dir, message, files)? {
+        Commit::Clean => Ok(false),
+        Commit::Created => Ok(true),
+        Commit::SigningFailed(message) => Err(Error::Git {
+            command: "commit".into(),
+            message,
+        }),
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
@@ -127,13 +147,18 @@ pub struct InitOutcome {
     pub repo: PathBuf,
     pub host_id: String,
     pub host_created: bool,
+    /// The ID generated for this host, when another host in the repo has it.
+    pub host_id_taken: Option<String>,
     pub cloned: bool,
+    /// The repo was already here; only this host was set up.
+    pub existing: bool,
     pub migrated: Option<(u32, u32)>,
 }
 
+/// Refuse a repo that has `rosamta.toml`; a directory without it, such as
+/// one left by an interrupted init, is not a repo yet.
 pub(crate) fn refuse_existing(repo_dir: &Path) -> Result<()> {
-    let occupied = std::fs::read_dir(repo_dir).is_ok_and(|mut entries| entries.next().is_some());
-    if occupied {
+    if repo_dir.join(MANIFEST).exists() {
         return Err(Error::Usage(format!(
             "a repo already exists at {}",
             repo_dir.display()
@@ -150,31 +175,59 @@ fn or_remove<T>(repo_dir: &Path, result: Result<T>) -> Result<T> {
     result
 }
 
-/// `rsmt init`: a new repo holding only `rosamta.toml`. Touches no rc file.
+/// `rsmt init`: a new repo holding only `rosamta.toml`, or, when the repo is
+/// here but `host.toml` is not, this host set up for it. Touches no rc file.
 pub fn init_new(paths: &Paths) -> Result<InitOutcome> {
     let repo_dir = paths.repo();
+    if repo_dir.join(MANIFEST).is_file() && !paths.host_config().exists() {
+        return add_this_host(paths);
+    }
     refuse_existing(&repo_dir)?;
-    let (host, host_created) = host::load_or_create(paths)?;
+    let (host, generated) = host::load_or_create(paths, &[])?;
+    // Never remove a directory this init did not create.
+    let fresh = !repo_dir.exists();
     std::fs::create_dir_all(&repo_dir).map_err(Error::write(&repo_dir))?;
-    or_remove(
-        &repo_dir,
-        (|| {
-            git::run(&repo_dir, &["init", "--quiet"])?;
-            let manifest = RepoManifest {
-                format: CURRENT_FORMAT,
-                hosts: vec![host.id.clone()],
-            };
-            let text = toml::to_string(&manifest).expect("RepoManifest serializes");
-            std::fs::write(repo_dir.join(MANIFEST), text)
-                .map_err(Error::write(repo_dir.join(MANIFEST)))?;
-            git::commit_all(&repo_dir, "chore(repo): initialize")
-        })(),
-    )?;
+    let result = (|| {
+        git::run(&repo_dir, &["init", "--quiet"])?;
+        let manifest = RepoManifest {
+            format: CURRENT_FORMAT,
+            hosts: vec![host.id.clone()],
+        };
+        let text = toml::to_string(&manifest).expect("RepoManifest serializes");
+        std::fs::write(repo_dir.join(MANIFEST), text)
+            .map_err(Error::write(repo_dir.join(MANIFEST)))?;
+        commit_files(&repo_dir, "chore(repo): initialize", &[MANIFEST])
+    })();
+    if fresh {
+        or_remove(&repo_dir, result)
+    } else {
+        result
+    }?;
     Ok(InitOutcome {
         repo: repo_dir,
         host_id: host.id,
-        host_created,
+        host_created: generated.is_some(),
+        host_id_taken: None,
         cloned: false,
+        existing: false,
+        migrated: None,
+    })
+}
+
+/// The repo is here but `host.toml` is not: create it and add this host.
+fn add_this_host(paths: &Paths) -> Result<InitOutcome> {
+    let repo_dir = paths.repo();
+    ensure_supported(read_manifest(&repo_dir)?.format)?;
+    // An ID already in this local repo's list is most likely this host's own.
+    let (host, _) = host::load_or_create(paths, &[])?;
+    register_host(&repo_dir, &host.id)?;
+    Ok(InitOutcome {
+        repo: repo_dir,
+        host_id: host.id,
+        host_created: true,
+        host_id_taken: None,
+        cloned: false,
+        existing: true,
         migrated: None,
     })
 }
@@ -211,15 +264,19 @@ pub(crate) fn join_with(
                     "{url} is not a rosamta repo: missing {MANIFEST}"
                 )));
             }
-            ensure_supported_by(read_manifest(&repo_dir)?.format, target)?;
-            let (host, host_created) = host::load_or_create(paths)?;
+            let manifest = read_manifest(&repo_dir)?;
+            ensure_supported_by(manifest.format, target)?;
+            let (host, generated) = host::load_or_create(paths, &manifest.hosts)?;
             let migrated = migrate(&repo_dir, target, migrations)?;
             register_host(&repo_dir, &host.id)?;
+            let host_created = generated.is_some();
             Ok(InitOutcome {
                 repo: repo_dir.clone(),
+                host_id_taken: generated.filter(|id| *id != host.id),
                 host_id: host.id,
                 host_created,
                 cloned: true,
+                existing: false,
                 migrated,
             })
         })(),
