@@ -1,5 +1,6 @@
 [package]
 name = "rosamta"
+description = "Cross-shell, cross-host dotfile manager"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -8,3 +9,36 @@ repository.workspace = true
 [dependencies]
 clap = { version = "4", features = ["derive"] }
 rosamta-core.workspace = true
+
+# Linux packages carry the CLI and the GUI; build the workspace before packaging.
+[package.metadata.deb]
+maintainer = "xinshoutw <me@xinshou.tw>"
+# The GUI dlopens Vulkan and Wayland, which $auto cannot see.
+depends = "$auto, libvulkan1, libwayland-client0"
+section = "utils"
+assets = [
+    ["target/release/rosamta", "usr/bin/", "755"],
+    ["target/release/rosamta-gui", "usr/bin/", "755"],
+    { dest = "usr/bin/rsmt", link_name = "rosamta" },
+    ["../../THIRD_PARTY_NOTICES.md", "usr/share/doc/rosamta/", "644"],
+]
+
+[package.metadata.generate-rpm]
+assets = [
+    { source = "target/release/rosamta", dest = "/usr/bin/rosamta", mode = "755" },
+    { source = "target/release/rosamta-gui", dest = "/usr/bin/rosamta-gui", mode = "755" },
+    { source = "../../THIRD_PARTY_NOTICES.md", dest = "/usr/share/doc/rosamta/THIRD_PARTY_NOTICES.md", mode = "644", doc = true },
+]
+# generate-rpm has no symlink assets
+post_install_script = "ln -sf rosamta /usr/bin/rsmt"
+post_uninstall_script = "if [ \"$1\" = 0 ]; then rm -f /usr/bin/rsmt; fi"
+# The builtin auto-req reads ldd on the build host: it adds transitive libraries under
+# that distro's sonames. List what the GUI links or dlopens instead.
+auto-req = "no"
+
+[package.metadata.generate-rpm.requires]
+"libxcb.so.1()(64bit)" = "*"
+"libxkbcommon.so.0()(64bit)" = "*"
+"libxkbcommon-x11.so.0()(64bit)" = "*"
+"libvulkan.so.1()(64bit)" = "*"
+"libwayland-client.so.0()(64bit)" = "*"

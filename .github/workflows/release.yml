@@ -1,0 +1,200 @@
+name: Release
+
+# A v* tag builds, signs and publishes. Running it by hand is a dry run: build and package only.
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  PUBLISH: ${{ startsWith(github.ref, 'refs/tags/v') }}
+
+jobs:
+  version:
+    runs-on: ubuntu-24.04
+    outputs:
+      version: ${{ steps.v.outputs.version }}
+    steps:
+      - uses: actions/checkout@v7
+      - id: v
+        run: |
+          version=$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -n 1)
+          if [ "${PUBLISH}" = true ] && [ "${GITHUB_REF_NAME}" != "v${version}" ]; then
+            echo "tag ${GITHUB_REF_NAME} does not match Cargo.toml version ${version}" >&2
+            exit 1
+          fi
+          echo "version=${version}" >> "${GITHUB_OUTPUT}"
+
+  macos:
+    needs: version
+    runs-on: macos-latest
+    env:
+      VERSION: ${{ needs.version.outputs.version }}
+      MACOSX_DEPLOYMENT_TARGET: "13.0"
+    steps:
+      - uses: actions/checkout@v7
+      - name: Install the Metal toolchain
+        run: xcrun -f metal || xcodebuild -downloadComponent MetalToolchain
+      - run: rustup toolchain install && rustup target add aarch64-apple-darwin x86_64-apple-darwin
+      - run: cargo build --release --locked --workspace --target aarch64-apple-darwin --target x86_64-apple-darwin
+      - run: packaging/macos/bundle.sh "${VERSION}" dist
+
+      - name: Import the signing certificate
+        if: env.PUBLISH == 'true'
+        env:
+          CERT_P12: ${{ secrets.MACOS_CERT_P12 }}
+          CERT_PASSWORD: ${{ secrets.MACOS_CERT_PASSWORD }}
+        run: |
+          kc="${RUNNER_TEMP}/signing.keychain-db"
+          kc_pass=$(openssl rand -hex 16)
+          security create-keychain -p "${kc_pass}" "${kc}"
+          security set-keychain-settings -lut 21600 "${kc}"
+          security unlock-keychain -p "${kc_pass}" "${kc}"
+          printf '%s' "${CERT_P12}" | base64 --decode > "${RUNNER_TEMP}/cert.p12"
+          security import "${RUNNER_TEMP}/cert.p12" -k "${kc}" -P "${CERT_PASSWORD}" -T /usr/bin/codesign
+          security set-key-partition-list -S apple-tool:,apple: -k "${kc_pass}" "${kc}" >/dev/null
+          security list-keychains -d user -s "${kc}"
+      - name: Sign the app
+        if: env.PUBLISH == 'true'
+        env:
+          SIGN_IDENTITY: ${{ secrets.MACOS_SIGN_IDENTITY }}
+        run: |
+          codesign --force --options runtime --timestamp --sign "${SIGN_IDENTITY}" dist/rosamta.app/Contents/MacOS/rosamta
+          codesign --force --options runtime --timestamp --sign "${SIGN_IDENTITY}" dist/rosamta.app
+
+      - run: hdiutil create -volname rosamta -srcfolder dist/rosamta.app -ov -format UDZO "dist/rosamta-${VERSION}-macos-universal.dmg"
+
+      - name: Sign, notarize and staple the disk image
+        if: env.PUBLISH == 'true'
+        env:
+          SIGN_IDENTITY: ${{ secrets.MACOS_SIGN_IDENTITY }}
+          NOTARY_KEY: ${{ secrets.MACOS_NOTARY_KEY }}
+          NOTARY_KEY_ID: ${{ secrets.MACOS_NOTARY_KEY_ID }}
+          NOTARY_ISSUER: ${{ secrets.MACOS_NOTARY_ISSUER }}
+        run: |
+          dmg="dist/rosamta-${VERSION}-macos-universal.dmg"
+          codesign --force --timestamp --sign "${SIGN_IDENTITY}" "${dmg}"
+          printf '%s' "${NOTARY_KEY}" | base64 --decode > "${RUNNER_TEMP}/notary.p8"
+          xcrun notarytool submit "${dmg}" --key "${RUNNER_TEMP}/notary.p8" \
+            --key-id "${NOTARY_KEY_ID}" --issuer "${NOTARY_ISSUER}" --wait
+          xcrun stapler staple "${dmg}"
+          spctl --assess --type open --context context:primary-signature -v "${dmg}"
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: release-macos
+          path: dist/*.dmg
+
+  linux:
+    needs: version
+    strategy:
+      matrix:
+        include:
+          - arch: x86_64
+            runner: ubuntu-24.04
+          - arch: aarch64
+            runner: ubuntu-24.04-arm
+    runs-on: ${{ matrix.runner }}
+    env:
+      VERSION: ${{ needs.version.outputs.version }}
+      TARGET: ${{ matrix.arch }}-unknown-linux-gnu
+    steps:
+      - uses: actions/checkout@v7
+      - name: Install GPUI build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends gcc g++ pkg-config libfontconfig-dev libwayland-dev libxkbcommon-x11-dev libx11-xcb-dev libzstd-dev
+      - run: pip install --break-system-packages ziglang
+      - run: rustup toolchain install
+      - run: cargo install --locked cargo-zigbuild cargo-deb cargo-generate-rpm
+      # Link against glibc 2.28 so the packages install on every distro in tests/docker.
+      - run: cargo zigbuild --release --locked --workspace --target "${TARGET}.2.28"
+        env:
+          # The runner's shared libraries reference newer glibc; the target system supplies its own copies.
+          RUSTFLAGS: -C link-arg=-Wl,--allow-shlib-undefined
+      - run: cargo deb --no-build -p rosamta --target "${TARGET}" -o dist/
+      - run: cargo generate-rpm -p crates/rosamta --target "${TARGET}" -o dist/
+      - name: Tarball
+        run: |
+          dir="rosamta-${VERSION}-linux-${{ matrix.arch }}"
+          mkdir -p "${dir}"
+          cp "target/${TARGET}/release/rosamta" "target/${TARGET}/release/rosamta-gui" LICENSE THIRD_PARTY_NOTICES.md "${dir}/"
+          ln -s rosamta "${dir}/rsmt"
+          tar -czf "dist/${dir}.tar.gz" "${dir}"
+      - uses: actions/upload-artifact@v7
+        with:
+          name: release-linux-${{ matrix.arch }}
+          path: dist/*
+
+  publish:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [version, macos, linux]
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          path: dist
+          merge-multiple: true
+      - run: gh release create "${GITHUB_REF_NAME}" dist/* --repo "${GITHUB_REPOSITORY}" --generate-notes
+
+  homebrew:
+    needs: [version, publish]
+    runs-on: ubuntu-24.04
+    env:
+      VERSION: ${{ needs.version.outputs.version }}
+      TAP: ${{ vars.HOMEBREW_TAP }}
+      GH_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+    steps:
+      - uses: actions/checkout@v7
+      - name: Open a pull request on the tap
+        run: |
+          dmg="rosamta-${VERSION}-macos-universal.dmg"
+          gh release download "v${VERSION}" --repo "${GITHUB_REPOSITORY}" --pattern "${dmg}"
+          sha=$(sha256sum "${dmg}" | cut -d ' ' -f 1)
+          gh auth setup-git
+          gh repo clone "${TAP}" tap
+          cd tap
+          git switch -c "rosamta-${VERSION}"
+          mkdir -p Casks
+          sed -e "s/@VERSION@/${VERSION}/" -e "s/@SHA256@/${sha}/" -e "s#@REPO@#${GITHUB_REPOSITORY}#g" \
+            ../packaging/homebrew/rosamta.rb.in > Casks/rosamta.rb
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add Casks/rosamta.rb
+          git commit -m "rosamta ${VERSION}"
+          git push origin "rosamta-${VERSION}"
+          gh pr create --repo "${TAP}" --title "rosamta ${VERSION}" --body "Update rosamta to ${VERSION}."
+
+  aur:
+    needs: [version, publish]
+    runs-on: ubuntu-24.04
+    env:
+      VERSION: ${{ needs.version.outputs.version }}
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v7
+      - name: Fill in the PKGBUILD
+        run: |
+          for arch in x86_64 aarch64; do
+            gh release download "v${VERSION}" --repo "${GITHUB_REPOSITORY}" --pattern "rosamta-${VERSION}-linux-${arch}.tar.gz"
+          done
+          sed -e "s/@VERSION@/${VERSION}/" -e "s#@REPO@#${GITHUB_REPOSITORY}#" \
+            -e "s/@SHA256_X86_64@/$(sha256sum "rosamta-${VERSION}-linux-x86_64.tar.gz" | cut -d ' ' -f 1)/" \
+            -e "s/@SHA256_AARCH64@/$(sha256sum "rosamta-${VERSION}-linux-aarch64.tar.gz" | cut -d ' ' -f 1)/" \
+            packaging/aur/PKGBUILD.in > PKGBUILD
+      - uses: KSXGitHub/github-actions-deploy-aur@v4
+        with:
+          pkgname: rosamta-bin
+          pkgbuild: ./PKGBUILD
+          commit_username: ${{ vars.AUR_USERNAME }}
+          commit_email: ${{ vars.AUR_EMAIL }}
+          ssh_private_key: ${{ secrets.AUR_SSH_PRIVATE_KEY }}
+          commit_message: Update to ${{ needs.version.outputs.version }}
