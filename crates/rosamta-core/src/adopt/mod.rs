@@ -1055,6 +1055,27 @@ pub(crate) fn take_item(ctx: &Context, id: u32) -> Result<(QueueItem, Queue)> {
     Ok((item, queue))
 }
 
+/// The rc file content an item stands for, as it is now.
+fn candidate_of(ctx: &Context, id: u32, item: &QueueItem) -> Result<Candidate> {
+    scan(ctx)?
+        .into_iter()
+        .find(|candidate| candidate.file == item.file && candidate.hash == item.hash)
+        .ok_or_else(|| {
+            Error::Usage(format!(
+                "review item {id} changed since it was listed; run `rsmt review`"
+            ))
+        })
+}
+
+/// What accepting an rc file item would write, writing nothing.
+pub fn preview(ctx: &Context, id: u32, scope: Scope) -> Result<Plan> {
+    let (item, _) = take_item(ctx, id)?;
+    if item.dotfile.is_some() {
+        return Err(Error::Usage(format!("review item {id} is a dotfile")));
+    }
+    plan(ctx, &[candidate_of(ctx, id, &item)?], scope)
+}
+
 /// `rsmt review accept <id>`.
 pub fn accept(ctx: &Context, id: u32, scope: Scope) -> Result<Vec<Adoption>> {
     let (item, queue) = take_item(ctx, id)?;
@@ -1062,14 +1083,7 @@ pub fn accept(ctx: &Context, id: u32, scope: Scope) -> Result<Vec<Adoption>> {
         crate::dotfiles::review::keep(ctx, id, dotfile, scope)?;
         return Ok(Vec::new());
     }
-    let candidate = scan(ctx)?
-        .into_iter()
-        .find(|candidate| candidate.file == item.file && candidate.hash == item.hash)
-        .ok_or_else(|| {
-            Error::Usage(format!(
-                "review item {id} changed since it was listed; run `rsmt review`"
-            ))
-        })?;
+    let candidate = candidate_of(ctx, id, &item)?;
     let adopted = adopt(ctx, &[candidate], scope)?;
     let store = Store::new(ctx.paths.state());
     store.save_queue(&queue)?;

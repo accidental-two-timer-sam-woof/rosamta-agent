@@ -282,3 +282,37 @@ pub(crate) fn join_with(
         })(),
     )
 }
+
+/// The URL of `origin`, if the repo has one.
+pub fn remote(repo_dir: &Path) -> Option<String> {
+    git::run(repo_dir, &["remote", "get-url", "origin"])
+        .ok()
+        .map(|url| url.trim().to_string())
+        .filter(|url| !url.is_empty())
+}
+
+/// A commit as status screens list it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CommitInfo {
+    pub at: u64,
+    pub hash: String,
+    pub subject: String,
+}
+
+/// The newest `count` commits of the git repo at `dir`; none when it has none.
+pub fn recent_commits(dir: &Path, count: usize) -> Vec<CommitInfo> {
+    let count = format!("--max-count={count}");
+    let Ok(text) = git::run(dir, &["log", &count, "--format=%ct%x09%h%x09%s"]) else {
+        return Vec::new();
+    };
+    text.lines()
+        .filter_map(|line| {
+            let mut parts = line.splitn(3, '\t');
+            Some(CommitInfo {
+                at: parts.next()?.parse().ok()?,
+                hash: parts.next()?.to_string(),
+                subject: parts.next()?.to_string(),
+            })
+        })
+        .collect()
+}

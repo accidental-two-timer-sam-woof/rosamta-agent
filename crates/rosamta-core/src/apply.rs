@@ -838,6 +838,35 @@ pub fn restore_original(ctx: &Context) -> Result<Vec<PathBuf>> {
     Ok(paths)
 }
 
+/// One shell on this host, for status screens.
+#[derive(Debug, Clone)]
+pub struct ShellStatus {
+    pub shell: Shell,
+    pub installed: bool,
+    /// Major and minor version, when the shell reports one.
+    pub version: Option<(u32, u32)>,
+    /// Startup files holding rosamta's block.
+    pub hooked: Vec<PathBuf>,
+}
+
+/// Every supported shell: whether it is installed and where it is hooked.
+pub fn shells(ctx: &Context) -> Result<Vec<ShellStatus>> {
+    let installed = ctx.installed();
+    let env = ctx.hook_env(&installed);
+    Shell::ALL
+        .iter()
+        .map(|&shell| {
+            let found = installed.iter().find(|found| found.shell == shell);
+            Ok(ShellStatus {
+                shell,
+                installed: found.is_some(),
+                version: found.and_then(|found| found.version),
+                hooked: hooks::hooked_files(shell, &env)?,
+            })
+        })
+        .collect()
+}
+
 /// Today's UTC date as YYYY-MM-DD.
 fn today() -> String {
     crate::time::date(crate::time::now())

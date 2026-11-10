@@ -113,6 +113,15 @@ fn check_id(id: &str) -> Result<()> {
     }
 }
 
+/// Set one top-level setting in `host.toml`, keeping its comments, and
+/// check that the file still reads.
+pub fn set(paths: &Paths, key: &str, value: impl Into<toml_edit::Value>) -> Result<()> {
+    edit_toml(&paths.host_config(), |doc| {
+        edit::set_value(&mut doc[key], value)
+    })?;
+    load(&paths.host_config()).map(drop)
+}
+
 pub fn add_tag(paths: &Paths, tag: &str) -> Result<bool> {
     let tag = tag.trim();
     if tag.is_empty() {
