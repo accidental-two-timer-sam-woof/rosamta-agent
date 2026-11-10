@@ -41,18 +41,36 @@ pub fn publish(ctx: &Context) -> Result<Published> {
 
 pub fn pull(ctx: &Context) -> Result<Pulled> {
     let _lock = adopt::lock(ctx)?;
-    pull_locked(ctx)
+    pull_locked(ctx, true)
 }
 
 /// Pull, then Publish.
 pub fn sync(ctx: &Context) -> Result<Published> {
     let _lock = adopt::lock(ctx)?;
-    let pulled = pull_locked(ctx)?;
+    sync_locked(ctx)
+}
+
+fn sync_locked(ctx: &Context) -> Result<Published> {
+    let pulled = pull_locked(ctx, true)?;
     let mut published = publish_locked(ctx, true)?;
     if pulled.commits > 0 {
         published.pulled = Some(pulled);
     }
     Ok(published)
+}
+
+/// The background service's Sync: with the publish policy `manual`, only
+/// Pull, leave edits the user has not committed alone and count unpushed
+/// commits.
+pub fn sync_per_policy(ctx: &Context) -> Result<()> {
+    let _lock = adopt::lock(ctx)?;
+    if host::load(&ctx.paths.host_config())?.publish == SyncPolicy::Auto {
+        return sync_locked(ctx).map(drop);
+    }
+    pull_locked(ctx, false)?;
+    let repo_dir = ctx.paths.repo();
+    let unpushed = Remote::required(&repo_dir)?.unpushed(&repo_dir)?;
+    state::update(ctx.paths.state(), |state| state.unpushed = unpushed)
 }
 
 /// After rosamta committed to the repo: push when the publish policy is
@@ -266,7 +284,7 @@ fn publish_locked(ctx: &Context, commit_edits: bool) -> Result<Published> {
             Err(Error::Git { message, .. })
                 if !retry && git::classify(&message) == Failure::Rejected =>
             {
-                published.pulled = Some(pull_locked(ctx)?);
+                published.pulled = Some(pull_locked(ctx, commit_edits)?);
                 remote = Remote::required(&repo_dir)?;
                 continue;
             }
@@ -316,11 +334,13 @@ fn commit_pending(ctx: &Context, _repo_dir: &Path) -> Result<bool> {
     commit_scanned(ctx, &[], None)
 }
 
-/// Commit the changes under `paths` (every change when empty) once the
-/// secret scan passes; `message` defaults to one naming what changed. A
-/// signing failure is recorded and returned as an error.
+/// Stage the changes under `paths` (every change when empty) and commit
+/// exactly what the secret scan passed; `message` defaults to one naming
+/// what changed. A commit that fails, to sign or otherwise, is recorded and
+/// returned as an error.
 pub(crate) fn commit_scanned(ctx: &Context, paths: &[&str], message: Option<&str>) -> Result<bool> {
     let repo_dir = ctx.paths.repo();
+    git::ensure_on_branch(&repo_dir)?;
     let limit = |args: &[&'static str]| {
         let mut all: Vec<&str> = args.to_vec();
         if !paths.is_empty() {
@@ -350,12 +370,16 @@ pub(crate) fn commit_scanned(ctx: &Context, paths: &[&str], message: Option<&str
         return Err(secret_blocked(ctx, &hits, None));
     }
     let message = message.map_or_else(|| edit_message(&status), str::to_string);
-    match git::commit(&repo_dir, &message, paths)? {
-        Commit::Clean => Ok(false),
-        Commit::Created => Ok(true),
-        Commit::SigningFailed(message) => {
+    match git::commit_staged(&repo_dir, &message, paths) {
+        Ok(Commit::Clean) => Ok(false),
+        Ok(Commit::Created) => Ok(true),
+        Ok(Commit::SigningFailed(message)) => {
             signing_blocked(ctx, &message)?;
             Err(Error::Sync(signing(&message)))
+        }
+        Err(err) => {
+            record_publish(ctx, Attempt::new(Outcome::Failed, Some(err.to_string())))?;
+            Err(err)
         }
     }
 }
@@ -405,14 +429,12 @@ fn edit_message(status: &str) -> String {
     format!("edit({scope}): {}", parts.join(", "))
 }
 
-fn pull_locked(ctx: &Context) -> Result<Pulled> {
+/// `commit_edits`: commit edits the user has not committed before the
+/// rebase; otherwise they are set aside during it and put back.
+fn pull_locked(ctx: &Context, commit_edits: bool) -> Result<Pulled> {
     let repo_dir = ctx.paths.repo();
     // A rebase cut short (the process was killed) must not stay half done.
-    let rebasing = ["rebase-merge", "rebase-apply"].into_iter().any(|name| {
-        git::run(&repo_dir, &["rev-parse", "--git-path", name])
-            .is_ok_and(|path| repo_dir.join(path.trim()).exists())
-    });
-    if rebasing {
+    if git::rebasing(&repo_dir) {
         git::run(&repo_dir, &["rebase", "--abort"])?;
     }
     let mut remote = Remote::required(&repo_dir)?;
@@ -436,8 +458,22 @@ fn pull_locked(ctx: &Context) -> Result<Pulled> {
         record_pull(ctx, Attempt::new(Outcome::Failed, Some(err.to_string())))?;
         return Err(err);
     }
-    commit_pending(ctx, &repo_dir)?;
-    rebase(ctx, &repo_dir, &upstream)?;
+    let committed = if commit_edits {
+        let head = git::run(&repo_dir, &["rev-parse", "HEAD"])?;
+        commit_pending(ctx, &repo_dir)
+            .map_err(|err| edits_blocked(ctx, err))?
+            .then_some(head)
+    } else {
+        check_edits(ctx, &repo_dir, &upstream)?;
+        None
+    };
+    if let Err(err) = rebase(ctx, &repo_dir, &upstream) {
+        // What was committed above goes back to being edits.
+        if let Some(head) = committed {
+            git::run(&repo_dir, &["reset", "--quiet", head.trim()])?;
+        }
+        return Err(err);
+    }
     let unpushed = remote.unpushed(&repo_dir)?;
     state::update(ctx.paths.state(), |state| state.unpushed = unpushed)?;
     // A host that never applied keeps its shells untouched until it does.
@@ -474,10 +510,43 @@ fn check_format(repo_dir: &Path, upstream: &str) -> Result<()> {
     repo::ensure_supported(manifest.format)
 }
 
-/// Rebase local commits onto `upstream`; on any failure, abort so the repo
-/// is exactly as before.
+/// Pull stopped because the edits could not be committed. An `Error::Sync`
+/// was recorded for Publish already, and stops Pull for the same reason.
+fn edits_blocked(ctx: &Context, err: Error) -> Error {
+    let recorded = state::update(ctx.paths.state(), |state| {
+        state.pull = match &err {
+            Error::Sync(_) => state.publish.clone(),
+            other => Some(Attempt::new(Outcome::Failed, Some(other.to_string()))),
+        }
+    });
+    match recorded {
+        Ok(()) => err,
+        Err(recording) => recording,
+    }
+}
+
+/// Edits set aside during the rebase would conflict when put back on files
+/// the remote changed too: stop before the rebase instead.
+fn check_edits(ctx: &Context, repo_dir: &Path, upstream: &str) -> Result<()> {
+    let edited = git::run(repo_dir, &["diff", "--name-only", "-z", "HEAD"])?;
+    let incoming = format!("HEAD...{upstream}");
+    let incoming = git::run(repo_dir, &["diff", "--name-only", "-z", &incoming])?;
+    let edited: Vec<&str> = edited.split('\0').collect();
+    let files: Vec<String> = incoming
+        .split('\0')
+        .filter(|file| !file.is_empty() && edited.contains(file))
+        .map(str::to_string)
+        .collect();
+    if files.is_empty() {
+        return Ok(());
+    }
+    Err(conflict(ctx, files))
+}
+
+/// Rebase local commits onto `upstream`, setting edits not committed aside
+/// meanwhile; on any failure, abort so the repo is exactly as before.
 fn rebase(ctx: &Context, repo_dir: &Path, upstream: &str) -> Result<()> {
-    let Err(err) = git::run(repo_dir, &["rebase", "--quiet", upstream]) else {
+    let Err(err) = git::run(repo_dir, &["rebase", "--quiet", "--autostash", upstream]) else {
         return Ok(());
     };
     let files: Vec<String> = git::run(repo_dir, &["diff", "--name-only", "--diff-filter=U"])
@@ -486,33 +555,96 @@ fn rebase(ctx: &Context, repo_dir: &Path, upstream: &str) -> Result<()> {
         .map(str::to_string)
         .collect();
     git::run(repo_dir, &["rebase", "--abort"])?;
+    if !files.is_empty() {
+        return Err(conflict(ctx, files));
+    }
     let message = match &err {
         Error::Git { message, .. } => message.clone(),
         other => other.to_string(),
     };
-    let (mut attempt, text) = if !files.is_empty() {
-        let text = format!(
-            "pull stopped: changed both here and on the remote:\n  {}",
-            files.join("\n  ")
-        );
-        (Attempt::new(Outcome::Conflict, Some(text.clone())), text)
-    } else if git::classify(&message) == Failure::Signing {
-        let text = signing(&message);
-        (Attempt::new(Outcome::Blocked, Some(text.clone())), text)
+    let (outcome, text) = if git::classify(&message) == Failure::Signing {
+        (Outcome::Blocked, signing(&message))
     } else {
-        (
-            Attempt::new(Outcome::Failed, Some(message.clone())),
-            message,
-        )
+        (Outcome::Failed, message)
     };
-    attempt.files = files;
-    record_pull(ctx, attempt)?;
+    record_pull(ctx, Attempt::new(outcome, Some(text.clone())))?;
     Err(Error::Sync(text))
+}
+
+/// Record that Pull stopped on files changed both here and on the remote.
+fn conflict(ctx: &Context, files: Vec<String>) -> Error {
+    let text = format!(
+        "pull stopped: changed both here and on the remote:\n  {}",
+        files.join("\n  ")
+    );
+    let mut attempt = Attempt::new(Outcome::Conflict, Some(text.clone()));
+    attempt.files = files;
+    match record_pull(ctx, attempt) {
+        Ok(()) => Error::Sync(text),
+        Err(err) => err,
+    }
 }
 
 #[cfg(test)]
 mod tests {
+    use std::ffi::OsString;
+
     use super::*;
+    use crate::paths::Paths;
+
+    /// With `publish = "manual"` the background service's sync only pulls.
+    #[test]
+    fn manual_publish_policy_keeps_periodic_sync_to_a_pull() {
+        git::tests::isolate();
+        let dir = tempfile::tempdir().unwrap();
+        let home = dir.path().join("home");
+        let ctx = Context {
+            paths: Paths::from_vars(|name| (name == "HOME").then(|| OsString::from(&home)))
+                .unwrap(),
+            home: home.clone(),
+            path_var: String::new(),
+        };
+        std::fs::create_dir_all(ctx.paths.host_config().parent().unwrap()).unwrap();
+        std::fs::write(
+            ctx.paths.host_config(),
+            "id = \"a\"\npublish = \"manual\"\n",
+        )
+        .unwrap();
+        repo::init_new(&ctx.paths).unwrap();
+        let repo_dir = ctx.paths.repo();
+        let bare = dir.path().join("remote.git");
+        let bare_url = bare.to_str().unwrap();
+        git::run(dir.path(), &["init", "--quiet", "--bare", "remote.git"]).unwrap();
+        git::run(&repo_dir, &["remote", "add", "origin", bare_url]).unwrap();
+        publish(&ctx).unwrap();
+        // Another host pushes a module.
+        let other = dir.path().join("other");
+        git::clone(bare_url, &other, &[]).unwrap();
+        std::fs::create_dir_all(other.join("modules")).unwrap();
+        std::fs::write(other.join("modules/b.toml"), "[env]\nB = \"1\"\n").unwrap();
+        git::commit_all(&other, "b").unwrap();
+        git::run(&other, &["push", "--quiet"]).unwrap();
+        // This host commits a module, then edits it by hand.
+        std::fs::create_dir_all(repo_dir.join("modules")).unwrap();
+        std::fs::write(repo_dir.join("modules/a.toml"), "[env]\nA = \"1\"\n").unwrap();
+        git::commit_all(&repo_dir, "a").unwrap();
+        std::fs::write(repo_dir.join("modules/a.toml"), "[env]\nA = \"2\"\n").unwrap();
+        let remote_head = git::run(&bare, &["rev-parse", "HEAD"]).unwrap();
+
+        sync_per_policy(&ctx).unwrap();
+        assert!(repo_dir.join("modules/b.toml").is_file());
+        assert_eq!(
+            git::run(&bare, &["rev-parse", "HEAD"]).unwrap(),
+            remote_head
+        );
+        assert_eq!(
+            git::run(&repo_dir, &["status", "--porcelain"]).unwrap(),
+            " M modules/a.toml\n"
+        );
+        let state = load_state(ctx.paths.state()).unwrap();
+        assert_eq!(state.unpushed, 1);
+        assert_eq!(state.pull.unwrap().outcome, Outcome::Ok);
+    }
 
     #[test]
     fn edit_messages_name_what_changed() {

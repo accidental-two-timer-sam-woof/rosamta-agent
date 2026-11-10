@@ -429,7 +429,7 @@ impl Daemon {
         if self.host.pull != SyncPolicy::Auto {
             return;
         }
-        match sync::sync(&self.ctx) {
+        match sync::sync_per_policy(&self.ctx) {
             Ok(_) => {}
             // No remote yet, or no repo: nothing to sync with.
             Err(err) if err.is_usage() => {}
@@ -545,6 +545,8 @@ impl Daemon {
                 }
             }
         }
+        // Pull and Publish can stop for the same reason.
+        problems.dedup();
         let state_dir = self.ctx.paths.state().to_path_buf();
         let Ok(Some(mut state)) = instance::load(&state_dir) else {
             return;

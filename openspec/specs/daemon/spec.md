@@ -56,7 +56,7 @@ repo 的內容被修改（使用者手動編輯或拉取）後，背景服務 SH
 - **THEN** 新開的 shell 已使用新的 alias，且推送偏好為「自動」時遠端也已更新
 
 ### Requirement: Periodic sync
-拉取偏好為「自動」時，背景服務 SHALL 依設定的間隔執行同步；電腦從睡眠喚醒後 SHALL 立即同步一次。
+拉取偏好為「自動」時，背景服務 SHALL 依設定的間隔執行同步；電腦從睡眠喚醒後 SHALL 立即同步一次。推送偏好為「手動」時，這些同步 SHALL 只拉取，不推送，也不 commit 使用者手動的修改。
 
 #### Scenario: Interval
 - **WHEN** 拉取間隔為 15 分鐘
