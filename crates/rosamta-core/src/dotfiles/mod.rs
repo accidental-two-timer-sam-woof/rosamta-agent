@@ -151,5 +151,18 @@ pub fn select(manifest: &DotfileManifest, host: &HostFacts) -> BTreeMap<PathBuf,
         .collect()
 }
 
+/// Whether an encrypted dotfile of this host waits for the passphrase.
+pub fn needs_key(ctx: &crate::apply::Context) -> Result<bool> {
+    if !crypt::locked(ctx)? {
+        return Ok(false);
+    }
+    let host = crate::adopt::host_config(ctx)?;
+    Ok(
+        select(&load(&ctx.paths.repo())?, &HostFacts::current(&host))
+            .values()
+            .any(|choice| matches!(choice, Choice::Use(entry) if entry.encrypted)),
+    )
+}
+
 #[cfg(test)]
 mod tests;

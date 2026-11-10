@@ -403,3 +403,55 @@ fn an_invalid_host_toml_is_waited_out() {
         log(&home).contains("scanned rc files")
     });
 }
+
+/// A HOME whose `~/.config/app/settings.json` is a copied dotfile.
+fn with_copied_dotfile(adopt: &str) -> (Home, std::path::PathBuf) {
+    let home = hooked();
+    set_host(&home, "adopt", adopt);
+    let target = home.root.join(".config/app/settings.json");
+    fs::create_dir_all(target.parent().unwrap()).unwrap();
+    fs::write(&target, "a\n").unwrap();
+    home.cmd("rsmt")
+        .args(["add", "--copy"])
+        .arg(&target)
+        .assert()
+        .success();
+    (home, target)
+}
+
+/// What an app saving its settings does: write a new file, rename it over.
+fn save_as_app(target: &Path, text: &str) {
+    let tmp = target.with_extension("tmp");
+    fs::write(&tmp, text).unwrap();
+    fs::rename(&tmp, target).unwrap();
+}
+
+#[test]
+fn an_app_rewriting_a_copied_dotfile_updates_the_repo() {
+    let (home, target) = with_copied_dotfile("\"auto\"");
+    let source = home.repo().join("home/.config/app/settings.json");
+    let _daemon = start(&home);
+    save_as_app(&target, "b\n");
+    wait_for(&home, Duration::from_secs(20), || {
+        fs::read_to_string(&source).unwrap() == "b\n"
+    });
+    assert_eq!(fs::read_to_string(&target).unwrap(), "b\n");
+}
+
+#[test]
+fn a_dotfile_changed_here_is_queued_and_notified() {
+    let (home, target) = with_copied_dotfile("\"ask\"");
+    let _daemon = start(&home);
+    save_as_app(&target, "b\n");
+    wait_for(&home, Duration::from_secs(30), || {
+        // The text itself follows the system language.
+        log(&home).contains("notified: ~/.config/app/settings.json")
+    });
+    let items = queue(&home)["items"].as_array().unwrap().clone();
+    assert_eq!(items.len(), 1);
+    assert_eq!(items[0]["dotfile"]["reason"], "changed");
+    assert_eq!(
+        fs::read_to_string(home.repo().join("home/.config/app/settings.json")).unwrap(),
+        "a\n"
+    );
+}

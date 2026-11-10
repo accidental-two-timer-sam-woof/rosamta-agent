@@ -20,9 +20,10 @@ fn changed_paths_reach_the_right_handlers() {
     // Events report real paths; the temp dir may sit behind a symlink.
     let home = real(dir.path());
     let rc = [home.join(".zshrc")];
+    let dotfiles = [home.join(".gitconfig"), home.join(".config/ghostty")];
     let routes = |paths: &[&str]| {
         let paths: Vec<PathBuf> = paths.iter().map(|path| home.join(path)).collect();
-        route(&ctx, &rc, &paths)
+        route(&ctx, &rc, &dotfiles, &paths)
     };
     let repo = ".local/share/rosamta/repo";
     assert_eq!(
@@ -34,6 +35,16 @@ fn changed_paths_reach_the_right_handlers() {
     );
     // Shell history, written after every command, is not an rc file.
     assert_eq!(routes(&[".zsh_history"]), Routes::default());
+    for path in [".gitconfig", ".config/ghostty/config"] {
+        assert_eq!(
+            routes(&[path]),
+            Routes {
+                dotfiles: true,
+                ..Routes::default()
+            }
+        );
+    }
+    assert_eq!(routes(&[".gitconfig.lock"]), Routes::default());
     assert_eq!(
         routes(&[&format!("{repo}/modules/a.toml")]),
         Routes {
@@ -164,4 +175,28 @@ fn problems_say_whether_publishing_or_pulling_failed() {
         daemon.report_problems();
         assert_eq!(shown.lock().unwrap().last().unwrap(), expected);
     }
+}
+
+#[test]
+fn a_locked_key_is_notified_once() {
+    crate::git::tests::isolate();
+    let dir = tempfile::tempdir().unwrap();
+    let (mut daemon, shown) = daemon(dir.path());
+    crate::repo::init_new(&daemon.ctx.paths).unwrap();
+    let repo = daemon.ctx.paths.repo();
+    std::fs::write(repo.join(dotfiles::crypt::REPO_KEY), "sealed").unwrap();
+    std::fs::create_dir(repo.join("home")).unwrap();
+    std::fs::write(repo.join("home/.netrc"), "sealed").unwrap();
+    std::fs::write(
+        repo.join(dotfiles::MANIFEST),
+        "[[dotfile]]\npath = \".netrc\"\ndeploy = \"copy\"\nencrypted = true\n",
+    )
+    .unwrap();
+    instance::save(daemon.ctx.paths.state(), &instance::DaemonState::default()).unwrap();
+    daemon.report_problems();
+    daemon.report_problems();
+    assert_eq!(
+        *shown.lock().unwrap(),
+        ["Encrypted dotfiles need the passphrase"]
+    );
 }

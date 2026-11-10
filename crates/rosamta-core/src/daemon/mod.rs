@@ -20,11 +20,12 @@ use notify_debouncer_full::{DebounceEventResult, new_debouncer};
 use crate::adopt::{self, Scope};
 use crate::apply::{self, Context};
 use crate::config::{HostConfig, SyncPolicy};
+use crate::dotfiles::review::Reason;
 use crate::error::Result;
 use crate::hooks::HookEnv;
 use crate::i18n::{self, Lang};
 use crate::sync::{self, Outcome};
-use crate::{generated, host, validate};
+use crate::{dotfiles, generated, host, validate};
 
 pub use notify::{Action, Note, Notifier};
 
@@ -91,6 +92,41 @@ fn real(path: &Path) -> PathBuf {
     }
 }
 
+/// Deployed dotfile targets, named as file events name them: the directory
+/// resolved, not the target, which may be a link into the repo.
+fn dotfile_targets(ctx: &Context) -> Vec<PathBuf> {
+    let Ok(deployed) = dotfiles::state::load(ctx.paths.state()) else {
+        return Vec::new();
+    };
+    deployed
+        .entries
+        .keys()
+        .map(|rel| {
+            let target = ctx.home.join(rel);
+            match (target.parent(), target.file_name()) {
+                (Some(dir), Some(name)) => real(dir).join(name),
+                _ => target,
+            }
+        })
+        .collect()
+}
+
+/// Where dotfile changes show: each target's directory, so a file renamed
+/// over the target is seen, and a copied directory with everything in it.
+/// A link to a directory needs nothing more: edits through it land in the repo.
+fn dotfile_watches(targets: &[PathBuf]) -> Vec<(PathBuf, RecursiveMode)> {
+    let mut out = Vec::new();
+    for target in targets {
+        if let Some(dir) = target.parent() {
+            out.push((dir.to_path_buf(), RecursiveMode::NonRecursive));
+        }
+        if std::fs::symlink_metadata(target).is_ok_and(|meta| meta.is_dir()) {
+            out.push((target.clone(), RecursiveMode::Recursive));
+        }
+    }
+    out
+}
+
 fn config_dir(ctx: &Context) -> PathBuf {
     let host = ctx.paths.host_config();
     host.parent().expect("host.toml has a parent").to_path_buf()
@@ -144,10 +180,12 @@ struct Routes {
     host: bool,
     repo: bool,
     rc: bool,
+    dotfiles: bool,
 }
 
-/// `rc` lists the watched rc files, as [`Daemon::rc_files`] names them.
-fn route(ctx: &Context, rc: &[PathBuf], paths: &[PathBuf]) -> Routes {
+/// `rc` lists the watched rc files, as [`Daemon::rc_files`] names them;
+/// `dotfiles` the deployed targets, as [`dotfile_targets`] names them.
+fn route(ctx: &Context, rc: &[PathBuf], dotfiles: &[PathBuf], paths: &[PathBuf]) -> Routes {
     let repo = real(&ctx.paths.repo());
     let local = real(&ctx.paths.local());
     let host = real(&ctx.paths.host_config());
@@ -160,6 +198,9 @@ fn route(ctx: &Context, rc: &[PathBuf], paths: &[PathBuf]) -> Routes {
         repo: paths.iter().any(in_repo),
         // Not everything in HOME: shell history changes after each command.
         rc: paths.iter().any(|path| rc.contains(path)),
+        dotfiles: paths
+            .iter()
+            .any(|path| dotfiles.iter().any(|target| path.starts_with(target))),
     }
 }
 
@@ -257,17 +298,27 @@ pub fn run(
         exe,
         ..Daemon::new(ctx, host, notifier)
     };
-    for (dir, mode) in watch_list(&daemon.ctx, &daemon.env) {
-        if let Err(err) = debouncer.watch(&dir, mode) {
-            daemon.log(&format!("cannot watch {}: {err}", dir.display()));
+    let mut watching = BTreeSet::new();
+    let mut watch = |daemon: &Daemon, list: Vec<(PathBuf, RecursiveMode)>| {
+        for (dir, mode) in list {
+            if !dir.is_dir() || !watching.insert((dir.clone(), mode == RecursiveMode::Recursive)) {
+                continue;
+            }
+            if let Err(err) = debouncer.watch(&dir, mode) {
+                daemon.log(&format!("cannot watch {}: {err}", dir.display()));
+            }
         }
-    }
+    };
+    watch(&daemon, watch_list(&daemon.ctx, &daemon.env));
     drop(events);
     daemon.log("started");
     // Catch up on whatever changed while the daemon was not running.
     daemon.repo_changed();
     daemon.rc_changed();
+    daemon.dotfiles_changed();
     loop {
+        // Dotfiles deployed since: their directories are watched from now on.
+        watch(&daemon, dotfile_watches(&dotfile_targets(&daemon.ctx)));
         match receiver.recv_timeout(TICK) {
             Ok(Event::Changed(paths)) => daemon.changed(&paths),
             Ok(Event::Action(action, ids)) => daemon.act(action, &ids),
@@ -337,7 +388,7 @@ impl Daemon {
     fn changed(&mut self, paths: &[PathBuf]) {
         let mut rc = self.rc_files();
         rc.extend_from_slice(&self.rc_known);
-        let routes = route(&self.ctx, &rc, paths);
+        let routes = route(&self.ctx, &rc, &dotfile_targets(&self.ctx), paths);
         if routes.host {
             let host = self.ctx.paths.host_config();
             match host::load(&host) {
@@ -354,6 +405,52 @@ impl Daemon {
         }
         if routes.rc {
             self.rc_changed();
+        }
+        // After the repo: its apply may already have handled the change.
+        if routes.dotfiles {
+            self.dotfiles_changed();
+        }
+    }
+
+    /// Deploy dotfiles again after a target changed: content written back
+    /// to the repo reaches it as a repo change, which publishes it. A target
+    /// rosamta wrote itself matches its record and is left alone.
+    fn dotfiles_changed(&mut self) {
+        // A host that never applied has no deployed dotfiles to look after.
+        if generated::current_id(&self.ctx.paths.generated()).is_none() {
+            return;
+        }
+        let result = (|| {
+            let _lock = adopt::lock(&self.ctx)?;
+            dotfiles::deploy(&self.ctx)
+        })();
+        match result {
+            Ok(steps) => {
+                let changed = steps
+                    .iter()
+                    .filter(|step| step.action != dotfiles::Action::Unchanged)
+                    .count();
+                if changed > 0 {
+                    self.log(&format!("deployed dotfiles: {changed} changed"));
+                }
+            }
+            Err(err) => self.log(&format!("dotfile deploy failed: {err}")),
+        }
+        self.queue_dotfile_items();
+        self.report_problems();
+    }
+
+    /// Batch dotfile review items not announced yet; deploying puts them in
+    /// the queue without a scan to report them.
+    fn queue_dotfile_items(&mut self) {
+        let Ok(queue) = adopt::queue(&self.ctx) else {
+            return;
+        };
+        for item in queue.iter().filter(|item| item.dotfile.is_some()) {
+            if self.announced.insert(item.id) {
+                self.batch.push(item.id);
+                self.batch_since.get_or_insert_with(Instant::now);
+            }
         }
     }
 
@@ -447,6 +544,7 @@ impl Daemon {
             self.env = self.ctx.hook_env(&self.ctx.installed());
             self.rc_changed();
         }
+        self.queue_dotfile_items();
     }
 
     fn apply_repo(&self) -> std::result::Result<(), (&'static str, String)> {
@@ -486,6 +584,8 @@ impl Daemon {
             Err(err) if err.is_usage() => {}
             Err(err) => self.log(&err.to_string()),
         }
+        // A pull applies dotfiles too.
+        self.queue_dotfile_items();
         self.report_problems();
     }
 
@@ -588,6 +688,17 @@ impl Daemon {
         let waiting: Vec<_> = queue.iter().filter(|item| ids.contains(&item.id)).collect();
         let body = match waiting.as_slice() {
             [] => return,
+            [item] if item.dotfile.is_some() => {
+                let key = match item.dotfile.as_ref().map(|dotfile| dotfile.reason) {
+                    Some(Reason::Changed) => "review.dotfile_changed",
+                    _ => "review.dotfile_conflict",
+                };
+                i18n::text(
+                    self.lang,
+                    key,
+                    &[("file", &adopt::display(&item.file, &self.ctx.home))],
+                )
+            }
             [item] => {
                 let lines = item.end + 1 - item.start;
                 i18n::text(
@@ -620,6 +731,9 @@ impl Daemon {
     /// if it comes back.
     fn report_problems(&mut self) {
         let mut problems: Vec<(&'static str, String)> = self.repo_problem.iter().cloned().collect();
+        if dotfiles::needs_key(&self.ctx).unwrap_or(false) {
+            problems.push(("locked", String::new()));
+        }
         if let Ok(state) = sync::load_state(self.ctx.paths.state()) {
             for (attempt, pull) in [(&state.publish, false), (&state.pull, true)] {
                 let Some(attempt) = attempt else {
