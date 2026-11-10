@@ -1,10 +1,11 @@
 mod adopt;
 mod commands;
 mod daemon;
+mod dotfiles;
 mod github;
 mod sync;
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
 use clap::{Parser, Subcommand, ValueEnum};
@@ -74,6 +75,19 @@ enum Command {
         #[arg(long)]
         yes: bool,
     },
+    /// Start managing files from the home directory as dotfiles
+    Add {
+        #[arg(required = true)]
+        paths: Vec<PathBuf>,
+        /// Deploy as a copy instead of a link
+        #[arg(long)]
+        copy: bool,
+        /// Store encrypted in the repo; deploys as a copy
+        #[arg(long)]
+        encrypt: bool,
+    },
+    /// Stop managing a dotfile, leaving it in place
+    Forget { path: PathBuf },
     /// List changes waiting for a decision, or decide one
     Review {
         #[command(subcommand)]
@@ -242,6 +256,12 @@ fn run(cli: &Cli) -> Result<ExitCode> {
             id: Some(id), yes, ..
         } => adopt::restore(cli.json, *yes, *id),
         Command::Restore { yes, .. } => commands::restore(cli.json, *yes),
+        Command::Add {
+            paths,
+            copy,
+            encrypt,
+        } => dotfiles::add(cli.json, paths, *copy, *encrypt),
+        Command::Forget { path } => dotfiles::forget(cli.json, path),
         Command::Publish => sync::publish(cli.json),
         Command::Pull => sync::pull(cli.json),
         Command::Sync => sync::sync(cli.json),

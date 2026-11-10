@@ -116,8 +116,13 @@ fn unchanged(ctx: &Context, id: u32, item: &DotfileItem) -> Result<Dotfile> {
 pub(crate) fn keep(ctx: &Context, id: u32, item: &DotfileItem, scope: Scope) -> Result<()> {
     let entry = unchanged(ctx, id, item)?;
     let target = ctx.home.join(&item.path);
-    if !entry.encrypted {
-        refuse_secret(&target)?;
+    if !entry.encrypted
+        && let Some((file, rule)) = secret_in(&target)?
+    {
+        return Err(Error::Usage(format!(
+            "{} looks like it contains a secret ({rule}); it stays out of the repo",
+            file.display()
+        )));
     }
     let host = adopt::host_config(ctx)?;
     let repo = ctx.paths.repo();
@@ -167,20 +172,17 @@ pub(crate) fn ignore(ctx: &Context, id: u32, item: &DotfileItem) -> Result<()> {
     deploy::deploy(ctx).map(drop)
 }
 
-/// The first file under `path` whose content looks like a secret.
-fn refuse_secret(path: &Path) -> Result<()> {
+/// The first file under `path` whose content looks like a secret, and the rule.
+pub(crate) fn secret_in(path: &Path) -> Result<Option<(PathBuf, &'static str)>> {
     for file in tree::files(path)? {
         let Ok(text) = std::fs::read_to_string(&file) else {
             continue;
         };
         if let Some(rule) = adopt::secret_rule(&text) {
-            return Err(Error::Usage(format!(
-                "{} looks like it contains a secret ({rule}); it stays out of the repo",
-                file.display()
-            )));
+            return Ok(Some((file, rule)));
         }
     }
-    Ok(())
+    Ok(None)
 }
 
 /// Add a declaration at the end of `dotfiles.toml`, leaving the rest as written.
