@@ -9,7 +9,10 @@ use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 use rosamta_core::adopt::{self, QueueItem, Scope};
 use rosamta_core::apply::{self, Context as Core};
-use rosamta_core::dotfiles::{self, review::Reason};
+use rosamta_core::dotfiles::{
+    self,
+    review::{Reason, WaitingFor},
+};
 use rosamta_core::repo;
 
 use super::{Tone, badge, code, diff, empty, header, mono};
@@ -34,6 +37,10 @@ pub fn detail(item: &QueueItem, scope: Scope) -> Detail {
     let read = || -> rosamta_core::Result<Detail> {
         let core = Core::from_env()?;
         if let Some(dotfile) = &item.dotfile {
+            if dotfile.waiting.is_some() {
+                // Nothing rendered yet to compare; `selected` shows what it waits for.
+                return Ok(Detail::Dotfile(String::new()));
+            }
             return Ok(Detail::Dotfile(dotfiles::review::diff(&core, dotfile)?));
         }
         let plan = adopt::preview(&core, item.id, scope)?;
@@ -67,7 +74,16 @@ pub fn item_badge(item: &QueueItem) -> (&'static str, Tone) {
     match item.dotfile.as_ref().map(|dotfile| dotfile.reason) {
         Some(Reason::Conflict) => ("badge.conflict", Tone::Warn),
         Some(Reason::Changed) => ("badge.changed", Tone::Accent),
+        Some(Reason::Waiting) => ("badge.waiting", Tone::Plain),
         None => ("badge.adopt", Tone::Accent),
+    }
+}
+
+fn waiting_text(waiting: &WaitingFor) -> SharedString {
+    match waiting {
+        WaitingFor::Locked { tool } => tf("item.waiting_locked", &[("tool", tool)]),
+        WaitingFor::Command { name } => tf("item.waiting_command", &[("command", name)]),
+        WaitingFor::Unset { vars } => tf("item.waiting_unset", &[("vars", &vars.join(", "))]),
     }
 }
 
@@ -184,6 +200,10 @@ fn selected(app: &Rosamta, cx: &mut Context<Rosamta>) -> Option<impl IntoElement
         .find(|item| Some(item.id) == app.selected)?;
     let id = item.id;
     let busy = app.busy;
+    let waiting = item
+        .dotfile
+        .as_ref()
+        .and_then(|dotfile| dotfile.waiting.as_ref());
     let buttons = if item.dotfile.is_some() {
         h_flex()
             .gap(px(S8))
@@ -247,15 +267,21 @@ fn selected(app: &Rosamta, cx: &mut Context<Rosamta>) -> Option<impl IntoElement
                 this.run(window, cx, move |core| actions::ignore(core, id));
             })),
     );
-    let content = match &app.detail {
-        None => div().into_any_element(),
-        Some(Detail::Error(err)) => div()
+    let content = match (&app.detail, waiting) {
+        // Not a decision: no diff and no buttons until it can render.
+        (_, Some(waiting)) => div()
+            .text_sm()
+            .text_color(p.muted)
+            .child(waiting_text(waiting))
+            .into_any_element(),
+        (None, _) => div().into_any_element(),
+        (Some(Detail::Error(err)), _) => div()
             .text_sm()
             .text_color(p.warn)
             .child(err.clone())
             .into_any_element(),
-        Some(Detail::Dotfile(text)) => diff(text, cx).into_any_element(),
-        Some(Detail::Rc { files, modules }) => v_flex()
+        (Some(Detail::Dotfile(text)), _) => diff(text, cx).into_any_element(),
+        (Some(Detail::Rc { files, modules }), _) => v_flex()
             .gap(px(S16))
             .child(heading(t("item.rc"), cx))
             .children(files.iter().map(|text| diff(text, cx)))
@@ -304,7 +330,7 @@ fn selected(app: &Rosamta, cx: &mut Context<Rosamta>) -> Option<impl IntoElement
                                     .child(item_meta(item, &app.snap.home)),
                             ),
                     )
-                    .child(buttons),
+                    .when(waiting.is_none(), |row| row.child(buttons)),
             )
             .child(content),
     )

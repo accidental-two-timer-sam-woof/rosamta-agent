@@ -43,6 +43,19 @@ impl Action {
 pub struct Note {
     pub body: String,
     pub items: Vec<u32>,
+    /// Items that are not decisions, such as templates waiting for a
+    /// terminal, offer only Show Diff.
+    pub view_only: bool,
+}
+
+impl Note {
+    fn actions(&self) -> &'static [Action] {
+        match (self.items.is_empty(), self.view_only) {
+            (true, _) => &[],
+            (false, true) => &[Action::Review],
+            (false, false) => &Action::ALL,
+        }
+    }
 }
 
 /// `review:3,4` carries the queue IDs through the notification system. A
@@ -133,7 +146,7 @@ mod linux {
                 .body(&note.body);
             let ask = actions && !note.items.is_empty();
             if ask {
-                for action in Action::ALL {
+                for action in note.actions() {
                     notification.action(action.id(), &action.label(self.lang));
                 }
             }
@@ -193,6 +206,7 @@ mod macos {
     use super::*;
 
     const CATEGORY: &str = "review";
+    const VIEW_ONLY: &str = "review-view";
 
     /// UNUserNotificationCenter works only in a process with a bundle ID,
     /// which the daemon has when launchd starts it inside the helper app.
@@ -264,29 +278,33 @@ mod macos {
             center.setDelegate(Some(ProtocolObject::from_ref(&*delegate)));
             // The center holds its delegate weakly.
             std::mem::forget(delegate);
-            let actions: Vec<_> = Action::ALL
-                .into_iter()
-                .map(|action| {
-                    let options = if action == Action::Review {
-                        UNNotificationActionOptions::Foreground
-                    } else {
-                        UNNotificationActionOptions::empty()
-                    };
-                    UNNotificationAction::actionWithIdentifier_title_options(
-                        &NSString::from_str(action.id()),
-                        &NSString::from_str(&action.label(lang)),
-                        options,
-                    )
-                })
-                .collect();
-            let category =
+            let category = |identifier: &str, actions: &[Action]| {
+                let actions: Vec<_> = actions
+                    .iter()
+                    .map(|&action| {
+                        let options = if action == Action::Review {
+                            UNNotificationActionOptions::Foreground
+                        } else {
+                            UNNotificationActionOptions::empty()
+                        };
+                        UNNotificationAction::actionWithIdentifier_title_options(
+                            &NSString::from_str(action.id()),
+                            &NSString::from_str(&action.label(lang)),
+                            options,
+                        )
+                    })
+                    .collect();
                 UNNotificationCategory::categoryWithIdentifier_actions_intentIdentifiers_options(
-                    &NSString::from_str(CATEGORY),
+                    &NSString::from_str(identifier),
                     &NSArray::from_retained_slice(&actions),
                     &NSArray::new(),
                     UNNotificationCategoryOptions::empty(),
-                );
-            center.setNotificationCategories(&NSSet::from_retained_slice(&[category]));
+                )
+            };
+            center.setNotificationCategories(&NSSet::from_retained_slice(&[
+                category(CATEGORY, &Action::ALL),
+                category(VIEW_ONLY, &[Action::Review]),
+            ]));
             let log_state = state.clone();
             let done = RcBlock::new(move |granted: Bool, err: *mut NSError| {
                 let reason = describe(err);
@@ -310,8 +328,13 @@ mod macos {
             let content = UNMutableNotificationContent::new();
             content.setTitle(&NSString::from_str("rosamta"));
             content.setBody(&NSString::from_str(&note.body));
-            if !note.items.is_empty() {
-                content.setCategoryIdentifier(&NSString::from_str(CATEGORY));
+            let category = match note.actions() {
+                [] => None,
+                [Action::Review] => Some(VIEW_ONLY),
+                _ => Some(CATEGORY),
+            };
+            if let Some(category) = category {
+                content.setCategoryIdentifier(&NSString::from_str(category));
             }
             let request = UNNotificationRequest::requestWithIdentifier_content_trigger(
                 &NSString::from_str(&identifier(note)),
@@ -357,6 +380,7 @@ mod tests {
         let note = Note {
             body: String::new(),
             items: vec![3, 14],
+            view_only: false,
         };
         assert_eq!(identifier(&note), "review:3,14");
         assert_eq!(items("review:3,14"), [3, 14]);
@@ -366,6 +390,7 @@ mod tests {
             identifier(&Note {
                 body: body.into(),
                 items: Vec::new(),
+                view_only: false,
             })
         };
         assert_ne!(problem("Pulling failed"), problem("Publishing failed"));

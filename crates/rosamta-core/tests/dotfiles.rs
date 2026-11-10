@@ -812,7 +812,7 @@ fn templates_report_syntax_errors_and_missing_vars() {
 mod templates {
     use super::*;
     use rosamta_core::adopt::{self, Scope};
-    use rosamta_core::dotfiles::review::Reason;
+    use rosamta_core::dotfiles::review::{Reason, WaitingFor};
 
     const TEMPLATE: &str = "[user]\n\tname = {{ host.id }}\n\temail = {{ vars.email }}\n";
 
@@ -880,6 +880,42 @@ mod templates {
             "{steps:?}"
         );
         assert!(!home.at(".npmrc").exists());
+    }
+
+    #[test]
+    fn a_waiting_template_is_listed_but_not_a_decision() {
+        let home = with_template("");
+        home.deploy();
+        let queue = adopt::queue(&home.ctx).unwrap();
+        let item = queue[0].dotfile.as_ref().unwrap();
+        assert_eq!(item.reason, Reason::Waiting);
+        assert_eq!(
+            item.waiting,
+            Some(WaitingFor::Unset {
+                vars: vec!["email".into()]
+            })
+        );
+        let json = serde_json::to_string(&queue[0]).unwrap();
+        assert!(
+            json.contains(r#""reason":"waiting""#) && json.contains(r#""for":"unset""#),
+            "{json}"
+        );
+
+        let id = queue[0].id;
+        let refused = [
+            adopt::accept(&home.ctx, id, Scope::Host).map(drop),
+            adopt::ignore(&home.ctx, id).map(drop),
+            rosamta_core::dotfiles::review::discard(&home.ctx, id).map(drop),
+        ];
+        for result in refused {
+            let err = result.unwrap_err();
+            assert!(err.to_string().contains("not a decision"), "{err}");
+        }
+        assert_eq!(adopt::queue(&home.ctx).unwrap().len(), 1);
+
+        set_email(&home, "a@example.com");
+        assert_eq!(home.deploy(), one(".gitconfig", Action::Copied));
+        assert!(adopt::queue(&home.ctx).unwrap().is_empty());
     }
 
     fn edited() -> (Home, u32) {

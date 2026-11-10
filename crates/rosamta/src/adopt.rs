@@ -107,13 +107,15 @@ pub fn review(json: bool) -> Result<ExitCode> {
     Ok(ExitCode::SUCCESS)
 }
 
-/// `3  ~/.zshrc:12-14  2026-11-10 14:30 UTC  modules/adopted/bun.toml`, or
-/// `4  ~/.gitconfig  2026-11-10 14:31 UTC  differs from the repo`.
+/// `3  ~/.zshrc:12-14  2026-11-10 14:30 UTC  modules/adopted/bun.toml`,
+/// `4  ~/.gitconfig  2026-11-10 14:31 UTC  differs from the repo`, or what a
+/// template waits for.
 fn item_line(ctx: &Context, item: &QueueItem) -> String {
     if let Some(dotfile) = &item.dotfile {
-        let what = match dotfile.reason {
-            Reason::Conflict => "differs from the repo",
-            Reason::Changed => "changed on this host",
+        let what = match (&dotfile.waiting, dotfile.reason) {
+            (Some(waiting), _) => waiting.describe(),
+            (None, Reason::Changed) => "changed on this host".into(),
+            (None, _) => "differs from the repo".into(),
         };
         return format!(
             "{}  {}  {}  {what}",
