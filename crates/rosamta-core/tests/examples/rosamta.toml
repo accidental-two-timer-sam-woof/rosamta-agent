@@ -1,0 +1,3 @@
+# Shared by every host that syncs this repo.
+format = 1
+hosts = ["mbp", "lab-server"]
