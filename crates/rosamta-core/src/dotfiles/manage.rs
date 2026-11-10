@@ -72,6 +72,23 @@ fn refuse_own(ctx: &Context, target: &Path) -> Result<()> {
     Ok(())
 }
 
+/// Shell startup files stay out, wherever this host's shells read them.
+fn refuse_startup(ctx: &Context, rel: &Path, target: &Path) -> Result<()> {
+    let watched = crate::adopt::watched_files(&ctx.hook_env(&ctx.installed()));
+    let file = watched
+        .iter()
+        .map(|watched| watched.path.clone())
+        .find(|file| file.starts_with(target))
+        .or_else(|| super::startup_file(rel).map(|file| ctx.home.join(file)));
+    match file {
+        Some(file) => Err(Error::Usage(format!(
+            "{} is a shell startup file; keep shell settings in modules",
+            file.display()
+        ))),
+        None => Ok(()),
+    }
+}
+
 fn refuse_managed(repo: &Path, rel: &Path) -> Result<()> {
     for entry in super::load(repo)?.dotfile {
         let Some(path) = super::clean(&entry.path) else {
@@ -113,11 +130,18 @@ pub fn add(ctx: &Context, paths: &[PathBuf], copy: bool, encrypt: bool) -> Resul
         }
         let target = ctx.home.join(&rel);
         refuse_own(ctx, &target)?;
+        refuse_startup(ctx, &rel, &target)?;
         refuse_managed(&repo, &rel)?;
         let meta = std::fs::symlink_metadata(&target).map_err(Error::read(&target))?;
         if meta.is_symlink() {
             return Err(Error::Usage(format!(
                 "{} is a symlink; add the file it points to",
+                target.display()
+            )));
+        }
+        if meta.is_dir() && tree::files(&target)?.is_empty() {
+            return Err(Error::Usage(format!(
+                "{} is an empty directory, which git cannot keep",
                 target.display()
             )));
         }

@@ -86,7 +86,7 @@ pub(crate) fn sync_queue(ctx: &Context, waiting: Vec<DotfileItem>) -> Result<()>
 fn current(ctx: &Context, path: &Path) -> Result<(Dotfile, Sides)> {
     let repo = ctx.paths.repo();
     let host = adopt::host_config(ctx)?;
-    let selected = super::select(&super::load(&repo)?, &HostFacts::current(&host));
+    let selected = super::select(&super::usable(&repo)?.0, &HostFacts::current(&host));
     let Some(Choice::Use(entry)) = selected.get(path) else {
         return Err(Error::Usage(format!(
             "{} is no longer a dotfile of this host; run `rsmt review`",

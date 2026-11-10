@@ -264,19 +264,48 @@ fn undeclared_links_become_files() {
 }
 
 #[test]
+fn a_broken_declaration_fails_alone() {
+    let home = Home::new("ask");
+    home.repo_write("home/.vimrc", "set nu\n");
+    home.repo_write("home/.npmrc", "save-exact = true\n");
+    home.repo_write(
+        "dotfiles.toml",
+        "[[dotfile]]\npath = \".vimrc\"\n\n[[dotfile]]\npath = \".npmrc\"\n",
+    );
+    home.deploy();
+    // Another host's add of an empty directory: git did not bring it here.
+    home.repo_write(
+        "dotfiles.toml",
+        "[[dotfile]]\npath = \".vimrc\"\npermissions = \"rw\"\n\n[[dotfile]]\npath = \".npmrc\"\n\n[[dotfile]]\npath = \".config/empty\"\n",
+    );
+    home.repo_write("home/.npmrc", "save-exact = false\n");
+
+    let steps = home.deploy();
+
+    assert!(
+        steps.contains(&(".config/empty".into(), Action::Failed))
+            && steps.contains(&(".vimrc".into(), Action::Failed)),
+        "{steps:?}"
+    );
+    // Still linked: a broken declaration does not release what it deployed.
+    assert!(home.at(".vimrc").symlink_metadata().unwrap().is_symlink());
+    assert_eq!(read(&home.at(".npmrc")), "save-exact = false\n");
+}
+
+#[test]
 fn duplicates_and_templates_are_skipped() {
     let home = Home::new("ask");
-    home.repo_write("home/.zprofile", "");
+    home.repo_write("home/.npmrc", "");
     home.repo_write("home/.gitconfig", "");
     home.repo_write(
         "dotfiles.toml",
         r#"
 [[dotfile]]
-path = ".zprofile"
+path = ".npmrc"
 when = { os = ["macos", "linux"] }
 
 [[dotfile]]
-path = ".zprofile"
+path = ".npmrc"
 
 [[dotfile]]
 path = ".gitconfig"
@@ -287,10 +316,10 @@ deploy = "template"
         home.deploy(),
         [
             (".gitconfig".to_string(), Action::Skipped),
-            (".zprofile".to_string(), Action::Skipped),
+            (".npmrc".to_string(), Action::Skipped),
         ]
     );
-    assert!(!home.at(".zprofile").exists());
+    assert!(!home.at(".npmrc").exists());
 }
 
 #[test]
@@ -667,6 +696,15 @@ mod manage {
         let err = manage::add(&home.ctx, &[home.at(".vimrc")], false, false).unwrap_err();
         assert!(err.to_string().contains("already managed"), "{err}");
         assert!(!home.repo().join("home/.config/gh").exists());
+        write(&home.at(".zshrc"), "alias ll='ls -l'\n");
+        let err = manage::add(&home.ctx, &[home.at(".zshrc")], false, false).unwrap_err();
+        assert!(err.to_string().contains("shell startup file"), "{err}");
+        write(&home.at(".config/fish/config.fish"), "set -x A 1\n");
+        let err = manage::add(&home.ctx, &[home.at(".config/fish")], false, false).unwrap_err();
+        assert!(err.to_string().contains("config.fish"), "{err}");
+        fs::create_dir_all(home.at(".config/empty")).unwrap();
+        let err = manage::add(&home.ctx, &[home.at(".config/empty")], false, false).unwrap_err();
+        assert!(err.to_string().contains("empty directory"), "{err}");
     }
 
     #[test]
