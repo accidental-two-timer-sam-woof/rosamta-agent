@@ -43,6 +43,12 @@ macOS 讀 `scutil --get LocalHostName`，Linux 用 `gethostname()`；去掉 `.lo
 
 每一版格式各有一個遷移函式（`v1 → v2`、`v2 → v3`），依序套用；遷移完成後呼叫 `git commit`，訊息為 `chore(repo): migrate format N to M`。遇到較新的格式時直接回報錯誤，不嘗試部分讀取。
 
+`rsmt validate` 不遷移：驗證不得修改檔案，所以舊格式只回報警告，由下一個會寫入 repo 的操作（例如 `rsmt init <url>`）遷移。
+
+### `host.toml` 的欄位
+
+`id`、`tags`、`adopt`（`auto`／`ask`／`off`）、`adopt_original`（`delete`／`comment`）、`publish` 與 `pull`（`auto`／`manual`）、`pull_interval`（分鐘）、`shell_notice`。第一次建立時把所有欄位連同預設值寫出，讓使用者看得到可調整的項目。
+
 ### `rsmt init`
 
 新建 repo 時執行 `git init` 並建立第一個 commit；加入既有 repo 時呼叫 `git clone`。兩者都不安裝 hook、不接管任何內容；那些步驟在 `add-shell-render` 與 `add-adopt` 中接在 init 之後。
