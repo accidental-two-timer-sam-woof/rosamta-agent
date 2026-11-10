@@ -123,7 +123,7 @@ rsmt review ignore <編號>
 rsmt add ~/.config/nvim ~/.gitconfig
 ```
 
-把檔案或目錄移進 repo 的 `home/`，在 `dotfiles.toml` 加上宣告，再以 symlink 放回原位，並建立一個 commit。之後在其他主機執行 `rsmt apply` 也會部署這些設定檔。內容看起來像 API key 或 token 時，`rsmt add` 會拒絕，請改用 `--encrypt`。
+把檔案或目錄移進 repo 的 `home/`，在 `dotfiles.toml` 加上宣告，再以 symlink 放回原位，並建立一個 commit。之後在其他主機執行 `rsmt apply` 也會部署這些設定檔。內容看起來像 API key 或 token 時，`rsmt add` 會拒絕，請改用 `--encrypt`。shell 的啟動檔（例如 `~/.zshrc`）不能加入，shell 的設定放在 module。
 
 每個設定檔在 `dotfiles.toml` 有一筆宣告，例如：
 
@@ -149,7 +149,7 @@ when = { hosts = ["mbp"] }
 | `source` | repo 中的內容，預設為 `home/<path>` |
 | `deploy` | `link`：symlink 回 repo（預設）；`copy`：複製 |
 | `permissions` | 部署後設定的權限，例如 `"0600"` |
-| `encrypted` | 加密後存在 repo 中，以 `copy` 部署 |
+| `encrypted` | 加密後存在 repo 中，須搭配 `deploy = "copy"` |
 | `when` | 套用範圍，寫法與 module 相同 |
 
 同一個路徑有多筆宣告符合本機時，`when.hosts` 列出本機的那一筆優先。
@@ -205,7 +205,7 @@ git -C ~/.local/share/rosamta/repo remote add origin git@github.com:<你的帳�
 rsmt publish
 ```
 
-接管與還原建立 commit 後會立即推送。在 `~/.config/rosamta/host.toml` 設定 `publish = "manual"` 時，只在執行 `rsmt publish` 或 `rsmt sync` 時推送。
+接管、還原，以及 `rsmt add`、`rsmt forget`、`rsmt review accept` 建立 commit 後會立即推送。在 `~/.config/rosamta/host.toml` 設定 `publish = "manual"` 時，只在執行 `rsmt publish` 或 `rsmt sync` 時推送。
 
 拉取時，這台主機還沒推送的 commit 會接在遠端的變更之後。兩台主機改到同一個檔案的同一處時，拉取會中止並列出這些檔案，repo 維持拉取前的狀態；在 repo 中用 git 合併後，再執行 `rsmt sync`。拉取到的 module 讓 shell 啟動時出現新的錯誤時，repo 保留新內容，shell 繼續使用原本的設定。
 
@@ -253,7 +253,7 @@ rsmt remote github logout
 rsmt daemon enable
 ```
 
-背景服務登入後自動啟動。rc 檔出現新內容時，依接管偏好接管或加入待處理清單；repo 有變動時立即套用；並依拉取偏好定時同步。
+背景服務登入後自動啟動。rc 檔出現新內容時，依接管偏好接管或加入待處理清單；部署的設定檔被修改時，依上面「管理設定檔」的規則處理；repo 有變動時立即套用；並依拉取偏好定時同步。
 
 - macOS：背景服務是 rosamta.app 中的登入項目。系統要求核准時，到「系統設定 › 一般 › 登入項目」允許 rosamta。出現待處理的內容時會發出通知，可以直接選「接管」、「忽略」或「查看差異」。
 - Linux：註冊為 systemd 使用者服務 `rosamta.service`。沒有 systemd 使用者服務的環境（例如容器），請在登入後的 session 中自行執行：
@@ -276,7 +276,7 @@ rsmt daemon disable
 | 設定 | 可用的值 |
 |---|---|
 | `pull` | `auto`：定時同步，電腦從睡眠喚醒後也會同步一次（預設）；`manual`：只在執行 `rsmt sync` 或 `rsmt pull` 時拉取 |
-| `pull_interval` | 定時同步的間隔，單位為分鐘（預設 15） |
+| `pull_interval` | 定時同步的間隔，單位為分鐘（預設 15，至少 1） |
 
 ## 移除 hook
 
@@ -296,19 +296,19 @@ rsmt hook zsh
 rsmt eject
 ```
 
-把目前生效的設定直接寫進各 shell 的設定檔並移除區塊，也停用背景服務；之後即使移除 rosamta，shell 的 PATH、環境變數與 alias 都不變。
+把目前生效的設定直接寫進各 shell 的設定檔並移除區塊，以 symlink 部署的設定檔換成內容相同的一般檔案，也停用背景服務；之後即使移除 rosamta，shell 的 PATH、環境變數與 alias 都不變。
 
 ```sh
 rsmt restore --original
 ```
 
-把 rosamta 改過的每個設定檔還原成第一次修改前的內容，並刪除 rosamta 建立的設定檔。
+把 rosamta 改過的每個設定檔還原成第一次修改前的內容，刪除 rosamta 建立的設定檔，也停用背景服務。
 
 兩個指令都會先顯示差異並要求確認；不在終端機中執行時，要加上 `--yes`。
 
 ## 編輯器支援
 
-`rsmt schema` 輸出各種檔案的 JSON Schema，種類有 `repo`（`rosamta.toml`）、`module` 與 `host`（`host.toml`）：
+`rsmt schema` 輸出各種檔案的 JSON Schema，種類有 `repo`（`rosamta.toml`）、`module`、`host`（`host.toml`）與 `dotfiles`（`dotfiles.toml`）：
 
 ```sh
 rsmt schema module > module.schema.json

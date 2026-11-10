@@ -43,7 +43,7 @@ module 名稱 SHALL 在整個 repo 內唯一；`modules/` 的子目錄只用來�
 - **THEN** rosamta 不 render、不寫入 repo，並提示使用者升級 rosamta
 
 ### Requirement: Host registry
-`rosamta.toml` SHALL 記錄曾經加入這個 repo 的所有 host 識別名稱。host 第一次加入 repo 時，rosamta SHALL 把它的識別名稱加進清單。新 host 從 hostname 產生的識別名稱已在清單中時，rosamta SHALL 依序改用加上 `-2`、`-3` 等後綴中第一個不在清單中的名稱，並在輸出中說明。
+`rosamta.toml` SHALL 記錄曾經加入這個 repo 的所有 host 識別名稱。host 第一次加入 repo 時，rosamta SHALL 把它的識別名稱加進清單。新 host 從 hostname 產生的識別名稱已在清單中時，rosamta SHALL 依序改用加上 `-2`、`-3` 等後綴中第一個不在清單中的名稱，並在輸出中說明。例外：repo 已在本機、只缺 `host.toml` 時（例如中斷的初始化或還原備份），清單中的同名識別名稱最可能就是這台 host，rosamta SHALL 沿用它。
 
 #### Scenario: Second host joins
 - **WHEN** 一台識別名稱為 `lab-server` 的 host 加入既有的 repo
@@ -52,6 +52,10 @@ module 名稱 SHALL 在整個 repo 內唯一；`modules/` 的子目錄只用來�
 #### Scenario: Generated ID already taken
 - **WHEN** 一台沒有 `host.toml` 的 host 加入 repo，它從 hostname 產生的識別名稱 `mbp` 已在 host 清單中
 - **THEN** 這台 host 的識別名稱為 `mbp-2`，`rsmt init` 的輸出說明 `mbp` 已被其他 host 使用
+
+#### Scenario: Local repo without host.toml
+- **WHEN** 本機已有 repo、沒有 `host.toml`，產生的識別名稱 `mbp` 已在 host 清單中，使用者執行 `rsmt init`
+- **THEN** 這台 host 沿用 `mbp`，清單不變
 
 ### Requirement: Strict validation
 `rsmt validate` SHALL 檢查 repo 中所有 TOML 檔的語法與欄位，把未定義的欄位視為錯誤，並回報每個錯誤的檔案、行號與原因；驗證過程 SHALL 不修改任何檔案。
