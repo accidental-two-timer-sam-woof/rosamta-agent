@@ -45,6 +45,24 @@ _Avoid_: install mode, strategy
 決定一個 module 或 dotfile 套用到哪些 host 的條件，依據 OS、架構、host 名稱與 tag。
 _Avoid_: filter, ignore rule
 
+**Secret source**:
+提供 template 秘密值的外部工具，例如 rbw、bw、bws。
+_Avoid_: vault, secret backend
+
+### 套件
+
+**Package**:
+repo 裡宣告某些 host 應該安裝的軟體，以 catalog 裡的名稱指稱。
+_Avoid_: dependency, app
+
+**Catalog**:
+隨 rosamta 發布的資料，把一個 package 名稱對應到各套件管理器的套件 ID。
+_Avoid_: registry, package database
+
+**Bootstrap**:
+在 host 上補裝 repo 已宣告、但尚未安裝的 package。
+_Avoid_: provision, setup
+
 ### 主機與同步
 
 「同步」不是正式用語。依方向分別說 Capture、Publish 或 Pull。
