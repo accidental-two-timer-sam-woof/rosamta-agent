@@ -1,6 +1,6 @@
 //! A host without a repo: create one, or join one by URL.
 
-use gpui_kit::component::button::{Button, ButtonVariants};
+use gpui_kit::component::button::Button;
 use gpui_kit::component::input::Input;
 use gpui_kit::component::{Disableable, h_flex, v_flex};
 use gpui_kit::*;
@@ -45,9 +45,8 @@ pub fn render(app: &Rosamta, cx: &mut Context<Rosamta>) -> impl IntoElement {
                         .gap(px(S12))
                         .child(div().flex_1().text_sm().child(t("setup.new")))
                         .child(
-                            Button::new("create")
+                            crate::pages::prominent(Button::new("create"))
                                 .label(t("setup.create"))
-                                .primary()
                                 .loading(busy)
                                 .on_click(cx.listener(|this, _, window, cx| {
                                     this.run(window, cx, |_| actions::init(None));
@@ -61,7 +60,7 @@ pub fn render(app: &Rosamta, cx: &mut Context<Rosamta>) -> impl IntoElement {
                         .gap(px(S8))
                         .child(div().flex_1().child(Input::new(&app.url)))
                         .child(
-                            Button::new("join")
+                            crate::pages::glass(Button::new("join"), cx)
                                 .label(t("setup.join_button"))
                                 .disabled(busy)
                                 .on_click(cx.listener(|this, _, window, cx| {
