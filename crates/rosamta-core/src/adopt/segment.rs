@@ -328,14 +328,10 @@ pub fn normalize(text: &str, home: &Path) -> String {
         .to_string()
 }
 
-/// FNV-1a, stable across Rust versions and platforms, unlike `DefaultHasher`.
 pub fn hash(normalized: &str) -> String {
-    let mut value: u64 = 0xcbf2_9ce4_8422_2325;
-    for byte in normalized.bytes() {
-        value ^= u64::from(byte);
-        value = value.wrapping_mul(0x0100_0000_01b3);
-    }
-    format!("{value:016x}")
+    let mut hasher = crate::fnv::Fnv::new();
+    hasher.write(normalized.as_bytes());
+    hasher.finish()
 }
 
 #[cfg(test)]

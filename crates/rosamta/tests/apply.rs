@@ -432,3 +432,40 @@ fn eject_keeps_every_shell_the_same_without_rosamta() {
         );
     }
 }
+
+#[test]
+fn apply_deploys_dotfiles_after_a_dry_run() {
+    let home = set_up();
+    home.write("home/.config/ghostty/config", "theme = dark\n");
+    home.write("home/.npmrc", "save-exact = true\n");
+    home.write(
+        "dotfiles.toml",
+        "[[dotfile]]\npath = \".config/ghostty\"\n\n[[dotfile]]\npath = \".npmrc\"\ndeploy = \"copy\"\n",
+    );
+    let ghostty = home.root.join(".config/ghostty");
+    let npmrc = home.root.join(".npmrc");
+    home.cmd("rsmt")
+        .args(["apply", "--dry-run"])
+        .assert()
+        .success()
+        .stdout(
+            predicate::str::contains(format!("Linked {}", ghostty.display()))
+                .and(predicate::str::contains("+save-exact = true")),
+        );
+    assert!(!ghostty.exists() && !npmrc.exists());
+
+    home.cmd("rsmt")
+        .arg("apply")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(format!(
+            "Copied {}",
+            npmrc.display()
+        )));
+    assert_eq!(read(&home, ".config/ghostty/config"), "theme = dark\n");
+    home.cmd("rsmt")
+        .arg("apply")
+        .assert()
+        .success()
+        .stdout("Already up to date\n");
+}

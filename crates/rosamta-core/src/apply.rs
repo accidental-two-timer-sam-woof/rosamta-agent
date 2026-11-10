@@ -257,12 +257,21 @@ pub struct Applied {
     pub shells: Vec<Shell>,
     pub skipped: Vec<String>,
     pub hooks_changed: Vec<PathBuf>,
+    pub dotfiles: Vec<crate::dotfiles::Step>,
 }
 
-/// Render, smoke-test, then switch. On any failure the current version stays.
+/// Render, smoke-test, then switch; then deploy dotfiles. On any failure
+/// the current version stays and no dotfile is touched. The caller holds
+/// the adopt lock.
 pub fn apply(ctx: &Context) -> Result<Applied> {
     migrate(ctx)?;
-    finish(ctx, &[])
+    with_dotfiles(ctx, finish(ctx, &[])?)
+}
+
+/// Deploy dotfiles after the shells switched.
+pub fn with_dotfiles(ctx: &Context, mut applied: Applied) -> Result<Applied> {
+    applied.dotfiles = crate::dotfiles::deploy(ctx)?;
+    Ok(applied)
 }
 
 /// Apply after `change` edits rc files or modules, judging shell startup
@@ -310,6 +319,7 @@ fn finish(ctx: &Context, baselines: &[(Shell, Smoke)]) -> Result<Applied> {
         shells: plan.shells.clone(),
         skipped: plan.skipped.clone(),
         hooks_changed,
+        dotfiles: Vec::new(),
     };
     if applied.up_to_date {
         return Ok(applied);
