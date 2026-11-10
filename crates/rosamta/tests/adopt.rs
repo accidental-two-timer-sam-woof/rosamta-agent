@@ -229,6 +229,14 @@ fn structured_content_becomes_one_module_and_commit() {
         .trim_start_matches("id = ")
         .trim_matches('"')
         .to_string();
+    home.cmd("rsmt")
+        .arg("adopt")
+        .assert()
+        .code(2)
+        .stdout(predicate::str::contains(
+            "~/.zshrc:2-5 → modules/adopted/bun.toml",
+        ))
+        .stderr(predicate::str::contains("--yes"));
     run(&home, &["adopt", "--yes"]);
     let module = read(&home, ".local/share/rosamta/repo/modules/adopted/bun.toml");
     assert!(module.contains("BUN_INSTALL = \"$HOME/.bun\""), "{module}");
