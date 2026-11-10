@@ -1,0 +1,78 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  check:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v7
+      - name: Install GPUI build dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends gcc g++ pkg-config libfontconfig-dev libwayland-dev libxkbcommon-x11-dev libx11-xcb-dev libzstd-dev
+      - name: Install the Metal toolchain
+        if: runner.os == 'macOS'
+        run: xcrun -f metal || xcodebuild -downloadComponent MetalToolchain
+      - run: rustup toolchain install
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo fmt --all --check
+      - run: cargo clippy --workspace --all-targets --locked -- -D warnings
+      - run: cargo test --workspace --locked
+
+  deny:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+      - uses: EmbarkStudios/cargo-deny-action@v2
+
+  linux-binary:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+      - run: sudo apt-get update && sudo apt-get install -y --no-install-recommends musl-tools
+      - run: rustup toolchain install && rustup target add x86_64-unknown-linux-musl
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo build --release --locked -p rosamta --target x86_64-unknown-linux-musl
+      - uses: actions/upload-artifact@v7
+        with:
+          name: rosamta-linux-musl
+          path: |
+            target/x86_64-unknown-linux-musl/release/rosamta
+            target/x86_64-unknown-linux-musl/release/rsmt
+
+  docker:
+    needs: linux-binary
+    strategy:
+      fail-fast: false
+      matrix:
+        image: [ubuntu-22.04, ubuntu-24.04, debian-12, debian-13, fedora, arch, alpine, almalinux-9, rocky-8]
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/download-artifact@v8
+        with:
+          name: rosamta-linux-musl
+          path: bin
+      - run: chmod +x bin/*
+      - run: tests/docker/run.sh "${{ matrix.image }}"
+        env:
+          ROSAMTA_BIN_DIR: bin
