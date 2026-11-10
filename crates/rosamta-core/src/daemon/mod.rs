@@ -7,7 +7,7 @@ pub mod instance;
 pub mod notify;
 pub mod service;
 
-use std::collections::HashSet;
+use std::collections::BTreeSet;
 use std::hash::{DefaultHasher, Hash, Hasher};
 use std::io::Write;
 use std::path::{Path, PathBuf};
@@ -197,8 +197,8 @@ struct Daemon {
     rc_known: Vec<PathBuf>,
     /// Repo and local modules as of the last apply.
     repo_seen: Option<u64>,
-    /// Review items already announced.
-    announced: HashSet<u32>,
+    /// Review items already announced, also before a restart.
+    announced: BTreeSet<u32>,
     batch: Vec<u32>,
     batch_since: Option<Instant>,
     next_sync: Instant,
@@ -256,6 +256,7 @@ pub fn run(
         }
     }
     drop(events);
+    let previous = instance::load(ctx.paths.state()).ok().flatten();
     let mut daemon = Daemon {
         next_sync: Instant::now(),
         host,
@@ -265,7 +266,8 @@ pub fn run(
         rc_seen: None,
         rc_known: Vec::new(),
         repo_seen: None,
-        announced: HashSet::new(),
+        announced: previous
+            .map_or_else(BTreeSet::new, |state| state.announced.into_iter().collect()),
         batch: Vec::new(),
         batch_since: None,
         clock: (Instant::now(), SystemTime::now()),
@@ -538,6 +540,19 @@ impl Daemon {
         let ids = std::mem::take(&mut self.batch);
         self.batch_since = None;
         let queue = adopt::queue(&self.ctx).unwrap_or_default();
+        // Queue IDs are never reused, so ones that left can be forgotten.
+        self.announced
+            .retain(|id| queue.iter().any(|item| item.id == *id));
+        let state_dir = self.ctx.paths.state();
+        if let Ok(Some(mut state)) = instance::load(state_dir) {
+            let announced: Vec<u32> = self.announced.iter().copied().collect();
+            if state.announced != announced {
+                state.announced = announced;
+                if let Err(err) = instance::save(state_dir, &state) {
+                    self.log(&err.to_string());
+                }
+            }
+        }
         let waiting: Vec<_> = queue.iter().filter(|item| ids.contains(&item.id)).collect();
         let body = match waiting.as_slice() {
             [] => return,

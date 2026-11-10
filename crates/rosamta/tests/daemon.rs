@@ -335,6 +335,24 @@ fn changes_close_together_share_one_notification() {
 }
 
 #[test]
+fn a_restart_does_not_announce_the_same_items_again() {
+    let home = hooked();
+    let daemon = start(&home);
+    append(&home.root.join(".profile"), "export ONCE=1\n");
+    wait_for(&home, Duration::from_secs(30), || {
+        log(&home).contains("notified:")
+    });
+    drop(daemon);
+    let _daemon = Daemon(home.spawn("rsmt", &["daemon", "run"]));
+    wait_for(&home, Duration::from_secs(20), || {
+        log(&home).matches("scanned rc files").count() == 3
+    });
+    // Past the batch window, when a new item would be announced.
+    std::thread::sleep(Duration::from_secs(15));
+    assert_eq!(log(&home).matches("notified:").count(), 1, "{}", log(&home));
+}
+
+#[test]
 fn a_problem_is_notified_once_until_it_clears() {
     let home = hooked();
     let _daemon = start(&home);

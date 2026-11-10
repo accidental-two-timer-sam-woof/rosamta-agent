@@ -28,7 +28,7 @@ pub fn run() -> Result<ExitCode> {
             started_at: time::now(),
             version: env!("CARGO_PKG_VERSION").into(),
             environment_error,
-            notified: previous.notified,
+            ..previous
         },
     )?;
     let (events, receiver) = mpsc::channel();
