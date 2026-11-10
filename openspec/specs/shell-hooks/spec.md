@@ -12,16 +12,24 @@ rosamta SHALL 在下列位置安裝 hook：sh 為 `~/.profile`；bash 為 `~/.ba
 - **WHEN** 使用者在 `~/.zshenv` 把 `ZDOTDIR` 設為 `~/.config/zsh`
 - **THEN** rosamta 把 `.zshrc` 的 hook 裝在 `~/.config/zsh/.zshrc`
 
+#### Scenario: ZDOTDIR inherited from zsh
+- **WHEN** `~/.zshenv` 匯出 `ZDOTDIR`，使用者在這個 zsh 中執行 `rsmt apply`
+- **THEN** rosamta 仍把 `.zshenv` 的 hook 裝在 `~/.zshenv`
+
 #### Scenario: fish
 - **WHEN** 使用者安裝 fish 的 hook
 - **THEN** rosamta 建立 `conf.d/rosamta.fish`，不修改 `config.fish`
 
 ### Requirement: Marked block only
-hook SHALL 是以 `# >>> rosamta >>>` 與 `# <<< rosamta <<<` 包住的區塊。rosamta 安裝或更新 hook 時 SHALL 只改動這個區塊，重複安裝 SHALL 不產生第二個區塊。
+hook SHALL 是以 `# >>> rosamta >>>` 與 `# <<< rosamta <<<` 包住的區塊。rosamta 安裝或更新 hook 時 SHALL 只改動這個區塊，重複安裝 SHALL 不產生第二個區塊。檔案中的開始與結束標記不成對時，rosamta SHALL 不修改該檔，並指出該檔。
 
 #### Scenario: Install twice
 - **WHEN** 使用者連續執行兩次 hook 安裝
 - **THEN** 每個 rc 檔中只有一個 rosamta 區塊，區塊外的內容不變
+
+#### Scenario: End marker deleted
+- **WHEN** 使用者刪掉 `# <<< rosamta <<<` 這一行後執行 `rsmt apply`
+- **THEN** `rsmt apply` 以 2 結束並指出該檔，檔案內容不變
 
 ### Requirement: bash login and non-login shells
 bash 的 login 互動 shell 與非 login 互動 shell SHALL 都載入完整的設定。rosamta 需要新建 `~/.bash_profile` 時 SHALL 讓它同時載入 `~/.profile` 與 `~/.bashrc`，避免遮蔽原本的設定。

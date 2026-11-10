@@ -13,11 +13,19 @@
 - **THEN** 輸出顯示新增的腳本內容，generated 目錄與 rc 檔都沒有變動
 
 ### Requirement: Smoke test and rollback
-`rsmt apply` SHALL 在切換之前，以新的 generated script 啟動每個已安裝的互動 shell；若 stderr 出現套用前沒有的新錯誤，SHALL 放棄這次套用、保留原本的版本，並指出造成錯誤的 module。
+`rsmt apply` SHALL 在切換之前，以新的 generated script 啟動每個已安裝的互動 shell，bash 與 zsh 另以互動 login shell 啟動一次；若 stderr 出現套用前沒有的新錯誤，或套用前能在時限內啟動的 shell 逾時，SHALL 放棄這次套用、保留原本的版本，並指出造成錯誤的 module。套用前就已逾時的 shell 再次逾時 SHALL 不算新錯誤。
 
 #### Scenario: Module breaks zsh startup
 - **WHEN** 新的片段 module 讓 zsh 啟動時輸出錯誤
 - **THEN** `rsmt apply` 以 1 結束並列出該 module，新開的 zsh 仍使用套用前的設定
+
+#### Scenario: Login snippet breaks login zsh
+- **WHEN** 新的 login 階段片段讓 login zsh 啟動時輸出錯誤
+- **THEN** `rsmt apply` 以 1 結束並列出該 module
+
+#### Scenario: Shell already slow
+- **WHEN** 使用者的 `.zshrc` 在套用前就讓 zsh 無法在時限內啟動
+- **THEN** `rsmt apply` 不把這個逾時當成新錯誤，照常套用
 
 ### Requirement: Atomic switch
 套用 SHALL 一次切換整組 generated script；在套用期間啟動的 shell SHALL 只會載入完整的舊版本或完整的新版本。
@@ -32,3 +40,7 @@
 #### Scenario: Uninstall after eject
 - **WHEN** 使用者執行 `rsmt eject` 後移除 rosamta 程式
 - **THEN** 新開的 shell 中 PATH、環境變數與 alias 與 eject 之前相同
+
+#### Scenario: Snippet that returns early
+- **WHEN** 片段在工具不存在時執行 `return`，使用者執行 `rsmt eject`
+- **THEN** rc 檔中其後的設定照常載入，與 eject 之前相同

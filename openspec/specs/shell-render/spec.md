@@ -57,11 +57,19 @@ rosamta SHALL 只 render 套用範圍符合目前 host 的 module。
 - **THEN** fish 的 generated script 以全域匯出的方式設定 `EDITOR`，且不建立 universal 變數
 
 ### Requirement: PATH entries
-結構化 module 可宣告 PATH 的 prepend 與 append 項目。已經在 PATH 中的目錄 SHALL 不再重複加入。
+結構化 module 可宣告 PATH 的 prepend 與 append 項目。已經在 PATH 中的目錄 SHALL 不再重複加入，append 的目錄已在 PATH 中時 SHALL 留在原位。同一個 module 的 prepend 項目 SHALL 依宣告順序排列，後載入的 module 的 prepend 項目 SHALL 排在先載入的之前，每個 shell 與啟動模式的順序 SHALL 相同。展開後是空字串的項目 SHALL 略過，因為 PATH 中的空項目代表目前目錄。
 
 #### Scenario: Re-sourcing
 - **WHEN** 使用者在同一個 shell 中重新載入設定
 - **THEN** PATH 中不會出現重複的項目
+
+#### Scenario: Two modules
+- **WHEN** module `a`（`order = 10`）prepend `~/a`，module `b`（`order = 20`）prepend `~/b`
+- **THEN** 在每個 shell 中，不論是否為 login shell，`~/b` 都排在 `~/a` 之前
+
+#### Scenario: Unset variable
+- **WHEN** module prepend `$PNPM_HOME`，而 `PNPM_HOME` 沒有設定
+- **THEN** PATH 中沒有新增空項目
 
 ### Requirement: Aliases only in interactive shells
 結構化 module 的 alias SHALL 只在互動 shell 中定義。
@@ -78,7 +86,7 @@ rosamta SHALL 只 render 套用範圍符合目前 host 的 module。
 - **THEN** bash、sh、fish 的 generated script 都不包含它
 
 ### Requirement: Environment in every shell mode
-env 階段的設定 SHALL 在 login shell、非 login 的互動 shell，以及非互動 shell 中都生效。login zsh 中，系統的 zprofile（例如 macOS 的 `path_helper`、Alpine 的 `/etc/profile`）SHALL 不會打亂或移除 module 宣告的 PATH 項目。
+env 階段的設定 SHALL 在 login shell、非 login 的互動 shell，以及非互動 shell 中都生效。sh、bash、zsh 的 login shell 中，系統的 profile（例如 macOS 的 `path_helper`、Debian 與 Alpine 的 `/etc/profile`）SHALL 不會打亂或移除 module 宣告的 PATH 項目，從另一個 shell 啟動的 login shell 也一樣。
 
 #### Scenario: Non-interactive zsh
 - **WHEN** 使用者執行 `zsh -c 'echo $EDITOR'`
@@ -87,3 +95,7 @@ env 階段的設定 SHALL 在 login shell、非 login 的互動 shell，以及�
 #### Scenario: macOS login zsh
 - **WHEN** macOS 上開啟 login zsh，path module 宣告 prepend `$HOME/.local/bin`
 - **THEN** `$HOME/.local/bin` 排在 `/usr/bin` 之前
+
+#### Scenario: Nested login bash
+- **WHEN** 在 login bash 中再以 `bash -l` 啟動 login bash（例如 tmux 新視窗）
+- **THEN** module 宣告 prepend 的目錄仍排在 `/usr/bin` 之前
