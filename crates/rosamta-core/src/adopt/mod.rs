@@ -18,10 +18,10 @@ pub use segment::{Source, Watched, watched_files};
 pub use store::{Adoption, QueueItem};
 
 use crate::apply::{self, Context};
-use crate::config::{AdoptPolicy, HostConfig, Module, OriginalLines, Phase, Shell};
+use crate::config::{AdoptPolicy, HostConfig, HostFacts, Module, OriginalLines, Phase, Shell};
 use crate::error::{Error, Result};
 use crate::hooks::{self, FileChange};
-use crate::{generated, git, host, render};
+use crate::{generated, git, host, render, repo};
 use segment::Segment;
 use store::{Queue, Store, now};
 
@@ -142,6 +142,8 @@ pub fn scan(ctx: &Context) -> Result<Vec<Candidate>> {
     let ignored = store.ignored()?;
     let existing = existing_modules(ctx)?;
     let mut taken: Vec<String> = existing.iter().map(|(name, _)| name.clone()).collect();
+    // Only modules that load on this host stand in for its lines.
+    let loaded = render::select(existing, &HostFacts::current(&host_config(ctx)?));
     let recognizers = recognizers();
     let mut out = Vec::new();
     for watched in segment::watched_files(&env) {
@@ -205,7 +207,23 @@ pub fn scan(ctx: &Context) -> Result<Vec<Candidate>> {
                 content: None,
                 order: 0,
             };
-            if let Some(adoption) = adoptions.adoptions.iter().find(|a| a.hash == hash) {
+            let shells = watched.source.shells();
+            // Back in its own file, or in a file whose shells the module serves.
+            let replaces = |adoption: &Adoption| {
+                adoption.file == watched.path
+                    || loaded.iter().any(|(name, module)| {
+                        adoption
+                            .module
+                            .as_deref()
+                            .is_some_and(|path| repo::module_name(path) == *name)
+                            && runs_in(module, shells)
+                    })
+            };
+            if let Some(adoption) = adoptions
+                .adoptions
+                .iter()
+                .find(|a| a.hash == hash && replaces(a))
+            {
                 candidate.kind = Kind::Duplicate;
                 candidate.module = adoption.module.clone();
                 out.push(candidate);
@@ -217,7 +235,9 @@ pub fn scan(ctx: &Context) -> Result<Vec<Candidate>> {
             }
             let module = structured(ctx, &segment, &watched, &recognizers, barrier);
             if let Some(module) = &module
-                && let Some((name, _)) = existing.iter().find(|(_, m)| covers(m, module))
+                && let Some((name, _)) = loaded
+                    .iter()
+                    .find(|(_, m)| runs_in(m, shells) && covers(m, module))
             {
                 candidate.kind = Kind::Duplicate;
                 candidate.module = Some(PathBuf::from(name));
@@ -363,6 +383,19 @@ fn snippet(ctx: &Context, text: &str, watched: &Watched) -> Module {
         module.phase = Some(watched.phase);
     }
     module
+}
+
+/// Whether `module` does its work in each of `shells`: structured content
+/// wherever the module renders, raw code only where it is written.
+fn runs_in(module: &Module, shells: &[Shell]) -> bool {
+    let structured = !module.env.is_empty()
+        || !module.path.prepend.is_empty()
+        || !module.path.append.is_empty()
+        || !module.aliases.is_empty();
+    shells.iter().all(|&shell| {
+        (module.shells.is_empty() || module.shells.contains(&shell))
+            && (structured || module.raw.get(shell).is_some())
+    })
 }
 
 /// True when `existing` already sets everything `new` does.
