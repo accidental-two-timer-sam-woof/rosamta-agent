@@ -69,6 +69,8 @@
 
 每個接管的 module 的 `order` 是「來源檔的啟動順序 × 1000 ＋ 序號」，讓同一階段內維持原本跨檔案、檔案內的先後順序。
 
+`.zprofile` 的內容改在 env 階段載入後，比系統的 zprofile 更早執行，而系統 zprofile 可能在後面加入其他項目（例如 `~/bin`）。因此 `profile.zsh` 對 append 的項目改為「移到最後」，與 prepend 的「移到最前面」對稱；`add-shell-render` 原本是「不存在時才加到最後」。
+
 ### 套用失敗時全部復原
 
 接管與單次還原都先量測現在 shell 啟動的 stderr，再寫入 rc 檔與 module 並套用；smoke test 失敗時把 rc 檔與 module 檔全部寫回原狀，也不建立 commit。比對 stderr 時忽略開頭的「檔案:行號」：原本就存在的錯誤只是換到 generated script 回報，不算新的錯誤。

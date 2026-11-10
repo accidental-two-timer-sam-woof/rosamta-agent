@@ -428,8 +428,9 @@ fn stage_name(stage: Stage) -> &'static str {
 }
 
 /// Put declared PATH entries back after the global zprofile ran after
-/// `.zshenv`: macOS `path_helper` pushes them behind system paths, and
-/// Alpine's `/etc/profile` replaces PATH.
+/// `.zshenv`: macOS `path_helper` pushes them behind system paths, Alpine's
+/// `/etc/profile` replaces PATH, and others add entries after them. Prepended
+/// entries move to the front and appended ones to the end, as declared.
 fn zsh_path_order(modules: &[(String, Module)]) -> String {
     let mut out = String::from(HEADER);
     let zsh: Vec<&Module> = modules
@@ -444,7 +445,7 @@ fn zsh_path_order(modules: &[(String, Module)]) -> String {
     }
     for dir in zsh.iter().flat_map(|module| &module.path.append) {
         let dir = posix_value(dir);
-        writeln!(out, "[[ -n ${{(M)path:#{dir}}} ]] || path+=({dir})").unwrap();
+        writeln!(out, "path=(${{path:#{dir}}} {dir})").unwrap();
     }
     out
 }

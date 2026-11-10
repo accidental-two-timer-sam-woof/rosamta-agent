@@ -5,8 +5,22 @@ use std::process::{Command, Output};
 
 use crate::error::{Error, Result};
 
+/// rosamta commits several times in a row; automatic maintenance that git
+/// detaches after a commit could repack objects under the next one.
+const FOREGROUND: [&str; 4] = [
+    "-c",
+    "gc.autoDetach=false",
+    "-c",
+    "maintenance.autoDetach=false",
+];
+
 pub(crate) fn run(dir: &Path, args: &[&str]) -> Result<String> {
-    let output = Command::new("git").arg("-C").arg(dir).args(args).output();
+    let output = Command::new("git")
+        .args(FOREGROUND)
+        .arg("-C")
+        .arg(dir)
+        .args(args)
+        .output();
     check(args, output)
 }
 
