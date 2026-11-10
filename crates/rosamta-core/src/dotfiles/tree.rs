@@ -130,7 +130,7 @@ pub fn put(content: Content, to: &Path) -> Result<()> {
     remove(&fresh)?;
     match content {
         Content::Tree(from) => copy_new(from, &fresh)?,
-        Content::Bytes(bytes) => std::fs::write(&fresh, bytes).map_err(Error::write(&fresh))?,
+        Content::Bytes(bytes) => write_private(&fresh, bytes)?,
     }
     let is_dir = |path: &Path| std::fs::symlink_metadata(path).is_ok_and(|meta| meta.is_dir());
     if is_dir(to) || is_dir(&fresh) {
@@ -171,6 +171,29 @@ pub fn remove(path: &Path) -> Result<()> {
         Err(err) => Err(err),
     };
     result.map_err(Error::write(path))
+}
+
+/// Bytes are decrypted or rendered content that may hold a secret, so the
+/// file is never readable by others, even before its mode is set.
+fn write_private(path: &Path, bytes: &[u8]) -> Result<()> {
+    use std::io::Write;
+    use std::os::unix::fs::OpenOptionsExt;
+    std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .mode(0o600)
+        .open(path)
+        .and_then(|mut file| file.write_all(bytes))
+        .map_err(Error::write(path))
+}
+
+/// The permission bits of a regular file, if one is there.
+pub fn mode_of(path: &Path) -> Option<u32> {
+    use std::os::unix::fs::PermissionsExt;
+    std::fs::symlink_metadata(path)
+        .ok()
+        .filter(|meta| meta.is_file())
+        .map(|meta| meta.permissions().mode() & 0o7777)
 }
 
 pub fn set_mode(path: &Path, mode: u32) -> Result<()> {

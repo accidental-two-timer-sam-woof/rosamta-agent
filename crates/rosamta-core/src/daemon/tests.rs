@@ -10,6 +10,7 @@ fn ctx(home: &Path) -> Context {
         paths: Paths::from_vars(|name| (name == "HOME").then(|| OsString::from(home))).unwrap(),
         home: home.to_path_buf(),
         path_var: String::new(),
+        interactive: false,
     }
 }
 

@@ -13,7 +13,7 @@ use super::{Choice, MANIFEST, deploy};
 use crate::adopt::store::Store;
 use crate::adopt::{self, QueueItem, Scope};
 use crate::apply::Context;
-use crate::config::{Dotfile, HostFacts};
+use crate::config::{Deploy, Dotfile, HostFacts};
 use crate::error::{Error, Result};
 use crate::sync;
 use crate::time::now;
@@ -94,9 +94,14 @@ fn current(ctx: &Context, path: &Path) -> Result<(Dotfile, Sides)> {
         )));
     };
     let hash = |at: &Path| tree::hash(at).map(Option::unwrap_or_default);
+    let repo_side = match entry.deploy {
+        Deploy::Template => deploy::template_input(ctx, entry)?
+            .ok_or_else(|| Error::Usage(deploy::LOCKED.into()))?,
+        _ => hash(&repo.join(entry.source()))?,
+    };
     let sides = Sides {
         local: hash(&ctx.home.join(path))?,
-        repo: hash(&repo.join(entry.source()))?,
+        repo: repo_side,
     };
     Ok((entry.clone(), sides))
 }
@@ -113,8 +118,15 @@ fn unchanged(ctx: &Context, id: u32, item: &DotfileItem) -> Result<Dotfile> {
 
 /// `rsmt review accept`: keep this host's version, in a declaration for
 /// this host alone (`Scope::Host`) or for every host using the declaration.
+/// A template's output becomes a copy for this host alone.
 pub(crate) fn keep(ctx: &Context, id: u32, item: &DotfileItem, scope: Scope) -> Result<()> {
     let entry = unchanged(ctx, id, item)?;
+    let template = entry.deploy == Deploy::Template;
+    if template && scope == Scope::All {
+        return Err(Error::Usage(
+            "a template's output is kept for this host only; use `--scope host`".into(),
+        ));
+    }
     let target = ctx.home.join(&item.path);
     if !entry.encrypted
         && let Some((file, rule)) = secret_in(&target)?
@@ -127,12 +139,18 @@ pub(crate) fn keep(ctx: &Context, id: u32, item: &DotfileItem, scope: Scope) -> 
     let host = adopt::host_config(ctx)?;
     let repo = ctx.paths.repo();
     let own = entry.when.hosts == [host.id.clone()];
+    if template && own {
+        return Err(Error::Usage(
+            "this template is for this host only; edit the template in the repo instead".into(),
+        ));
+    }
     let mut paths = Vec::new();
     let source = if scope == Scope::All || own {
         entry.source()
     } else {
         let variant = Dotfile {
             source: Some(format!("hosts/{}/{}", host.id, item.path.display())),
+            deploy: if template { Deploy::Copy } else { entry.deploy },
             when: crate::config::When {
                 hosts: vec![host.id.clone()],
                 ..Default::default()

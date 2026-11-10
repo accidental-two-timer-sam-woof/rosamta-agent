@@ -15,6 +15,7 @@ use serde_json::Value;
 use crate::apply::Context;
 use crate::config::{BitwardenTool, HostConfig};
 use crate::error::{Error, Result};
+use crate::paths::Paths;
 use crate::process::output_with_timeout;
 use crate::shells::which;
 use crate::token::TokenStore;
@@ -96,8 +97,12 @@ struct State {
     bw_session: Option<String>,
     items: BTreeMap<String, Value>,
     bws_secrets: Option<Vec<Value>>,
+    /// The stored bws token, once read.
+    bws_token: Option<Option<String>>,
     outputs: BTreeMap<(String, String), String>,
     waiting: Vec<Waiting>,
+    /// Secrets handed to templates, cached or not.
+    used: usize,
 }
 
 /// The secret sources of one apply.
@@ -106,25 +111,30 @@ pub struct Session {
     order: Vec<BitwardenTool>,
     commands: BTreeMap<String, SecretCommand>,
     path_var: String,
-    bws_token: Option<String>,
+    bws_token: BwsToken,
     state: Mutex<State>,
+}
+
+/// Read only when bws is about to be used, so a run without templates never
+/// opens the keychain.
+enum BwsToken {
+    Given(Option<String>),
+    Stored(Paths),
 }
 
 impl Session {
     /// `interactive` is `rsmt apply` in a terminal, the only place that
     /// unlocks a tool or runs a secret command.
     pub fn new(ctx: &Context, host: &HostConfig, interactive: bool) -> Result<Self> {
-        let bws_token = match std::env::var("BWS_ACCESS_TOKEN") {
-            Ok(token) if !token.is_empty() => Some(token),
-            _ => TokenStore::bws(&ctx.paths).load()?,
-        };
-        Ok(Self::with(
+        let mut session = Self::with(
             interactive,
             &host.secrets.bitwarden,
             load(&ctx.paths.repo())?,
-            std::env::var("PATH").unwrap_or_default(),
-            bws_token,
-        ))
+            ctx.path_var.clone(),
+            None,
+        );
+        session.bws_token = BwsToken::Stored(ctx.paths.clone());
+        Ok(session)
     }
 
     pub(crate) fn with(
@@ -143,13 +153,40 @@ impl Session {
             },
             commands: commands.commands,
             path_var,
-            bws_token,
+            bws_token: BwsToken::Given(bws_token),
             state: Mutex::default(),
         }
     }
 
+    fn bws_token(&self) -> Option<String> {
+        let paths = match &self.bws_token {
+            BwsToken::Given(token) => return token.clone(),
+            BwsToken::Stored(paths) => paths,
+        };
+        if let Some(token) = &self.state().bws_token {
+            return token.clone();
+        }
+        let token = match std::env::var("BWS_ACCESS_TOKEN") {
+            Ok(token) if !token.is_empty() => Some(token),
+            _ => TokenStore::bws(paths).load().ok().flatten(),
+        };
+        self.state().bws_token = Some(token.clone());
+        token
+    }
+
     fn state(&self) -> MutexGuard<'_, State> {
         self.state.lock().unwrap_or_else(|err| err.into_inner())
+    }
+
+    /// How many secrets templates have been given so far; a render that
+    /// raised it holds a secret.
+    pub fn used(&self) -> usize {
+        self.state().used
+    }
+
+    fn hand(&self, value: String) -> String {
+        self.state().used += 1;
+        value
     }
 
     /// What renders since the last call waited for, emptying the list.
@@ -176,7 +213,9 @@ impl Session {
             )));
         };
         if tool == BitwardenTool::Bws {
-            return self.bws(&program, item, field);
+            return self
+                .bws(&program, item, field)
+                .map(|value| self.hand(value));
         }
         let cached = self.state().items.get(item).cloned();
         let entry = match cached {
@@ -188,12 +227,14 @@ impl Session {
                 entry
             }
         };
-        field_of(tool, &entry, field).ok_or_else(|| {
-            Failure::Error(format!(
-                "Bitwarden item `{item}` has no {}",
-                field.unwrap_or("password")
-            ))
-        })
+        field_of(tool, &entry, field)
+            .map(|value| self.hand(value))
+            .ok_or_else(|| {
+                Failure::Error(format!(
+                    "Bitwarden item `{item}` has no {}",
+                    field.unwrap_or("password")
+                ))
+            })
     }
 
     /// The first tool in the order that is installed and signed in.
@@ -219,7 +260,7 @@ impl Session {
             BitwardenTool::Bw => self
                 .bw_status(program)
                 .is_some_and(|status| status != "unauthenticated"),
-            BitwardenTool::Bws => self.bws_token.is_some(),
+            BitwardenTool::Bws => self.bws_token().is_some(),
         }
     }
 
@@ -313,7 +354,7 @@ impl Session {
             }
         };
         if self.state().bws_secrets.is_none() {
-            let token = self.bws_token.clone().unwrap_or_default();
+            let token = self.bws_token().unwrap_or_default();
             let list = run_json(
                 program,
                 &["secret", "list", "--output", "json"],
@@ -341,8 +382,9 @@ impl Session {
             )));
         };
         let key = (name.to_string(), arg.to_string());
-        if let Some(output) = self.state().outputs.get(&key) {
-            return Ok(output.clone());
+        let cached = self.state().outputs.get(&key).cloned();
+        if let Some(output) = cached {
+            return Ok(self.hand(output));
         }
         if !self.interactive {
             return Err(self.wait(Waiting::Command(name.to_string())));
@@ -375,7 +417,7 @@ impl Session {
             }
         }
         self.state().outputs.insert(key, output.clone());
-        Ok(output)
+        Ok(self.hand(output))
     }
 }
 

@@ -44,6 +44,7 @@ impl Home {
                 .unwrap(),
             home: root,
             path_var: String::new(),
+            interactive: false,
         };
         let home = Self { _dir: dir, ctx };
         home.repo_write("rosamta.toml", "format = 1\nhosts = [\"mbp\"]\n");
@@ -293,7 +294,7 @@ fn a_broken_declaration_fails_alone() {
 }
 
 #[test]
-fn duplicates_and_templates_are_skipped() {
+fn duplicates_are_skipped_and_templates_render() {
     let home = Home::new("ask");
     home.repo_write("home/.npmrc", "");
     home.repo_write("home/.gitconfig", "");
@@ -315,7 +316,7 @@ deploy = "template"
     assert_eq!(
         home.deploy(),
         [
-            (".gitconfig".to_string(), Action::Skipped),
+            (".gitconfig".to_string(), Action::Copied),
             (".npmrc".to_string(), Action::Skipped),
         ]
     );
@@ -774,4 +775,122 @@ fn templates_report_syntax_errors_and_missing_vars() {
         text.starts_with("# mine\n") && text.contains("[vars]\nemail = \"\""),
         "{text}"
     );
+}
+
+mod templates {
+    use super::*;
+    use rosamta_core::adopt::{self, Scope};
+    use rosamta_core::dotfiles::review::Reason;
+
+    const TEMPLATE: &str = "[user]\n\tname = {{ host.id }}\n\temail = {{ vars.email }}\n";
+
+    fn with_template(vars: &str) -> Home {
+        let home = Home::new("ask");
+        home.repo_write("home/.gitconfig", TEMPLATE);
+        home.repo_write(
+            "dotfiles.toml",
+            "[[dotfile]]\npath = \".gitconfig\"\ndeploy = \"template\"\n",
+        );
+        let host = home.ctx.paths.host_config();
+        fs::write(&host, format!("{}{vars}", read(&host))).unwrap();
+        home
+    }
+
+    fn set_email(home: &Home, email: &str) {
+        rosamta_core::host::set_var(&home.ctx.paths, "email", email).unwrap();
+    }
+
+    #[test]
+    fn output_is_private_and_follows_its_input() {
+        let home = with_template("[vars]\nemail = \"a@example.com\"\n");
+        assert_eq!(home.deploy(), one(".gitconfig", Action::Copied));
+        let target = home.at(".gitconfig");
+        assert_eq!(
+            read(&target),
+            "[user]\n\tname = mbp\n\temail = a@example.com\n"
+        );
+        assert_eq!(mode(&target), 0o600);
+        assert_eq!(home.deploy(), one(".gitconfig", Action::Unchanged));
+
+        // An existing file keeps the mode it has.
+        fs::set_permissions(&target, fs::Permissions::from_mode(0o644)).unwrap();
+        set_email(&home, "b@example.com");
+        assert_eq!(home.deploy(), one(".gitconfig", Action::Updated));
+        assert!(read(&target).contains("b@example.com"));
+        assert_eq!(mode(&target), 0o644);
+    }
+
+    #[test]
+    fn missing_vars_and_secret_commands_wait_outside_a_terminal() {
+        let home = with_template("");
+        let steps = dotfiles::deploy(&home.ctx).unwrap();
+        assert_eq!(steps[0].action, Action::Skipped);
+        assert!(
+            steps[0].reason.as_deref().unwrap().contains("vars.email"),
+            "{steps:?}"
+        );
+        assert!(!home.at(".gitconfig").exists());
+
+        set_email(&home, "");
+        home.repo_write(
+            "secrets.toml",
+            "[commands.op]\nrun = [\"op\", \"read\", \"{arg}\"]\n",
+        );
+        home.repo_write("home/.npmrc", "token={{ secret(\"op\", \"op://a/b\") }}\n");
+        home.repo_write(
+            "dotfiles.toml",
+            "[[dotfile]]\npath = \".npmrc\"\ndeploy = \"template\"\n",
+        );
+        let steps = dotfiles::deploy(&home.ctx).unwrap();
+        assert_eq!(steps[0].action, Action::Skipped);
+        assert!(
+            steps[0].reason.as_deref().unwrap().contains("`op`"),
+            "{steps:?}"
+        );
+        assert!(!home.at(".npmrc").exists());
+    }
+
+    fn edited() -> (Home, u32) {
+        let home = with_template("[vars]\nemail = \"a@example.com\"\n");
+        git(&home.repo(), &["add", "-A"]);
+        git(
+            &home.repo(),
+            &["commit", "--quiet", "--no-verify", "-m", "init"],
+        );
+        home.deploy();
+        write(&home.at(".gitconfig"), "[user]\n\tname = edited\n");
+        assert_eq!(home.deploy(), one(".gitconfig", Action::Changed));
+        let queue = adopt::queue(&home.ctx).unwrap();
+        assert_eq!(queue[0].dotfile.as_ref().unwrap().reason, Reason::Changed);
+        (home, queue[0].id)
+    }
+
+    #[test]
+    fn accepting_edited_output_keeps_it_as_a_copy_for_this_host() {
+        let (home, id) = edited();
+        let err = adopt::accept(&home.ctx, id, Scope::All).unwrap_err();
+        assert!(err.to_string().contains("--scope host"), "{err}");
+        adopt::accept(&home.ctx, id, Scope::Host).unwrap();
+        assert_eq!(
+            read(&home.repo().join("hosts/mbp/.gitconfig")),
+            "[user]\n\tname = edited\n"
+        );
+        let manifest = read(&home.repo().join("dotfiles.toml"));
+        assert!(
+            manifest.contains("source = \"hosts/mbp/.gitconfig\"\ndeploy = \"copy\"")
+                && manifest.contains("when = { hosts = [\"mbp\"] }"),
+            "{manifest}"
+        );
+        assert_eq!(read(&home.repo().join("home/.gitconfig")), TEMPLATE);
+        assert!(adopt::queue(&home.ctx).unwrap().is_empty());
+        assert_eq!(home.deploy(), one(".gitconfig", Action::Unchanged));
+    }
+
+    #[test]
+    fn discarding_edited_output_renders_again() {
+        let (home, id) = edited();
+        rosamta_core::dotfiles::review::discard(&home.ctx, id).unwrap();
+        assert!(read(&home.at(".gitconfig")).contains("a@example.com"));
+        assert!(adopt::queue(&home.ctx).unwrap().is_empty());
+    }
 }
