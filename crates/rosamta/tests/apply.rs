@@ -828,7 +828,7 @@ fn apply_deploys_dotfiles_after_a_dry_run() {
         .assert()
         .success()
         .stdout(
-            predicate::str::contains(format!("Linked {}", ghostty.display()))
+            predicate::str::contains("Linked ~/.config/ghostty")
                 .and(predicate::str::contains("+save-exact = true")),
         );
     assert!(!ghostty.exists() && !npmrc.exists());
@@ -837,10 +837,7 @@ fn apply_deploys_dotfiles_after_a_dry_run() {
         .arg("apply")
         .assert()
         .success()
-        .stdout(predicate::str::contains(format!(
-            "Copied {}",
-            npmrc.display()
-        )));
+        .stdout(predicate::str::contains("Copied ~/.npmrc"));
     assert_eq!(read(&home, ".config/ghostty/config"), "theme = dark\n");
     home.cmd("rsmt")
         .arg("apply")
@@ -855,15 +852,13 @@ fn conflicts_wait_in_the_review_queue() {
     home.write("home/.gitconfig", "[user]\nname = repo\n");
     home.write("dotfiles.toml", "[[dotfile]]\npath = \".gitconfig\"\n");
     fs::write(home.root.join(".gitconfig"), "[user]\nname = local\n").unwrap();
-    let gitconfig = home.root.join(".gitconfig");
     home.cmd("rsmt")
         .arg("apply")
         .assert()
         .success()
-        .stdout(predicate::str::contains(format!(
-            "Not deployed {}: differs from the repo",
-            gitconfig.display()
-        )));
+        .stdout(predicate::str::contains(
+            "Not deployed ~/.gitconfig: differs from the repo",
+        ));
     let out = home.cmd("rsmt").arg("review").output().unwrap();
     let listed = String::from_utf8(out.stdout).unwrap();
     assert!(
