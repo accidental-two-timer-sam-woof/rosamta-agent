@@ -54,7 +54,21 @@ pub(crate) fn write_atomic(path: &Path, text: &str) -> Result<()> {
 }
 
 pub fn set_module_enabled(path: &Path, enabled: bool) -> Result<bool> {
-    edit_toml(path, |doc| doc["enabled"] = toml_edit::value(enabled))
+    edit_toml(path, |doc| set_value(&mut doc["enabled"], enabled))
+}
+
+/// Set `item` to `value`, keeping the comments and spacing around an existing value.
+pub(crate) fn set_value(item: &mut Item, value: impl Into<Value>) {
+    match item.as_value_mut() {
+        Some(slot) => replace_value(slot, value),
+        None => *item = Item::Value(value.into()),
+    }
+}
+
+fn replace_value(slot: &mut Value, value: impl Into<Value>) {
+    let decor = slot.decor().clone();
+    *slot = value.into();
+    *slot.decor_mut() = decor;
 }
 
 /// The array at `key` inside the table-like `item`, if any.
@@ -76,10 +90,7 @@ pub(crate) fn rename_in_array(array: &mut Array, old: &str, new: &str) -> bool {
                 array.remove(index);
                 continue;
             }
-            let value = array.get_mut(index).expect("index in range");
-            let decor = value.decor().clone();
-            *value = Value::from(new);
-            *value.decor_mut() = decor;
+            replace_value(array.get_mut(index).expect("index in range"), new);
             seen_new = true;
         }
         index += 1;
@@ -92,7 +103,26 @@ pub(crate) fn set_sorted_strings(item: &mut Item, values: impl IntoIterator<Item
     let mut values: Vec<String> = values.into_iter().collect();
     values.sort();
     values.dedup();
-    *item = toml_edit::value(values.into_iter().collect::<Array>());
+    let Some(array) = item.as_array_mut() else {
+        set_value(item, values.into_iter().collect::<Array>());
+        return;
+    };
+    // Drop removed elements with their comments, append new ones, then sort
+    // in place so each position keeps its comments and spacing.
+    let mut kept: Vec<String> = Vec::new();
+    array.retain(|value| match value.as_str() {
+        Some(text) if values.iter().any(|v| v == text) && !kept.iter().any(|k| k == text) => {
+            kept.push(text.to_string());
+            true
+        }
+        _ => false,
+    });
+    for value in values.iter().filter(|value| !kept.contains(value)) {
+        array.push(value.as_str());
+    }
+    for (index, value) in values.into_iter().enumerate() {
+        replace_value(array.get_mut(index).expect("one element per value"), value);
+    }
 }
 
 #[cfg(test)]
@@ -117,6 +147,18 @@ mod tests {
         let module: Module = toml::from_str(&text).unwrap();
         assert!(!module.enabled);
         assert_eq!(module.when.hosts, ["mbp"]);
+    }
+
+    #[test]
+    fn disable_keeps_the_comment_on_its_line() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("bun.toml");
+        std::fs::write(&path, "enabled = true # turn off on servers\n").unwrap();
+        assert!(set_module_enabled(&path, false).unwrap());
+        assert_eq!(
+            std::fs::read_to_string(&path).unwrap(),
+            "enabled = false # turn off on servers\n"
+        );
     }
 
     #[test]
@@ -146,5 +188,18 @@ mod tests {
         let values = ["personal", "lab", "lab"].map(String::from);
         set_sorted_strings(&mut doc["tags"], values);
         assert_eq!(doc.to_string(), "tags = [\"lab\", \"personal\"]\n");
+    }
+
+    #[test]
+    fn sorted_strings_keep_comments() {
+        let mut doc: DocumentMut = "tags = [\"personal\"] # sorted\n".parse().unwrap();
+        set_sorted_strings(&mut doc["tags"], ["personal", "lab"].map(String::from));
+        assert_eq!(doc.to_string(), "tags = [\"lab\", \"personal\"] # sorted\n");
+
+        let mut doc: DocumentMut = "tags = [\n  \"lab\",\n  # home\n  \"personal\",\n]\n"
+            .parse()
+            .unwrap();
+        set_sorted_strings(&mut doc["tags"], ["personal".to_string()]);
+        assert_eq!(doc.to_string(), "tags = [\n  # home\n  \"personal\",\n]\n");
     }
 }

@@ -155,7 +155,7 @@ pub fn rename(paths: &Paths, new_id: &str) -> Result<()> {
         )?;
     }
     edit_toml(&paths.host_config(), |doc| {
-        doc["id"] = toml_edit::value(new_id)
+        edit::set_value(&mut doc["id"], new_id)
     })?;
     Ok(())
 }

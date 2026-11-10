@@ -3,7 +3,7 @@
 use std::path::{Path, PathBuf};
 
 use crate::config::{CURRENT_FORMAT, RepoManifest};
-use crate::edit::edit_toml;
+use crate::edit::{edit_toml, set_value};
 use crate::error::{Error, Result};
 use crate::paths::Paths;
 use crate::{git, host, validate};
@@ -93,7 +93,7 @@ pub fn migrate(
         (migration.run)(repo_dir)?;
     }
     edit_toml(&repo_dir.join(MANIFEST), |doc| {
-        doc["format"] = toml_edit::value(i64::from(target))
+        set_value(&mut doc["format"], i64::from(target))
     })?;
     git::commit_all(
         repo_dir,
@@ -110,7 +110,7 @@ pub fn register_host(repo_dir: &Path, id: &str) -> Result<bool> {
     edit_toml(&repo_dir.join(MANIFEST), |doc| {
         match doc["hosts"].as_array_mut() {
             Some(hosts) => hosts.push(id),
-            None => doc["hosts"] = toml_edit::value(toml_edit::Array::from_iter([id])),
+            None => set_value(&mut doc["hosts"], toml_edit::Array::from_iter([id])),
         }
     })?;
     git::commit_all(repo_dir, &format!("chore(repo): add host {id}"))?;

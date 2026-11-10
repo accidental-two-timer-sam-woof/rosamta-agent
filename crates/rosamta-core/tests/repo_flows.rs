@@ -275,6 +275,19 @@ fn rename_updates_repo_in_one_commit() {
 }
 
 #[test]
+fn rename_keeps_the_comment_on_the_id() {
+    let home = home();
+    let path = home.paths.host_config();
+    fs::create_dir_all(path.parent().unwrap()).unwrap();
+    fs::write(&path, "id = \"mbp\" # my laptop\n").unwrap();
+    host::rename(&home.paths, "work-mbp").unwrap();
+    assert_eq!(
+        fs::read_to_string(&path).unwrap(),
+        "id = \"work-mbp\" # my laptop\n"
+    );
+}
+
+#[test]
 fn rename_rejects_bad_id() {
     let home = home();
     write_host(&home, "mbp");
