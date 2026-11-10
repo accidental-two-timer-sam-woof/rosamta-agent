@@ -310,3 +310,20 @@ fn before_init_the_daemon_waits() {
     });
     assert_eq!(status(&home)["running"], true);
 }
+
+#[test]
+fn an_invalid_host_toml_is_waited_out() {
+    let home = hooked();
+    let valid = fs::read_to_string(home.host_config()).unwrap();
+    fs::write(home.host_config(), "adopt = [\n").unwrap();
+    let mut daemon = Daemon(home.spawn("rsmt", &["daemon", "run"]));
+    wait_for(&home, Duration::from_secs(20), || {
+        log(&home).contains("host.toml")
+    });
+    std::thread::sleep(Duration::from_secs(1));
+    assert!(daemon.0.try_wait().unwrap().is_none(), "{}", log(&home));
+    fs::write(home.host_config(), valid).unwrap();
+    wait_for(&home, Duration::from_secs(20), || {
+        log(&home).contains("scanned rc files")
+    });
+}
