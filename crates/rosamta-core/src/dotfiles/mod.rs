@@ -198,12 +198,12 @@ fn problems(manifest: &DotfileManifest, repo_dir: &Path) -> Vec<(usize, String)>
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Choice {
     Use(Dotfile),
-    /// This many declarations match and none names this host alone.
+    /// This many declarations match and none is more specific than the rest.
     Duplicate(usize),
 }
 
 /// The declaration each path uses on this host. Among several that match,
-/// the one naming this host ID in `when.hosts` wins.
+/// one whose `when.hosts` is this host ID alone wins, then one naming it.
 pub fn select(manifest: &DotfileManifest, host: &HostFacts) -> BTreeMap<PathBuf, Choice> {
     let mut matching: BTreeMap<PathBuf, Vec<&Dotfile>> = BTreeMap::new();
     for entry in manifest

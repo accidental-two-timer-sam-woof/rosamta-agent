@@ -1076,6 +1076,82 @@ esac
     }
 
     #[test]
+    fn only_apply_in_a_terminal_renders_every_template() {
+        let mut home = Home::new("ask");
+        let log = with_secret(&mut home);
+        home.repo_write("home/.gitconfig", "plain\n");
+        home.repo_write(
+            "dotfiles.toml",
+            "[[dotfile]]\npath = \".npmrc\"\ndeploy = \"template\"\n\n\
+             [[dotfile]]\npath = \".gitconfig\"\ndeploy = \"copy\"\n",
+        );
+        home.ctx.interactive = true;
+        dotfiles::deploy::deploy_all(&home.ctx).unwrap();
+        assert_eq!(runs(&log), 1);
+        // A later run of `rsmt apply` asks again, for a changed secret.
+        home.ctx.session = Default::default();
+        dotfiles::deploy::deploy_all(&home.ctx).unwrap();
+        assert_eq!(runs(&log), 2);
+
+        // Discarding an unrelated file in a terminal leaves `.npmrc` alone.
+        write(&home.at(".gitconfig"), "mine\n");
+        home.ctx.interactive = false;
+        home.deploy();
+        let id = adopt::queue(&home.ctx).unwrap()[0].id;
+        home.ctx.interactive = true;
+        home.ctx.session = Default::default();
+        rosamta_core::dotfiles::review::discard(&home.ctx, id).unwrap();
+        assert_eq!(read(&home.at(".gitconfig")), "plain\n");
+        assert_eq!(runs(&log), 2);
+
+        // A new tag means nothing to a template that does not read tags.
+        home.ctx.interactive = false;
+        rosamta_core::host::add_tag(&home.ctx.paths, "work").unwrap();
+        assert_eq!(
+            home.deploy(),
+            [
+                (".gitconfig".to_string(), Action::Unchanged),
+                (".npmrc".to_string(), Action::Unchanged)
+            ]
+        );
+    }
+
+    #[test]
+    fn an_item_keeps_its_id_while_what_it_waits_for_changes() {
+        let mut home = Home::new("ask");
+        with_secret(&mut home);
+        home.ctx.interactive = true;
+        home.deploy();
+        write(&home.at(".npmrc"), "token=mine\n");
+        home.repo_write("home/.npmrc", "t={{ secret(\"fetch\", \"npm\") }}\n");
+        assert_eq!(home.deploy(), one(".npmrc", Action::Conflict));
+        let id = adopt::queue(&home.ctx).unwrap()[0].id;
+        home.ctx.interactive = false;
+        home.deploy();
+        let queue = adopt::queue(&home.ctx).unwrap();
+        assert_eq!(queue[0].dotfile.as_ref().unwrap().reason, Reason::Waiting);
+        assert_eq!(queue[0].id, id);
+    }
+
+    #[test]
+    fn a_link_becomes_a_template_without_a_conflict() {
+        let home = with_template("[vars]\nemail = \"a@example.com\"\n");
+        home.repo_write("home/.gitconfig", "plain\n");
+        home.repo_write("dotfiles.toml", "[[dotfile]]\npath = \".gitconfig\"\n");
+        assert_eq!(home.deploy(), one(".gitconfig", Action::Linked));
+        home.repo_write("home/.gitconfig", TEMPLATE);
+        home.repo_write(
+            "dotfiles.toml",
+            "[[dotfile]]\npath = \".gitconfig\"\ndeploy = \"template\"\n",
+        );
+        assert_eq!(home.deploy(), one(".gitconfig", Action::Updated));
+        let target = home.at(".gitconfig");
+        assert!(!fs::symlink_metadata(&target).unwrap().is_symlink());
+        assert!(read(&target).contains("a@example.com"));
+        assert_eq!(read(&home.repo().join("home/.gitconfig")), TEMPLATE);
+    }
+
+    #[test]
     fn output_holding_secrets_is_not_kept_in_the_repo() {
         let mut home = Home::new("ask");
         let log = with_secret(&mut home);

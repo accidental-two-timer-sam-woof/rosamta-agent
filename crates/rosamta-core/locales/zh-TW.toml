@@ -7,13 +7,15 @@ many = "{count} 項變動待處理"
 dotfile_conflict = "{file}：與 repo 的版本不同"
 dotfile_changed = "{file}：在這台主機上被修改"
 waiting_locked = "{file}：等待 {tool} 解鎖"
-waiting_command = "{file}：等待在終端機中執行 {command}"
+waiting_command = "{file}：等待在終端機執行秘密指令 {command}"
+waiting_many = "{count} 個設定檔等待中"
 waiting_unset = "{file}：等待 {vars} 的值"
 
 [action]
 adopt = "接管"
 ignore = "忽略"
 review = "查看差異"
+view = "查看"
 
 [problem]
 publish_blocked = "推送受阻：{reason}"
@@ -89,7 +91,7 @@ use_repo = "採用 repo"
 keep_local = "保留本機"
 empty = "沒有待處理項目"
 waiting_locked = "等待 {tool} 解鎖"
-waiting_command = "等待在終端機中執行 {command}"
+waiting_command = "等待在終端機執行秘密指令 {command}"
 waiting_unset = "等待 {vars} 的值"
 
 [phase]

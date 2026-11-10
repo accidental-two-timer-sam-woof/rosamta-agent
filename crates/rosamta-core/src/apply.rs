@@ -302,7 +302,7 @@ pub fn apply(ctx: &Context) -> Result<Applied> {
 
 /// Deploy dotfiles after the shells switched.
 pub fn with_dotfiles(ctx: &Context, mut applied: Applied) -> Result<Applied> {
-    applied.dotfiles = crate::dotfiles::deploy(ctx)?;
+    applied.dotfiles = crate::dotfiles::deploy::deploy_all(ctx)?;
     Ok(applied)
 }
 

@@ -64,14 +64,19 @@ impl WaitingFor {
                 format!("secret command `{name}` runs only in `rsmt apply` in a terminal")
             }
             Self::Unset { vars } => {
-                let names: Vec<String> = vars.iter().map(|var| format!("vars.{var}")).collect();
                 format!(
                     "waiting for {} in host.toml; run `rsmt apply` in a terminal",
-                    names.join(", ")
+                    var_list(vars)
                 )
             }
         }
     }
+}
+
+/// `vars.email, vars.name`, as templates write them.
+pub fn var_list(vars: &[String]) -> String {
+    let names: Vec<String> = vars.iter().map(|var| format!("vars.{var}")).collect();
+    names.join(", ")
 }
 
 /// Make the queue's dotfile items exactly `waiting`. An item keeps its ID
@@ -83,7 +88,6 @@ pub(crate) fn sync_queue(ctx: &Context, waiting: Vec<DotfileItem>) -> Result<()>
         .items
         .into_iter()
         .partition(|item| item.dotfile.is_some());
-    // An ID is kept only for an identical item, so the same IDs mean no change.
     let same = waiting.len() == old.len()
         && waiting
             .iter()
@@ -93,9 +97,15 @@ pub(crate) fn sync_queue(ctx: &Context, waiting: Vec<DotfileItem>) -> Result<()>
     }
     queue.next_id = queue.next_id.max(1);
     for item in waiting {
+        // What it waits for may come and go, as a tool locks and unlocks;
+        // the item is the same while the path and both sides are.
         let kept = old
             .iter()
-            .find(|old| old.dotfile.as_ref() == Some(&item))
+            .find(|old| {
+                old.dotfile
+                    .as_ref()
+                    .is_some_and(|old| old.path == item.path && old.sides == item.sides)
+            })
             .map(|old| (old.id, old.detected_at));
         let (id, detected_at) = kept.unwrap_or_else(|| {
             queue.next_id += 1;
@@ -172,6 +182,12 @@ pub(crate) fn keep(ctx: &Context, id: u32, item: &DotfileItem, scope: Scope) -> 
         ));
     }
     let target = ctx.home.join(&item.path);
+    if tree::link_of(&target).is_some_and(|link| link.starts_with(ctx.paths.repo())) {
+        return Err(Error::Usage(format!(
+            "{} links into the repo; there is nothing of this host's to keep",
+            target.display()
+        )));
+    }
     if template && !entry.encrypted && secret_template(ctx, &entry)? {
         return Err(Error::Usage(format!(
             "{} holds secrets from its template; it stays out of the repo",

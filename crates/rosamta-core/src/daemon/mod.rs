@@ -17,10 +17,10 @@ use std::time::{Duration, Instant, SystemTime};
 use notify_debouncer_full::notify::RecursiveMode;
 use notify_debouncer_full::{DebounceEventResult, new_debouncer};
 
-use crate::adopt::{self, Scope};
+use crate::adopt::{self, QueueItem, Scope};
 use crate::apply::{self, Context};
 use crate::config::{HostConfig, SyncPolicy};
-use crate::dotfiles::review::{Reason, WaitingFor};
+use crate::dotfiles::review::{self, Reason, WaitingFor};
 use crate::error::Result;
 use crate::hooks::HookEnv;
 use crate::i18n::{self, Lang};
@@ -53,6 +53,9 @@ const SLEPT: Duration = Duration::from_secs(60);
 /// After waking, the network often takes a while to come back.
 const WAKE_RETRIES: [Duration; 2] = [Duration::from_secs(30), Duration::from_secs(120)];
 const LOG_LIMIT: u64 = 1 << 20;
+/// How often a template waiting for rbw tries again; unlocking rbw sends
+/// no event.
+const RBW_RETRY: Duration = Duration::from_secs(60);
 
 /// Directories to watch: the parents of watched files, without recursion,
 /// so an installer writing a new file and renaming it over the old one is
@@ -245,6 +248,7 @@ struct Daemon {
     batch: Vec<u32>,
     batch_since: Option<Instant>,
     next_sync: Instant,
+    next_rbw_retry: Instant,
     /// Retries left for a sync after waking that found no network.
     wake_retries: &'static [Duration],
     clock: (Instant, SystemTime),
@@ -362,6 +366,7 @@ impl Daemon {
         let previous = instance::load(ctx.paths.state()).ok().flatten();
         Self {
             next_sync: Instant::now(),
+            next_rbw_retry: Instant::now() + RBW_RETRY,
             wake_retries: &[],
             host,
             lang: Lang::system(),
@@ -650,6 +655,12 @@ impl Daemon {
                 _ => self.wake_retries = &[],
             }
         }
+        if now.0 >= self.next_rbw_retry {
+            self.next_rbw_retry = now.0 + RBW_RETRY;
+            if self.waits_for_rbw() {
+                self.dotfiles_changed();
+            }
+        }
         if self
             .batch_since
             .is_some_and(|since| since.elapsed() >= BATCH)
@@ -657,6 +668,18 @@ impl Daemon {
             self.announce();
         }
         replaced(&self.exe)
+    }
+
+    /// bw's session lives in the shell that unlocked it and a secret command
+    /// needs a terminal; only an rbw unlock is something this process sees.
+    fn waits_for_rbw(&self) -> bool {
+        adopt::queue(&self.ctx).is_ok_and(|queue| {
+            queue.iter().any(|item| {
+                item.dotfile.as_ref().is_some_and(|dotfile| {
+                    matches!(&dotfile.waiting, Some(WaitingFor::Locked { tool }) if tool == "rbw")
+                })
+            })
+        })
     }
 
     /// Whether a sync from `started` on could not reach the remote.
@@ -686,39 +709,20 @@ impl Daemon {
                 }
             }
         }
-        let waiting: Vec<_> = queue.iter().filter(|item| ids.contains(&item.id)).collect();
-        let body = match waiting.as_slice() {
-            [] => return,
-            [item] if item.dotfile.is_some() => {
-                let file = adopt::display(&item.file, &self.ctx.home);
-                let waiting = item
-                    .dotfile
+        let new: Vec<&QueueItem> = queue.iter().filter(|item| ids.contains(&item.id)).collect();
+        // Waiting items need no answer; next to ones that do, the note is
+        // about those alone, so its actions never reach a waiting item.
+        let (waits, decisions): (Vec<&QueueItem>, Vec<&QueueItem>) =
+            new.into_iter().partition(|item| {
+                item.dotfile
                     .as_ref()
-                    .and_then(|dotfile| dotfile.waiting.as_ref());
-                match (waiting, item.dotfile.as_ref().map(|dotfile| dotfile.reason)) {
-                    (Some(WaitingFor::Locked { tool }), _) => i18n::text(
-                        self.lang,
-                        "review.waiting_locked",
-                        &[("file", &file), ("tool", tool)],
-                    ),
-                    (Some(WaitingFor::Command { name }), _) => i18n::text(
-                        self.lang,
-                        "review.waiting_command",
-                        &[("file", &file), ("command", name)],
-                    ),
-                    (Some(WaitingFor::Unset { vars }), _) => i18n::text(
-                        self.lang,
-                        "review.waiting_unset",
-                        &[("file", &file), ("vars", &vars.join(", "))],
-                    ),
-                    (None, Some(Reason::Changed)) => {
-                        i18n::text(self.lang, "review.dotfile_changed", &[("file", &file)])
-                    }
-                    (None, _) => {
-                        i18n::text(self.lang, "review.dotfile_conflict", &[("file", &file)])
-                    }
-                }
-            }
+                    .is_some_and(|dotfile| dotfile.waiting.is_some())
+            });
+        let view_only = decisions.is_empty();
+        let items = if view_only { waits } else { decisions };
+        let body = match items.as_slice() {
+            [] => return,
+            [item] if item.dotfile.is_some() => self.dotfile_body(item),
             [item] => {
                 let lines = item.end + 1 - item.start;
                 i18n::text(
@@ -736,20 +740,48 @@ impl Daemon {
             }
             many => i18n::text(
                 self.lang,
-                "review.many",
+                if view_only {
+                    "review.waiting_many"
+                } else {
+                    "review.many"
+                },
                 &[("count", &many.len().to_string())],
             ),
         };
         self.log(&format!("notified: {body}"));
         self.notifier.show(&Note {
             body,
-            items: waiting.iter().map(|item| item.id).collect(),
-            view_only: waiting.iter().all(|item| {
-                item.dotfile
-                    .as_ref()
-                    .is_some_and(|dotfile| dotfile.waiting.is_some())
-            }),
+            items: items.iter().map(|item| item.id).collect(),
+            view_only,
         });
+    }
+
+    /// What one dotfile item is about, naming the file.
+    fn dotfile_body(&self, item: &QueueItem) -> String {
+        let file = adopt::display(&item.file, &self.ctx.home);
+        let Some(dotfile) = &item.dotfile else {
+            return file;
+        };
+        let text = |key, more: &[(&str, &str)]| {
+            let args: Vec<(&str, &str)> = [("file", file.as_str())]
+                .into_iter()
+                .chain(more.iter().copied())
+                .collect();
+            i18n::text(self.lang, key, &args)
+        };
+        match (&dotfile.waiting, dotfile.reason) {
+            (Some(WaitingFor::Locked { tool }), _) => {
+                text("review.waiting_locked", &[("tool", tool)])
+            }
+            (Some(WaitingFor::Command { name }), _) => {
+                text("review.waiting_command", &[("command", name)])
+            }
+            (Some(WaitingFor::Unset { vars }), _) => {
+                text("review.waiting_unset", &[("vars", &review::var_list(vars))])
+            }
+            (None, Reason::Changed) => text("review.dotfile_changed", &[]),
+            (None, _) => text("review.dotfile_conflict", &[]),
+        }
     }
 
     /// Notify each current problem once; one that cleared may notify again

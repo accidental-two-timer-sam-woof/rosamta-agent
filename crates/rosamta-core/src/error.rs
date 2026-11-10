@@ -31,12 +31,15 @@ pub enum Error {
     /// The background service could not start or keep running.
     #[error("{0}")]
     Daemon(String),
+    /// A template cannot render outside a terminal yet.
+    #[error("{}", .0.describe())]
+    Waiting(crate::dotfiles::review::WaitingFor),
 }
 
 impl Error {
     /// Usage errors exit with 2, everything else with 1.
     pub fn is_usage(&self) -> bool {
-        matches!(self, Error::Usage(_))
+        matches!(self, Error::Usage(_) | Error::Waiting(_))
     }
 
     pub(crate) fn read(path: impl Into<PathBuf>) -> impl FnOnce(std::io::Error) -> Error {

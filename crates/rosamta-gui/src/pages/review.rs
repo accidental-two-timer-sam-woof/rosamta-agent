@@ -79,11 +79,14 @@ pub fn item_badge(item: &QueueItem) -> (&'static str, Tone) {
     }
 }
 
-fn waiting_text(waiting: &WaitingFor) -> SharedString {
+pub fn waiting_text(waiting: &WaitingFor) -> SharedString {
     match waiting {
         WaitingFor::Locked { tool } => tf("item.waiting_locked", &[("tool", tool)]),
         WaitingFor::Command { name } => tf("item.waiting_command", &[("command", name)]),
-        WaitingFor::Unset { vars } => tf("item.waiting_unset", &[("vars", &vars.join(", "))]),
+        WaitingFor::Unset { vars } => tf(
+            "item.waiting_unset",
+            &[("vars", &dotfiles::review::var_list(vars))],
+        ),
     }
 }
 

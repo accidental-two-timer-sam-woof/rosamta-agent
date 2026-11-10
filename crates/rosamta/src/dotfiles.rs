@@ -102,9 +102,10 @@ pub(crate) fn unlock(ctx: &Context, json: bool) -> Result<bool> {
     Ok(false)
 }
 
-/// Ask for each `vars.*` a template needs and save it in `host.toml`; an
+/// Ask for each `vars.*` a template needs and save them in `host.toml`; an
 /// empty answer is saved too, so it is not asked again.
 pub(crate) fn ask_vars(ctx: &Context) -> Result<()> {
+    let mut answers = Vec::new();
     for name in rosamta_core::dotfiles::missing_vars(ctx)? {
         print!("vars.{name}: ");
         std::io::stdout().flush().map_err(|err| Error::Write {
@@ -122,14 +123,17 @@ pub(crate) fn ask_vars(ctx: &Context) -> Result<()> {
         // End of input is no answer: the template waits instead.
         if read == 0 {
             println!();
-            return Ok(());
+            break;
         }
         let answer = answer.strip_suffix('\n').unwrap_or(&answer);
-        rosamta_core::host::set_var(
-            &ctx.paths,
-            &name,
-            answer.strip_suffix('\r').unwrap_or(answer),
-        )?;
+        answers.push((
+            name,
+            answer.strip_suffix('\r').unwrap_or(answer).to_string(),
+        ));
+    }
+    // One write: the background service would otherwise render with some.
+    if !answers.is_empty() {
+        rosamta_core::host::set_vars(&ctx.paths, &answers)?;
     }
     Ok(())
 }

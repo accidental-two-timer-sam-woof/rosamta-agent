@@ -124,10 +124,13 @@ struct Env<'a> {
     deployed: Deployed,
     /// For templates; a broken `secrets.toml` fails them alone.
     secrets: std::result::Result<Arc<Session>, String>,
+    /// `rsmt apply` in a terminal renders every template; other deploys,
+    /// such as the one after a review decision, only changed ones.
+    render_all: bool,
 }
 
 impl<'a> Env<'a> {
-    fn new(ctx: &'a Context) -> Result<Self> {
+    fn new(ctx: &'a Context, render_all: bool) -> Result<Self> {
         let host = host::load(&ctx.paths.host_config())?;
         let secrets = ctx.secrets(&host).map_err(|err| err.to_string());
         Ok(Self {
@@ -137,6 +140,7 @@ impl<'a> Env<'a> {
             host,
             deployed: state::load(ctx.paths.state())?,
             secrets,
+            render_all: ctx.interactive && render_all,
         })
     }
 
@@ -179,7 +183,11 @@ fn wait(path: &Path, action: Action, local: String, repo: String) -> Planned {
 
 /// Work out what deploying would do, without writing anything.
 pub fn plan(ctx: &Context) -> Result<Vec<Planned>> {
-    let env = Env::new(ctx)?;
+    plan_with(ctx, false)
+}
+
+fn plan_with(ctx: &Context, render_all: bool) -> Result<Vec<Planned>> {
+    let env = Env::new(ctx, render_all)?;
     let (manifest, broken) = super::usable(&env.repo)?;
     let facts = HostFacts::current(&env.host);
     let selected = super::select(&manifest, &facts);
@@ -350,13 +358,16 @@ fn plan_template(env: &Env, path: &Path, entry: &Dotfile) -> Result<Planned> {
     // Any record says whether rosamta wrote what is there, even one from
     // before this path became a template.
     let record = env.deployed.entries.get(path);
-    let untouched = record.is_some_and(|record| Some(&record.target_hash) == local.as_ref());
+    let untouched = record.is_some_and(|record| match record.deploy {
+        Deploy::Link => tree::link_of(&target) == Some(env.repo.join(&record.source)),
+        _ => Some(&record.target_hash) == local.as_ref(),
+    });
     let same_input = record
         .is_some_and(|record| record.deploy == Deploy::Template && record.source_hash == input);
     let keep = || Work::Template(entry.clone(), input.clone(), None);
     // Outside a terminal only a changed input renders again, so an
     // unchanged template never asks a secret source.
-    if untouched && same_input && !env.ctx.interactive {
+    if untouched && same_input && !env.render_all {
         return Ok(step(path, Action::Unchanged, None, keep()));
     }
     // Before rendering, so an ignored item asks no secret source.
@@ -464,13 +475,18 @@ fn input_hash(env: &Env, entry: &Dotfile, text: &str) -> Result<String> {
     let socket = names
         .contains("bitwarden_ssh_socket")
         .then(|| secrets::bitwarden_ssh_socket(&env.ctx.home));
+    // Only the host values it reads: a new tag must not render every
+    // template, and with it wait on every secret.
+    let host = |key: &str, value: serde_json::Value| {
+        (names.contains("host") || names.contains(&format!("host.{key}"))).then_some(value)
+    };
     let input = serde_json::json!({
         "text": text,
-        "id": env.host.id,
-        "tags": env.host.tags,
-        "os": std::env::consts::OS,
-        "arch": std::env::consts::ARCH,
-        "home": env.ctx.home,
+        "id": host("id", env.host.id.clone().into()),
+        "tags": host("tags", env.host.tags.clone().into()),
+        "os": host("os", std::env::consts::OS.into()),
+        "arch": host("arch", std::env::consts::ARCH.into()),
+        "home": host("home", env.ctx.home.display().to_string().into()),
         "vars": vars,
         "commands": commands,
         "socket": socket,
@@ -481,7 +497,7 @@ fn input_hash(env: &Env, entry: &Dotfile, text: &str) -> Result<String> {
 /// The input hash of the template `entry` as it is now; `None` while this
 /// host has no key.
 pub(crate) fn template_input(ctx: &Context, entry: &Dotfile) -> Result<Option<String>> {
-    let env = Env::new(ctx)?;
+    let env = Env::new(ctx, false)?;
     match template_text(ctx, entry)? {
         Some(text) => input_hash(&env, entry, &text).map(Some),
         None => Ok(None),
@@ -499,7 +515,7 @@ pub(crate) fn output(ctx: &Context, entry: &Dotfile) -> Result<Option<Vec<u8>>> 
     if template::uses_secrets(&names) {
         return Ok(None);
     }
-    Ok(match render(&Env::new(ctx)?, entry, &text)? {
+    Ok(match render(&Env::new(ctx, false)?, entry, &text)? {
         Rendered::Done { bytes, .. } => Some(bytes),
         Rendered::Waiting(_) => None,
     })
@@ -582,7 +598,17 @@ fn plan_release(env: &Env, path: &Path, record: &Record) -> Planned {
 /// Deploy every dotfile. Problems with one path are reported in its step
 /// and do not stop the others. The caller holds the adopt lock.
 pub fn deploy(ctx: &Context) -> Result<Vec<Step>> {
-    let planned = plan(ctx)?;
+    deploy_with(ctx, false)
+}
+
+/// `deploy` for `rsmt apply`: in a terminal every template renders, so a
+/// changed secret reaches its file.
+pub fn deploy_all(ctx: &Context) -> Result<Vec<Step>> {
+    deploy_with(ctx, true)
+}
+
+fn deploy_with(ctx: &Context, render_all: bool) -> Result<Vec<Step>> {
+    let planned = plan_with(ctx, render_all)?;
     let state_dir = ctx.paths.state();
     let mut deployed = state::load(state_dir)?;
     let repo = ctx.paths.repo();
@@ -648,12 +674,12 @@ pub(crate) fn force(ctx: &Context, path: &Path, entry: &Dotfile) -> Result<()> {
             None => return Err(Error::Usage(LOCKED.into())),
         },
         Deploy::Template => {
-            let env = Env::new(ctx)?;
+            let env = Env::new(ctx, false)?;
             let text = template_text(ctx, entry)?.ok_or_else(|| Error::Usage(LOCKED.into()))?;
             let input = input_hash(&env, entry, &text)?;
             match render(&env, entry, &text)? {
                 Rendered::Done { bytes, .. } => Work::Template(entry.clone(), input, Some(bytes)),
-                Rendered::Waiting(waiting) => return Err(Error::Usage(waiting.describe())),
+                Rendered::Waiting(waiting) => return Err(Error::Waiting(waiting)),
             }
         }
     };

@@ -124,11 +124,19 @@ pub fn set(paths: &Paths, key: &str, value: impl Into<toml_edit::Value>) -> Resu
 
 /// Set `vars.<name>` for templates, keeping the file's comments.
 pub fn set_var(paths: &Paths, name: &str, value: &str) -> Result<()> {
+    set_vars(paths, &[(name.to_string(), value.to_string())])
+}
+
+/// Set several `vars` in one write, so the background service sees them
+/// together.
+pub fn set_vars(paths: &Paths, vars: &[(String, String)]) -> Result<()> {
     edit_toml(&paths.host_config(), |doc| {
         if !doc.contains_key("vars") {
             doc["vars"] = toml_edit::table();
         }
-        edit::set_value(&mut doc["vars"][name], value)
+        for (name, value) in vars {
+            edit::set_value(&mut doc["vars"][name.as_str()], value.as_str());
+        }
     })?;
     load(&paths.host_config()).map(drop)
 }
