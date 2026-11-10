@@ -3,6 +3,7 @@ mod commands;
 mod daemon;
 mod dotfiles;
 mod github;
+mod secrets;
 mod sync;
 
 use std::path::{Path, PathBuf};
@@ -109,6 +110,11 @@ enum Command {
         #[command(subcommand)]
         remote: RemoteCommand,
     },
+    /// Store or delete the credentials of a secret source
+    Secrets {
+        #[command(subcommand)]
+        source: SecretsCommand,
+    },
     /// Hand git the stored GitHub token (git credential helper)
     #[command(name = "git-credential", hide = true)]
     GitCredential { operation: String },
@@ -157,6 +163,23 @@ enum GithubAction {
 }
 
 #[derive(Subcommand)]
+enum SecretsCommand {
+    /// Bitwarden Secrets Manager
+    Bws {
+        #[command(subcommand)]
+        action: BwsAction,
+    },
+}
+
+#[derive(Subcommand)]
+enum BwsAction {
+    /// Store a machine account access token, typed without echo
+    Login,
+    /// Delete the stored access token
+    Logout,
+}
+
+#[derive(Subcommand)]
 enum ReviewAction {
     /// Move a change into a module
     Accept {
@@ -193,6 +216,8 @@ enum SchemaKind {
     Host,
     /// dotfiles.toml
     Dotfiles,
+    /// secrets.toml
+    Secrets,
 }
 
 /// Entry point shared by the `rosamta` and `rsmt` binaries.
@@ -236,6 +261,7 @@ fn run(cli: &Cli) -> Result<ExitCode> {
                 SchemaKind::Module => Kind::Module,
                 SchemaKind::Host => Kind::Host,
                 SchemaKind::Dotfiles => Kind::Dotfiles,
+                SchemaKind::Secrets => Kind::Secrets,
             };
             print_json(&schema::schema(kind));
             Ok(ExitCode::SUCCESS)
@@ -273,6 +299,12 @@ fn run(cli: &Cli) -> Result<ExitCode> {
         } => match action {
             GithubAction::Login => github::login(cli.json),
             GithubAction::Logout => github::logout(cli.json),
+        },
+        Command::Secrets {
+            source: SecretsCommand::Bws { action },
+        } => match action {
+            BwsAction::Login => secrets::bws_login(cli.json),
+            BwsAction::Logout => secrets::bws_logout(cli.json),
         },
         Command::GitCredential { operation } => github::credential(operation),
         Command::Daemon { action } => match action {
