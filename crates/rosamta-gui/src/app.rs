@@ -279,7 +279,14 @@ impl Rosamta {
                         window.push_notification(Notification::warning(warning), cx)
                     }
                     Err(err) => {
-                        window.push_notification(Notification::error(err.to_string()), cx);
+                        let text = match &err {
+                            // In this app's words, without the terminal advice.
+                            rosamta_core::Error::Waiting(waiting) => {
+                                crate::pages::review::waiting_text(waiting).to_string()
+                            }
+                            err => err.to_string(),
+                        };
+                        window.push_notification(Notification::error(text), cx);
                         // Put back what is saved, such as a host ID that was refused.
                         this.shown_host_id = None;
                     }

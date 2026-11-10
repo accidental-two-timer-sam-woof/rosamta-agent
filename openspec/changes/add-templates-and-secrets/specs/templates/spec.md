@@ -36,7 +36,7 @@ template SHALL 可使用 `vars.<name>`，值來自本機 `host.toml` 的 `[vars]
 - **THEN** 背景服務不部署它，待處理清單列出該路徑在等待變數 `email`
 
 ### Requirement: Render timing
-終端機中的 `rsmt apply` SHALL render 每個套用到本機的 template。非互動執行與背景服務 SHALL 只 render 輸入（template 內容、`host.*`、引用的變數值與引用的秘密指令宣告）改變的 template。render 結果與目標相同時 SHALL NOT 寫入；覆蓋前 SHALL 存 snapshot。沒有宣告權限時，新建的目標 SHALL 為 0600。
+終端機中的 `rsmt apply` SHALL render 每個套用到本機的 template。非互動執行、背景服務與待處理清單的處理 SHALL 只 render 輸入（template 內容、引用的 `host.*` 值、引用的變數值與引用的秘密指令宣告）改變的 template。render 結果與目標相同時 SHALL NOT 寫入；覆蓋前 SHALL 存 snapshot。沒有宣告權限時，新建的目標 SHALL 為 0600。
 
 #### Scenario: Rotated token
 - **WHEN** Bitwarden 中的 token 更新了，template 本身沒變，使用者在終端機執行 `rsmt apply`

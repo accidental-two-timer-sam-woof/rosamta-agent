@@ -270,6 +270,68 @@ fn a_locked_tool_is_waited_for_not_unlocked() {
         "{calls}"
     );
     assert!(!dir.path().join(".npmrc").exists());
+    // Unlocked elsewhere: the next retry renders it.
+    std::fs::write(
+        bin.join("rbw"),
+        "#!/bin/sh\ncase \"$1\" in\nconfig) echo '{\"email\":\"me@example.com\"}' ;;\n\
+         unlocked) exit 0 ;;\nget) echo '{\"name\":\"GitHub\",\"data\":{\"password\":\"pw\"}}' ;;\nesac\n",
+    )
+    .unwrap();
+    daemon.next_rbw_retry = Instant::now();
+    daemon.tick();
+    assert_eq!(
+        std::fs::read_to_string(dir.path().join(".npmrc")).unwrap(),
+        "pw=pw\n"
+    );
+    assert!(adopt::queue(&daemon.ctx).unwrap().is_empty());
+}
+
+#[test]
+fn waiting_items_beside_decisions_stay_out_of_the_note() {
+    let dir = tempfile::tempdir().unwrap();
+    let (mut daemon, _) = daemon(dir.path());
+    let notes = Arc::new(Mutex::new(Vec::new()));
+    daemon.notifier = Box::new(Notes(Arc::clone(&notes)));
+    let store = Store::new(daemon.ctx.paths.state());
+    let dotfile = |id: u32, waiting: bool| QueueItem {
+        id,
+        file: dir.path().join(format!(".f{id}")),
+        dotfile: Some(dotfiles::review::DotfileItem {
+            path: format!(".f{id}").into(),
+            reason: if waiting {
+                Reason::Waiting
+            } else {
+                Reason::Conflict
+            },
+            sides: Default::default(),
+            waiting: waiting.then(|| WaitingFor::Command { name: "op".into() }),
+        }),
+        ..Default::default()
+    };
+    let mut queue = store.queue().unwrap();
+    queue.items = vec![dotfile(1, true), dotfile(2, false), dotfile(3, true)];
+    store.save_queue(&queue).unwrap();
+
+    daemon.batch = vec![1, 2, 3];
+    daemon.announce();
+    daemon.batch = vec![1, 3];
+    daemon.announce();
+    let notes = notes.lock().unwrap();
+    assert_eq!(notes[0].items, [2]);
+    assert!(!notes[0].view_only);
+    assert_eq!(notes[0].body, "~/.f2: differs from the repo");
+    assert_eq!(notes[1].items, [1, 3]);
+    assert!(notes[1].view_only);
+    assert_eq!(notes[1].body, "2 dotfiles are waiting");
+}
+
+/// Records each notification whole.
+struct Notes(Arc<Mutex<Vec<Note>>>);
+
+impl Notifier for Notes {
+    fn show(&self, note: &Note) {
+        self.0.lock().unwrap().push(note.clone());
+    }
 }
 
 #[test]
@@ -283,7 +345,7 @@ fn new_vars_in_host_toml_render_a_waiting_template() {
     daemon.announce();
     assert_eq!(
         *shown.lock().unwrap(),
-        ["~/.npmrc: waiting for values of email"]
+        ["~/.npmrc: waiting for values of vars.email"]
     );
 
     crate::host::set_var(&daemon.ctx.paths, "email", "a@example.com").unwrap();

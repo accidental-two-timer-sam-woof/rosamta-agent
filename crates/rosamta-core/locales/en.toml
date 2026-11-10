@@ -8,13 +8,15 @@ many = "{count} changes to review"
 dotfile_conflict = "{file}: differs from the repo"
 dotfile_changed = "{file}: changed on this host"
 waiting_locked = "{file}: waiting for {tool} to unlock"
-waiting_command = "{file}: waiting for a terminal to run {command}"
+waiting_command = "{file}: waiting for a terminal to run secret command {command}"
+waiting_many = "{count} dotfiles are waiting"
 waiting_unset = "{file}: waiting for values of {vars}"
 
 [action]
 adopt = "Adopt"
 ignore = "Ignore"
 review = "Show Diff"
+view = "View"
 
 [problem]
 publish_blocked = "Publishing is blocked: {reason}"
@@ -90,7 +92,7 @@ use_repo = "Use repo"
 keep_local = "Keep local"
 empty = "Nothing to review"
 waiting_locked = "Waiting for {tool} to unlock"
-waiting_command = "Waiting for a terminal to run {command}"
+waiting_command = "Waiting for a terminal to run secret command {command}"
 waiting_unset = "Waiting for values of {vars}"
 
 [phase]

@@ -35,6 +35,20 @@ impl Action {
     pub fn label(self, lang: Lang) -> String {
         i18n::text(lang, &format!("action.{}", self.id()), &[])
     }
+
+    /// A button, or a click on the notification itself, which opens the
+    /// app like Show Diff.
+    fn from_response(id: &str) -> Option<Self> {
+        match id {
+            "default" | "com.apple.UNNotificationDefaultActionIdentifier" => Some(Action::Review),
+            id => Action::from_id(id),
+        }
+    }
+}
+
+/// With nothing to decide, the one button only opens the app.
+fn view_label(lang: Lang) -> String {
+    i18n::text(lang, "action.view", &[])
 }
 
 /// One notification. `items` are the review queue IDs its actions apply
@@ -44,7 +58,7 @@ pub struct Note {
     pub body: String,
     pub items: Vec<u32>,
     /// Items that are not decisions, such as templates waiting for a
-    /// terminal, offer only Show Diff.
+    /// terminal, offer only View.
     pub view_only: bool,
 }
 
@@ -146,8 +160,12 @@ mod linux {
                 .body(&note.body);
             let ask = actions && !note.items.is_empty();
             if ask {
-                for action in note.actions() {
-                    notification.action(action.id(), &action.label(self.lang));
+                for &action in note.actions() {
+                    let label = match note.view_only {
+                        true => view_label(self.lang),
+                        false => action.label(self.lang),
+                    };
+                    notification.action(action.id(), &label);
                 }
             }
             let Ok(handle) = notification.show() else {
@@ -163,7 +181,7 @@ mod linux {
             std::thread::spawn(move || {
                 let _ = notify_rust::handle_action(id, |response| {
                     if let ActionResponse::Custom(name) = response
-                        && let Some(action) = Action::from_id(name)
+                        && let Some(action) = Action::from_response(name)
                     {
                         let _ = events.send(Event::Action(action, ids));
                     }
@@ -235,7 +253,9 @@ mod macos {
                 handler: &block2::DynBlock<dyn Fn()>,
             ) {
                 let id = response.notification().request().identifier().to_string();
-                if let Some(action) = Action::from_id(&response.actionIdentifier().to_string()) {
+                if let Some(action) =
+                    Action::from_response(&response.actionIdentifier().to_string())
+                {
                     let _ = self.ivars().events.send(Event::Action(action, items(&id)));
                 }
                 handler.call(());
@@ -278,10 +298,14 @@ mod macos {
             center.setDelegate(Some(ProtocolObject::from_ref(&*delegate)));
             // The center holds its delegate weakly.
             std::mem::forget(delegate);
-            let category = |identifier: &str, actions: &[Action]| {
+            let category = |identifier: &str, actions: &[Action], view_only: bool| {
                 let actions: Vec<_> = actions
                     .iter()
                     .map(|&action| {
+                        let label = match view_only {
+                            true => view_label(lang),
+                            false => action.label(lang),
+                        };
                         let options = if action == Action::Review {
                             UNNotificationActionOptions::Foreground
                         } else {
@@ -289,7 +313,7 @@ mod macos {
                         };
                         UNNotificationAction::actionWithIdentifier_title_options(
                             &NSString::from_str(action.id()),
-                            &NSString::from_str(&action.label(lang)),
+                            &NSString::from_str(&label),
                             options,
                         )
                     })
@@ -302,8 +326,8 @@ mod macos {
                 )
             };
             center.setNotificationCategories(&NSSet::from_retained_slice(&[
-                category(CATEGORY, &Action::ALL),
-                category(VIEW_ONLY, &[Action::Review]),
+                category(CATEGORY, &Action::ALL, false),
+                category(VIEW_ONLY, &[Action::Review], true),
             ]));
             let log_state = state.clone();
             let done = RcBlock::new(move |granted: Bool, err: *mut NSError| {
@@ -397,5 +421,6 @@ mod tests {
         assert!(items(&problem("Pulling failed")).is_empty());
         assert_eq!(Action::from_id("ignore"), Some(Action::Ignore));
         assert_eq!(Action::from_id("default"), None);
+        assert_eq!(Action::from_response("default"), Some(Action::Review));
     }
 }

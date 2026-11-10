@@ -44,7 +44,7 @@ pub struct Adoptions {
 }
 
 /// A segment waiting for the user to accept or ignore it.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct QueueItem {
     pub id: u32,
     pub file: PathBuf,

@@ -34,7 +34,7 @@ pub struct Record {
 }
 
 /// Content hashes of the two sides of a dotfile.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Sides {
     pub local: String,
     pub repo: String,

@@ -224,7 +224,7 @@ fn dotfile_rows(
         // An ignored dotfile keeps its record but is no longer deployed.
         let status = if pending(&path) {
             DotfileStatus::Pending
-        } else if entry.deploy == Deploy::Template || deployed.ignored.contains_key(&path) {
+        } else if deployed.ignored.contains_key(&path) {
             DotfileStatus::Skipped
         } else if deployed.entries.contains_key(&path) {
             DotfileStatus::Deployed
