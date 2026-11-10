@@ -22,3 +22,115 @@ apply_failed = "新設定沒有套用：{reason}"
 invalid = "repo 中有格式錯誤的檔案：{reason}"
 upgrade = "repo 需要較新版本的 rosamta"
 locked = "加密的設定檔需要輸入密碼"
+
+[nav]
+overview = "總覽"
+review = "待處理"
+modules = "模組"
+dotfiles = "設定檔"
+history = "歷史"
+settings = "設定"
+
+[overview]
+synced = "上次同步 {time}"
+sync = "同步"
+attention = "需要處理"
+status = "狀態"
+shells = "Shell"
+activity = "最近活動"
+view = "查看"
+
+[status]
+daemon = "背景服務"
+running = "執行中 · 自 {time}"
+stopped = "已停止"
+every = "每 {minutes} 分鐘"
+last = "上次 {time}"
+unpushed = "{count} 個尚未推送"
+hooked = "已掛載"
+unhooked = "未掛載"
+missing = "未安裝"
+none = "無"
+
+[policy]
+adopt = "接管"
+original = "原始內容"
+publish = "推送"
+pull = "拉取"
+auto = "自動"
+ask = "詢問"
+off = "關閉"
+manual = "手動"
+delete = "刪除"
+comment = "註解"
+
+[badge]
+warning = "警告"
+adopt = "待接管"
+conflict = "衝突"
+changed = "已修改"
+structured = "結構化"
+raw = "片段"
+encrypted = "加密"
+
+[item]
+lines = "第 {start}–{end} 行"
+rc = "rc 檔變更"
+module = "產生的模組"
+this_host = "本機"
+all_hosts = "所有主機"
+use_repo = "採用 repo 版本"
+keep_local = "保留本機版本"
+empty = "沒有待處理項目"
+
+[phase]
+env = "環境"
+early = "前置"
+framework = "框架"
+tools = "工具"
+prompt = "提示字元"
+aliases = "別名"
+late = "收尾"
+login = "登入"
+
+[modules]
+search = "搜尋"
+empty = "沒有模組"
+
+[dotfiles]
+link = "連結"
+copy = "複製"
+template = "範本"
+deployed = "已部署"
+pending = "待處理"
+skipped = "略過"
+not_deployed = "未部署"
+empty = "沒有設定檔"
+
+[history]
+commits = "Repo"
+snapshots = "快照"
+
+[settings]
+host = "本機"
+host_id = "識別名稱"
+tags = "標籤"
+add = "新增"
+preferences = "偏好方法"
+pull_interval = "拉取間隔"
+every_5 = "每 5 分鐘"
+every_15 = "每 15 分鐘"
+every_30 = "每 30 分鐘"
+hourly = "每小時"
+shell_notice = "開 shell 時提醒待處理項目"
+remote = "遠端"
+daemon = "背景服務"
+login = "登入時啟動"
+
+[setup]
+title = "設定這台主機"
+new = "建立新的 repo"
+create = "建立"
+join = "加入既有的 repo"
+url = "repo 的 URL"
+join_button = "加入"

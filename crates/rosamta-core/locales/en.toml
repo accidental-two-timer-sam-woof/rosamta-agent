@@ -23,3 +23,115 @@ apply_failed = "New settings were not applied: {reason}"
 invalid = "The repo has an invalid file: {reason}"
 upgrade = "The repo needs a newer rosamta"
 locked = "Encrypted dotfiles need the passphrase"
+
+[nav]
+overview = "Overview"
+review = "Review"
+modules = "Modules"
+dotfiles = "Dotfiles"
+history = "History"
+settings = "Settings"
+
+[overview]
+synced = "Last synced {time}"
+sync = "Sync"
+attention = "Needs attention"
+status = "Status"
+shells = "Shells"
+activity = "Recent activity"
+view = "View"
+
+[status]
+daemon = "Background service"
+running = "Running · since {time}"
+stopped = "Stopped"
+every = "every {minutes} min"
+last = "last {time}"
+unpushed = "{count} not pushed"
+hooked = "Hooked"
+unhooked = "Not hooked"
+missing = "Not installed"
+none = "None"
+
+[policy]
+adopt = "Adopt"
+original = "Original lines"
+publish = "Publish"
+pull = "Pull"
+auto = "Auto"
+ask = "Ask"
+off = "Off"
+manual = "Manual"
+delete = "Delete"
+comment = "Comment"
+
+[badge]
+warning = "Warning"
+adopt = "New"
+conflict = "Conflict"
+changed = "Changed"
+structured = "Structured"
+raw = "Raw"
+encrypted = "Encrypted"
+
+[item]
+lines = "Lines {start}–{end}"
+rc = "Startup file change"
+module = "Generated module"
+this_host = "This host"
+all_hosts = "All hosts"
+use_repo = "Use repo version"
+keep_local = "Keep local version"
+empty = "Nothing to review"
+
+[phase]
+env = "Environment"
+early = "Early"
+framework = "Framework"
+tools = "Tools"
+prompt = "Prompt"
+aliases = "Aliases"
+late = "Late"
+login = "Login"
+
+[modules]
+search = "Search"
+empty = "No modules"
+
+[dotfiles]
+link = "Link"
+copy = "Copy"
+template = "Template"
+deployed = "Deployed"
+pending = "Pending"
+skipped = "Skipped"
+not_deployed = "Not deployed"
+empty = "No dotfiles"
+
+[history]
+commits = "Repo"
+snapshots = "Snapshots"
+
+[settings]
+host = "This host"
+host_id = "Host ID"
+tags = "Tags"
+add = "Add"
+preferences = "Preferences"
+pull_interval = "Pull interval"
+every_5 = "Every 5 minutes"
+every_15 = "Every 15 minutes"
+every_30 = "Every 30 minutes"
+hourly = "Every hour"
+shell_notice = "Remind of pending items in new shells"
+remote = "Remote"
+daemon = "Background service"
+login = "Start at login"
+
+[setup]
+title = "Set up this host"
+new = "Create a new repo"
+create = "Create"
+join = "Join an existing repo"
+url = "Repo URL"
+join_button = "Join"
