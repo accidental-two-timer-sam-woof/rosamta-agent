@@ -108,6 +108,13 @@ fn added_lines(log: &str) -> Vec<Added> {
 fn check(files: &[Added]) -> Vec<Hit> {
     files
         .iter()
+        // Encrypted dotfiles are ciphertext, which looks like a key to the rules.
+        .filter(|added| {
+            !added
+                .lines
+                .iter()
+                .any(|(_, text)| text == "-----BEGIN AGE ENCRYPTED FILE-----")
+        })
         .filter_map(|added| {
             let text: Vec<&str> = added.lines.iter().map(|(_, text)| text.as_str()).collect();
             let rule = secret_rule(&text.join("\n"))?;

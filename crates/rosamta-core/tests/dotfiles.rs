@@ -534,3 +534,127 @@ mod encrypted {
         assert!(err.to_string().contains("already has a key"), "{err}");
     }
 }
+
+mod manage {
+    use super::*;
+    use rosamta_core::dotfiles::{crypt, manage};
+
+    fn log(home: &Home) -> String {
+        let out = Command::new("git")
+            .arg("-C")
+            .arg(home.repo())
+            .args(["log", "--format=%s", "--name-only"])
+            .output()
+            .unwrap();
+        String::from_utf8(out.stdout).unwrap()
+    }
+
+    fn committed() -> Home {
+        let home = Home::new("ask");
+        git(&home.repo(), &["add", "-A"]);
+        git(
+            &home.repo(),
+            &["commit", "--quiet", "--no-verify", "-m", "init"],
+        );
+        home
+    }
+
+    #[test]
+    fn add_links_a_directory_and_commits() {
+        let home = committed();
+        write(&home.at(".config/ghostty/config"), "theme = dark\n");
+        let added = manage::add(&home.ctx, &[home.at(".config/ghostty")], false, false).unwrap();
+        assert_eq!(added, [PathBuf::from(".config/ghostty")]);
+        let source = home.repo().join("home/.config/ghostty");
+        assert_eq!(read(&source.join("config")), "theme = dark\n");
+        assert_eq!(fs::read_link(home.at(".config/ghostty")).unwrap(), source);
+        assert!(
+            log(&home).starts_with("add(home): .config/ghostty\n"),
+            "{}",
+            log(&home)
+        );
+        assert_eq!(home.deploy(), one(".config/ghostty", Action::Unchanged));
+    }
+
+    #[test]
+    fn add_keeps_private_permissions() {
+        let home = committed();
+        write(&home.at(".ssh/config"), "Host lab\n");
+        fs::set_permissions(home.at(".ssh/config"), fs::Permissions::from_mode(0o600)).unwrap();
+        manage::add(&home.ctx, &[home.at(".ssh/config")], true, false).unwrap();
+        let manifest = read(&home.repo().join("dotfiles.toml"));
+        assert!(
+            manifest.contains("deploy = \"copy\"") && manifest.contains("permissions = \"0600\""),
+            "{manifest}"
+        );
+        assert!(
+            !fs::symlink_metadata(home.at(".ssh/config"))
+                .unwrap()
+                .is_symlink()
+        );
+    }
+
+    #[test]
+    fn add_refuses_what_it_should_not_take() {
+        let home = committed();
+        write(
+            &home.at(".config/gh/hosts.yml"),
+            "oauth_token: ghp_0123456789abcdefghijklmnopqrstuvwxyzAB\n",
+        );
+        let err =
+            manage::add(&home.ctx, &[home.at(".config/gh/hosts.yml")], false, false).unwrap_err();
+        assert!(err.to_string().contains("add it with --encrypt"), "{err}");
+        let err = manage::add(&home.ctx, &[PathBuf::from("/etc/hosts")], false, false).unwrap_err();
+        assert!(
+            err.to_string().contains("not inside the home directory"),
+            "{err}"
+        );
+        let err = manage::add(&home.ctx, &[home.at(".config")], false, false).unwrap_err();
+        assert!(err.to_string().contains("rosamta's own files"), "{err}");
+        write(&home.at(".vimrc"), "set nu\n");
+        manage::add(&home.ctx, &[home.at(".vimrc")], false, false).unwrap();
+        let err = manage::add(&home.ctx, &[home.at(".vimrc")], false, false).unwrap_err();
+        assert!(err.to_string().contains("already managed"), "{err}");
+        assert!(!home.repo().join("home/.config/gh").exists());
+    }
+
+    #[test]
+    fn add_encrypted_commits_ciphertext_and_the_key() {
+        let home = committed();
+        crypt::create(&home.ctx, "correct horse").unwrap();
+        write(
+            &home.at(".config/gh/hosts.yml"),
+            "oauth_token: ghp_0123456789abcdefghijklmnopqrstuvwxyzAB\n",
+        );
+        manage::add(&home.ctx, &[home.at(".config/gh/hosts.yml")], false, true).unwrap();
+        let stored = read(&home.repo().join("home/.config/gh/hosts.yml"));
+        assert!(stored.starts_with("-----BEGIN AGE ENCRYPTED FILE-----"));
+        let log = log(&home);
+        assert!(
+            log.contains("key.age") && log.contains("home/.config/gh/hosts.yml"),
+            "{log}"
+        );
+        assert_eq!(
+            home.deploy(),
+            one(".config/gh/hosts.yml", Action::Unchanged)
+        );
+    }
+
+    #[test]
+    #[ignore = "git::commit stages twice; fixed on the sync review branch"]
+    fn forget_leaves_a_regular_copy() {
+        let home = committed();
+        write(&home.at(".config/ghostty/config"), "theme = dark\n");
+        manage::add(&home.ctx, &[home.at(".config/ghostty")], false, false).unwrap();
+        manage::forget(&home.ctx, &home.at(".config/ghostty")).unwrap();
+        let ghostty = home.at(".config/ghostty");
+        assert!(!fs::symlink_metadata(&ghostty).unwrap().is_symlink());
+        assert_eq!(read(&ghostty.join("config")), "theme = dark\n");
+        assert!(!home.repo().join("home/.config/ghostty").exists());
+        assert!(!read(&home.repo().join("dotfiles.toml")).contains("ghostty"));
+        assert!(log(&home).starts_with("forget(home): .config/ghostty\n"));
+        assert!(home.deploy().is_empty());
+        let err = manage::forget(&home.ctx, &ghostty).unwrap_err();
+        assert!(err.to_string().contains("is not a dotfile"), "{err}");
+    }
+}

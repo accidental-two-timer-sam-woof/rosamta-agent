@@ -27,7 +27,7 @@
 
 ## 5. 新增與移除
 
-- [ ] 5.1 實作 `rsmt add <path>... [--copy] [--encrypt]`：路徑檢查、自動記錄權限、秘密內容的拒絕、第一次加密時設定密碼、commit 與推送
+- [x] 5.1 實作 `rsmt add <path>... [--copy] [--encrypt]`：路徑檢查、自動記錄權限、秘密內容的拒絕、第一次加密時設定密碼、commit 與推送
 - [ ] 5.2 實作 `rsmt forget <path>`：移除宣告與內容、symlink 換成一般檔案、commit 與推送
 - [ ] 5.3 `edit(...)` commit 訊息新增 `home` 範圍
 

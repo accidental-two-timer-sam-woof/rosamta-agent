@@ -11,6 +11,7 @@ use crate::validate;
 pub mod crypt;
 pub mod deploy;
 mod history;
+pub mod manage;
 pub mod review;
 pub mod state;
 pub mod tree;
