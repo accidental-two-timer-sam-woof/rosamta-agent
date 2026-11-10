@@ -310,9 +310,11 @@ fn commit_pending(ctx: &Context, _repo_dir: &Path) -> Result<bool> {
 
 /// Commit the changes under `paths` (every change when empty) once the
 /// secret scan passes; `message` defaults to one naming what changed. A
-/// signing failure is recorded and returned as an error.
+/// commit that fails, to sign or otherwise, is recorded and returned as an
+/// error.
 pub(crate) fn commit_scanned(ctx: &Context, paths: &[&str], message: Option<&str>) -> Result<bool> {
     let repo_dir = ctx.paths.repo();
+    git::ensure_on_branch(&repo_dir)?;
     let limit = |args: &[&'static str]| {
         let mut all: Vec<&str> = args.to_vec();
         if !paths.is_empty() {
@@ -342,12 +344,16 @@ pub(crate) fn commit_scanned(ctx: &Context, paths: &[&str], message: Option<&str
         return Err(secret_blocked(ctx, &hits, None));
     }
     let message = message.map_or_else(|| edit_message(&status), str::to_string);
-    match git::commit(&repo_dir, &message, paths)? {
-        Commit::Clean => Ok(false),
-        Commit::Created => Ok(true),
-        Commit::SigningFailed(message) => {
+    match git::commit(&repo_dir, &message, paths) {
+        Ok(Commit::Clean) => Ok(false),
+        Ok(Commit::Created) => Ok(true),
+        Ok(Commit::SigningFailed(message)) => {
             signing_blocked(ctx, &message)?;
             Err(Error::Sync(signing(&message)))
+        }
+        Err(err) => {
+            record_publish(ctx, Attempt::new(Outcome::Failed, Some(err.to_string())))?;
+            Err(err)
         }
     }
 }
@@ -400,11 +406,7 @@ fn edit_message(status: &str) -> String {
 fn pull_locked(ctx: &Context) -> Result<Pulled> {
     let repo_dir = ctx.paths.repo();
     // A rebase cut short (the process was killed) must not stay half done.
-    let rebasing = ["rebase-merge", "rebase-apply"].into_iter().any(|name| {
-        git::run(&repo_dir, &["rev-parse", "--git-path", name])
-            .is_ok_and(|path| repo_dir.join(path.trim()).exists())
-    });
-    if rebasing {
+    if git::rebasing(&repo_dir) {
         git::run(&repo_dir, &["rebase", "--abort"])?;
     }
     let mut remote = Remote::required(&repo_dir)?;

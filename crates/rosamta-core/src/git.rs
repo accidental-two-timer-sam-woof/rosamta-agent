@@ -64,10 +64,14 @@ pub(crate) enum Failure {
 }
 
 pub(crate) fn classify(message: &str) -> Failure {
-    const SIGNING: [&str; 3] = [
-        "gpg failed to sign",
-        "error: gpg",
-        "failed to write commit object",
+    const SIGNING: [&str; 2] = ["gpg failed to sign", "error: gpg"];
+    // A failed SSH signature shows only as a commit git could not write, as
+    // does an object store git cannot write to.
+    const STORE: [&str; 4] = [
+        "insufficient permission",
+        "No space left",
+        "Disk quota",
+        "Read-only file system",
     ];
     const REJECTED: [&str; 3] = ["[rejected]", "non-fast-forward", "fetch first"];
     const DENIED: [&str; 7] = [
@@ -91,7 +95,8 @@ pub(crate) fn classify(message: &str) -> Failure {
         "Connection reset",
     ];
     let has = |needles: &[&str]| needles.iter().any(|needle| message.contains(needle));
-    if has(&SIGNING) {
+    let unwritten = message.contains("failed to write commit object") && !has(&STORE);
+    if has(&SIGNING) || unwritten {
         Failure::Signing
     } else if has(&REJECTED) {
         Failure::Rejected
@@ -112,33 +117,61 @@ pub(crate) enum Commit {
     SigningFailed(String),
 }
 
+/// A rebase stopped partway, by a conflict or a killed process.
+pub(crate) fn rebasing(dir: &Path) -> bool {
+    ["rebase-merge", "rebase-apply"].into_iter().any(|name| {
+        run(dir, &["rev-parse", "--git-path", name])
+            .is_ok_and(|path| dir.join(path.trim()).exists())
+    })
+}
+
+/// `rebase --abort` drops a commit made mid-rebase, and one on a detached
+/// HEAD is on no branch.
+pub(crate) fn ensure_on_branch(dir: &Path) -> Result<()> {
+    if rebasing(dir) {
+        return Err(Error::Usage("a rebase is in progress in the repo".into()));
+    }
+    if !succeeds(dir, &["symbolic-ref", "--quiet", "HEAD"])? {
+        return Err(Error::Usage("the repo is not on a branch".into()));
+    }
+    Ok(())
+}
+
+fn limit<'a>(args: &[&'a str], paths: &[&'a str]) -> Vec<&'a str> {
+    let mut all = args.to_vec();
+    if !paths.is_empty() {
+        all.push("--");
+        all.extend_from_slice(paths);
+    }
+    all
+}
+
 /// Commit the changes under `paths`, or every change when `paths` is empty.
 /// Never adds `--no-gpg-sign`: signing follows the user's git config.
 pub(crate) fn commit(dir: &Path, message: &str, paths: &[&str]) -> Result<Commit> {
-    fn limit<'a>(args: &[&'a str], paths: &[&'a str]) -> Vec<&'a str> {
-        let mut all = args.to_vec();
-        if !paths.is_empty() {
-            all.push("--");
-            all.extend_from_slice(paths);
-        }
-        all
-    }
-    let with_paths = |args: &[&'static str]| limit(args, paths);
-    if run(dir, &with_paths(&["status", "--porcelain"]))?
+    ensure_on_branch(dir)?;
+    if run(dir, &limit(&["status", "--porcelain"], paths))?
         .trim()
         .is_empty()
     {
         return Ok(Commit::Clean);
     }
-    run(dir, &with_paths(&["add", "--all"]))?;
+    run(dir, &limit(&["add", "--all"], paths))?;
     let args = limit(&["commit", "--quiet", "--message", message], paths);
-    match run(dir, &args) {
-        Ok(_) => Ok(Commit::Created),
-        Err(Error::Git { message, .. }) if classify(&message) == Failure::Signing => {
-            run(dir, &with_paths(&["reset", "--quiet"]))?;
+    finish(dir, &args, paths)
+}
+
+/// Run `git commit`; whatever stops it, `paths` end up unstaged again.
+fn finish(dir: &Path, args: &[&str], paths: &[&str]) -> Result<Commit> {
+    let Err(err) = run(dir, args) else {
+        return Ok(Commit::Created);
+    };
+    run(dir, &limit(&["reset", "--quiet"], paths))?;
+    match err {
+        Error::Git { message, .. } if classify(&message) == Failure::Signing => {
             Ok(Commit::SigningFailed(message))
         }
-        Err(err) => Err(err),
+        err => Err(err),
     }
 }
 
@@ -162,7 +195,17 @@ fn check(args: &[&str], output: std::io::Result<Output>) -> Result<String> {
         message: err.to_string(),
     })?;
     if !output.status.success() {
-        let message = String::from_utf8_lossy(&output.stderr).trim().to_string();
+        // A hook can fail silently, and `commit` explains on stdout.
+        let text: Vec<String> = [&output.stderr, &output.stdout]
+            .into_iter()
+            .map(|bytes| String::from_utf8_lossy(bytes).trim().to_string())
+            .filter(|text| !text.is_empty())
+            .collect();
+        let message = if text.is_empty() {
+            output.status.to_string()
+        } else {
+            text.join("\n")
+        };
         return Err(Error::Git { command, message });
     }
     Ok(String::from_utf8_lossy(&output.stdout).into_owned())
@@ -257,6 +300,53 @@ pub(crate) mod tests {
         );
     }
 
+    /// A commit made mid-rebase is dropped by `rebase --abort`; one on a
+    /// detached HEAD is on no branch.
+    #[test]
+    fn commits_refuse_a_rebase_or_a_detached_head() {
+        isolate();
+        let (_dir, [a, _]) = remote_and_clones();
+        for text in ["one", "two"] {
+            std::fs::write(a.join("file"), text).unwrap();
+            assert!(commit_all(&a, text).unwrap());
+        }
+        let refused = |expected: &str| {
+            std::fs::write(a.join("new"), "text").unwrap();
+            let err = commit(&a, "edit", &[])
+                .err()
+                .expect("commit should be refused");
+            assert!(err.to_string().contains(expected), "{err}");
+            assert_eq!(run(&a, &["status", "--porcelain"]).unwrap(), "?? new\n");
+        };
+        assert!(run(&a, &["rebase", "--quiet", "--exec", "false", "HEAD~1"]).is_err());
+        refused("a rebase is in progress");
+        run(&a, &["rebase", "--abort"]).unwrap();
+        run(&a, &["checkout", "--quiet", "--detach"]).unwrap();
+        refused("the repo is not on a branch");
+    }
+
+    #[test]
+    fn any_failed_commit_unstages_and_says_why() {
+        isolate();
+        let (_dir, [a, _]) = remote_and_clones();
+        let hook = a.join(".git/hooks/pre-commit");
+        std::fs::write(&hook, "#!/bin/sh\necho stopped by hook\nexit 1\n").unwrap();
+        let mut permissions = std::fs::metadata(&hook).unwrap().permissions();
+        std::os::unix::fs::PermissionsExt::set_mode(&mut permissions, 0o755);
+        std::fs::set_permissions(&hook, permissions).unwrap();
+        std::fs::write(a.join("file"), "text").unwrap();
+        let err = commit(&a, "edit", &["file"])
+            .err()
+            .expect("the hook refuses");
+        assert!(err.to_string().contains("stopped by hook"), "{err}");
+        assert_eq!(run(&a, &["status", "--porcelain"]).unwrap(), "?? file\n");
+
+        std::fs::write(&hook, "#!/bin/sh\nexit 1\n").unwrap();
+        let err = commit(&a, "edit", &[]).err().expect("the hook refuses");
+        assert!(err.to_string().contains("exit status: 1"), "{err}");
+        assert_eq!(run(&a, &["status", "--porcelain"]).unwrap(), "?? file\n");
+    }
+
     #[test]
     fn classify_messages() {
         let cases = [
@@ -281,6 +371,19 @@ pub(crate) mod tests {
                 Failure::Offline,
             ),
             ("fatal: not a git repository", Failure::Other),
+            // SSH signing names no program.
+            (
+                "error: Couldn't load public key /k: No such file or directory?\n\nfatal: failed to write commit object",
+                Failure::Signing,
+            ),
+            (
+                "error: unable to create temporary file: No space left on device\nfatal: failed to write commit object",
+                Failure::Other,
+            ),
+            (
+                "error: insufficient permission for adding an object to repository database .git/objects\nfatal: failed to write commit object",
+                Failure::Other,
+            ),
         ];
         for (message, expected) in cases {
             assert_eq!(classify(message), expected, "{message}");
