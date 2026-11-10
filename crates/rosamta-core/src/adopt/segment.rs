@@ -130,6 +130,22 @@ impl Segment {
     }
 }
 
+/// The `config.fish` fish writes on first start. It is fish's, not the
+/// user's, so it is not adopted.
+pub fn fish_default(text: &str) -> bool {
+    let lines: Vec<&str> = text
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+        .collect();
+    lines
+        == [
+            "if status is-interactive",
+            "# Commands to run in interactive sessions can go here",
+            "end",
+        ]
+}
+
 /// Written above lines kept as comments, so scans skip them.
 pub const COMMENTED: &str = "# rosamta: adopted";
 
