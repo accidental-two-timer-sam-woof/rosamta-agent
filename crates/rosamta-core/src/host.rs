@@ -2,6 +2,8 @@
 
 use std::path::Path;
 
+use toml_edit::{Array, Item};
+
 use crate::config::{HostConfig, RepoManifest};
 use crate::edit::{self, TomlFile, array_mut, edit_toml, rename_in_array};
 use crate::error::{Error, Result};
@@ -136,7 +138,7 @@ pub fn remove_tag(paths: &Paths, tag: &str) -> Result<bool> {
 }
 
 /// Change the host ID everywhere: the repo's host list, every `when.hosts`
-/// in repo and local modules, and `host.toml`. The repo change is one commit.
+/// in repo and local modules and in dotfiles, and `host.toml`. The repo change is one commit.
 pub fn rename(paths: &Paths, new_id: &str) -> Result<()> {
     check_id(new_id)?;
     let old_id = load(&paths.host_config())?.id;
@@ -145,6 +147,7 @@ pub fn rename(paths: &Paths, new_id: &str) -> Result<()> {
     }
     let repo_dir = paths.repo();
     let manifest = repo_dir.join(repo::MANIFEST);
+    let dotfiles = repo_dir.join(crate::dotfiles::MANIFEST);
     let mut files = Vec::new();
     if manifest.is_file() {
         let RepoManifest { format, hosts } = repo::read_manifest(&repo_dir)?;
@@ -155,6 +158,9 @@ pub fn rename(paths: &Paths, new_id: &str) -> Result<()> {
             )));
         }
         files.push(manifest.clone());
+        if dotfiles.is_file() {
+            files.push(dotfiles.clone());
+        }
         files.extend(repo::module_files(&repo_dir)?);
     }
     files.extend(repo::module_files(&paths.local())?);
@@ -167,12 +173,22 @@ pub fn rename(paths: &Paths, new_id: &str) -> Result<()> {
 
     let mut changed = Vec::new();
     for file in &mut files {
-        let hosts = if file.path == manifest {
-            file.doc["hosts"].as_array_mut()
+        let lists: Vec<&mut Array> = if file.path == manifest {
+            file.doc["hosts"].as_array_mut().into_iter().collect()
+        } else if file.path == dotfiles {
+            file.doc
+                .get_mut("dotfile")
+                .and_then(Item::as_array_of_tables_mut)
+                .into_iter()
+                .flat_map(|entries| entries.iter_mut())
+                .filter_map(|entry| array_mut(entry.get_mut("when")?, "hosts"))
+                .collect()
         } else {
             array_mut(&mut file.doc["when"], "hosts")
+                .into_iter()
+                .collect()
         };
-        if let Some(hosts) = hosts {
+        for hosts in lists {
             rename_in_array(hosts, &old_id, new_id);
         }
         if file.save()?
