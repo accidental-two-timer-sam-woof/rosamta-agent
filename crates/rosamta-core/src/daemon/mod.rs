@@ -20,7 +20,7 @@ use notify_debouncer_full::{DebounceEventResult, new_debouncer};
 use crate::adopt::{self, Scope};
 use crate::apply::{self, Context};
 use crate::config::{HostConfig, SyncPolicy};
-use crate::dotfiles::review::Reason;
+use crate::dotfiles::review::{Reason, WaitingFor};
 use crate::error::Result;
 use crate::hooks::HookEnv;
 use crate::i18n::{self, Lang};
@@ -406,8 +406,9 @@ impl Daemon {
         if routes.rc {
             self.rc_changed();
         }
-        // After the repo: its apply may already have handled the change.
-        if routes.dotfiles {
+        // After the repo: its apply may already have handled the change. New
+        // [vars] in host.toml change what templates render.
+        if routes.dotfiles || routes.host {
             self.dotfiles_changed();
         }
     }
@@ -689,15 +690,34 @@ impl Daemon {
         let body = match waiting.as_slice() {
             [] => return,
             [item] if item.dotfile.is_some() => {
-                let key = match item.dotfile.as_ref().map(|dotfile| dotfile.reason) {
-                    Some(Reason::Changed) => "review.dotfile_changed",
-                    _ => "review.dotfile_conflict",
-                };
-                i18n::text(
-                    self.lang,
-                    key,
-                    &[("file", &adopt::display(&item.file, &self.ctx.home))],
-                )
+                let file = adopt::display(&item.file, &self.ctx.home);
+                let waiting = item
+                    .dotfile
+                    .as_ref()
+                    .and_then(|dotfile| dotfile.waiting.as_ref());
+                match (waiting, item.dotfile.as_ref().map(|dotfile| dotfile.reason)) {
+                    (Some(WaitingFor::Locked { tool }), _) => i18n::text(
+                        self.lang,
+                        "review.waiting_locked",
+                        &[("file", &file), ("tool", tool)],
+                    ),
+                    (Some(WaitingFor::Command { name }), _) => i18n::text(
+                        self.lang,
+                        "review.waiting_command",
+                        &[("file", &file), ("command", name)],
+                    ),
+                    (Some(WaitingFor::Unset { vars }), _) => i18n::text(
+                        self.lang,
+                        "review.waiting_unset",
+                        &[("file", &file), ("vars", &vars.join(", "))],
+                    ),
+                    (None, Some(Reason::Changed)) => {
+                        i18n::text(self.lang, "review.dotfile_changed", &[("file", &file)])
+                    }
+                    (None, _) => {
+                        i18n::text(self.lang, "review.dotfile_conflict", &[("file", &file)])
+                    }
+                }
             }
             [item] => {
                 let lines = item.end + 1 - item.start;
@@ -724,6 +744,11 @@ impl Daemon {
         self.notifier.show(&Note {
             body,
             items: waiting.iter().map(|item| item.id).collect(),
+            view_only: waiting.iter().all(|item| {
+                item.dotfile
+                    .as_ref()
+                    .is_some_and(|dotfile| dotfile.waiting.is_some())
+            }),
         });
     }
 
@@ -785,6 +810,7 @@ impl Daemon {
                 self.notifier.show(&Note {
                     body,
                     items: Vec::new(),
+                    view_only: false,
                 });
             }
             keys.push(key);

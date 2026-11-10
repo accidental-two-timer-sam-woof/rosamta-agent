@@ -6,6 +6,9 @@ lines = "{file}：{lines} 行新內容待處理"
 many = "{count} 項變動待處理"
 dotfile_conflict = "{file}：與 repo 的版本不同"
 dotfile_changed = "{file}：在這台主機上被修改"
+waiting_locked = "{file}：等待 {tool} 解鎖"
+waiting_command = "{file}：等待在終端機中執行 {command}"
+waiting_unset = "{file}：等待 {vars} 的值"
 
 [action]
 adopt = "接管"
@@ -73,6 +76,7 @@ changed = "已修改"
 structured = "結構化"
 raw = "片段"
 encrypted = "加密"
+waiting = "等待中"
 
 [item]
 line = "第 {start} 行"
@@ -84,6 +88,9 @@ all_hosts = "所有主機"
 use_repo = "採用 repo"
 keep_local = "保留本機"
 empty = "沒有待處理項目"
+waiting_locked = "等待 {tool} 解鎖"
+waiting_command = "等待在終端機中執行 {command}"
+waiting_unset = "等待 {vars} 的值"
 
 [phase]
 env = "環境"

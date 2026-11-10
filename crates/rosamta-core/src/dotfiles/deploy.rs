@@ -11,7 +11,7 @@ use std::sync::Arc;
 
 use serde::Serialize;
 
-use super::review::{self, DotfileItem, Reason};
+use super::review::{self, DotfileItem, Reason, WaitingFor};
 use super::state::{self, Deployed, Record, Sides};
 use super::tree::{self, Content};
 use super::{Choice, crypt, history};
@@ -66,6 +66,8 @@ pub struct Planned {
     pub preview: Option<(Option<String>, Option<String>)>,
     /// Both sides of a path that waits for the user.
     sides: Option<Sides>,
+    /// What a template waits for before it can render.
+    waiting: Option<WaitingFor>,
     work: Work,
 }
 
@@ -165,6 +167,7 @@ fn step(path: &Path, action: Action, reason: Option<String>, work: Work) -> Plan
         },
         preview: None,
         sides: None,
+        waiting: None,
         work,
     }
 }
@@ -377,8 +380,19 @@ fn plan_template(env: &Env, path: &Path, entry: &Dotfile) -> Result<Planned> {
     }
     let (bytes, secret) = match render(env, entry, &text)? {
         Rendered::Done { bytes, secret } => (bytes, secret),
-        Rendered::Waiting(reason) => {
-            return Ok(step(path, Action::Skipped, Some(reason), Work::Nothing));
+        Rendered::Waiting(waiting) => {
+            let mut planned = step(
+                path,
+                Action::Skipped,
+                Some(waiting.describe()),
+                Work::Nothing,
+            );
+            planned.sides = Some(Sides {
+                local: local.unwrap_or_default(),
+                repo: input,
+            });
+            planned.waiting = Some(waiting);
+            return Ok(planned);
         }
     };
     let action = match &local {
@@ -462,20 +476,18 @@ pub(crate) fn template_input(ctx: &Context, entry: &Dotfile) -> Result<Option<St
 
 enum Rendered {
     /// The output, and whether a secret went into it.
-    Done { bytes: Vec<u8>, secret: bool },
-    /// What it waits for, as a step's reason.
-    Waiting(String),
+    Done {
+        bytes: Vec<u8>,
+        secret: bool,
+    },
+    Waiting(WaitingFor),
 }
 
 fn render(env: &Env, entry: &Dotfile, text: &str) -> Result<Rendered> {
     let name = entry.source();
     let missing = template::missing_vars(&name, text, &env.host.vars).map_err(Error::Usage)?;
     if !missing.is_empty() {
-        let names: Vec<String> = missing.iter().map(|var| format!("vars.{var}")).collect();
-        return Ok(Rendered::Waiting(format!(
-            "waiting for {} in host.toml; run `rsmt apply` in a terminal",
-            names.join(", ")
-        )));
+        return Ok(Rendered::Waiting(WaitingFor::Unset { vars: missing }));
     }
     let session = env
         .secrets
@@ -488,13 +500,10 @@ fn render(env: &Env, entry: &Dotfile, text: &str) -> Result<Rendered> {
             secret: session.used() > before,
         }),
         Err(err) => match session.take_waiting().into_iter().next() {
-            Some(Waiting::Locked(tool)) => Ok(Rendered::Waiting(format!(
-                "waiting for {} to unlock; run `rsmt apply` in a terminal",
-                tool.name()
-            ))),
-            Some(Waiting::Command(command)) => Ok(Rendered::Waiting(format!(
-                "secret command `{command}` runs only in `rsmt apply` in a terminal"
-            ))),
+            Some(Waiting::Locked(tool)) => Ok(Rendered::Waiting(WaitingFor::Locked {
+                tool: tool.name().into(),
+            })),
+            Some(Waiting::Command(name)) => Ok(Rendered::Waiting(WaitingFor::Command { name })),
             None => Err(Error::Usage(err)),
         },
     }
@@ -565,14 +574,16 @@ pub fn deploy(ctx: &Context) -> Result<Vec<Step>> {
     let mut waiting = Vec::new();
     for item in planned {
         if let Some(sides) = item.sides {
-            let reason = match item.step.action {
-                Action::Changed => Reason::Changed,
-                _ => Reason::Conflict,
+            let reason = match (&item.waiting, item.step.action) {
+                (Some(_), _) => Reason::Waiting,
+                (None, Action::Changed) => Reason::Changed,
+                (None, _) => Reason::Conflict,
             };
             waiting.push(DotfileItem {
                 path: item.step.path.clone(),
                 reason,
                 sides,
+                waiting: item.waiting,
             });
         }
         let mut step = item.step;
@@ -611,7 +622,7 @@ pub(crate) fn force(ctx: &Context, path: &Path, entry: &Dotfile) -> Result<()> {
             let input = input_hash(&env, entry, &text)?;
             match render(&env, entry, &text)? {
                 Rendered::Done { bytes, .. } => Work::Template(entry.clone(), input, Some(bytes)),
-                Rendered::Waiting(reason) => return Err(Error::Usage(reason)),
+                Rendered::Waiting(waiting) => return Err(Error::Usage(waiting.describe())),
             }
         }
     };

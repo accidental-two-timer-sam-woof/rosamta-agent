@@ -22,8 +22,8 @@
 
 ## 4. 等待項目與背景服務
 
-- [ ] 4.1 待處理清單的等待項目（`locked`、`command`、`unset`）：列出、`--json`、拒絕 accept/ignore/discard、成功後移除
-- [ ] 4.2 背景服務在 `host.toml` 改變時重新部署 dotfile，新的等待項目通知一次（中英文字串）
+- [x] 4.1 待處理清單的等待項目（`locked`、`command`、`unset`）：列出、`--json`、拒絕 accept/ignore/discard、成功後移除
+- [x] 4.2 背景服務在 `host.toml` 改變時重新部署 dotfile，新的等待項目通知一次（中英文字串）
 
 ## 5. 驗證
 

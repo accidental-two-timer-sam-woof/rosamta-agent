@@ -217,3 +217,42 @@ fn a_locked_key_is_notified_once() {
         ["Encrypted dotfiles need the passphrase"]
     );
 }
+
+#[test]
+fn new_vars_in_host_toml_render_a_waiting_template() {
+    crate::git::tests::isolate();
+    let dir = tempfile::tempdir().unwrap();
+    let (mut daemon, shown) = daemon(dir.path());
+    crate::repo::init_new(&daemon.ctx.paths).unwrap();
+    let repo = daemon.ctx.paths.repo();
+    std::fs::create_dir(repo.join("home")).unwrap();
+    std::fs::write(repo.join("home/.npmrc"), "email={{ vars.email }}\n").unwrap();
+    std::fs::write(
+        repo.join(dotfiles::MANIFEST),
+        "[[dotfile]]\npath = \".npmrc\"\ndeploy = \"template\"\n",
+    )
+    .unwrap();
+    let host = daemon.ctx.paths.host_config();
+    std::fs::create_dir_all(host.parent().unwrap()).unwrap();
+    std::fs::write(&host, "id = \"test\"\n").unwrap();
+    // A host that applied once.
+    let generated = daemon.ctx.paths.generated();
+    std::fs::create_dir_all(generated.join("v1")).unwrap();
+    std::os::unix::fs::symlink("v1", generated.join(crate::generated::CURRENT)).unwrap();
+    let host = real(host.parent().unwrap()).join("host.toml");
+
+    daemon.changed(std::slice::from_ref(&host));
+    daemon.announce();
+    assert_eq!(
+        *shown.lock().unwrap(),
+        ["~/.npmrc: waiting for values of email"]
+    );
+
+    crate::host::set_var(&daemon.ctx.paths, "email", "a@example.com").unwrap();
+    daemon.changed(&[host]);
+    assert_eq!(
+        std::fs::read_to_string(dir.path().join(".npmrc")).unwrap(),
+        "email=a@example.com\n"
+    );
+    assert!(adopt::queue(&daemon.ctx).unwrap().is_empty());
+}

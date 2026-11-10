@@ -25,6 +25,8 @@ pub enum Reason {
     Conflict,
     /// Changed on this host only.
     Changed,
+    /// A template that cannot render outside a terminal yet.
+    Waiting,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -34,6 +36,42 @@ pub struct DotfileItem {
     pub reason: Reason,
     #[serde(flatten)]
     pub sides: Sides,
+    /// What a `Waiting` item waits for.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub waiting: Option<WaitingFor>,
+}
+
+/// What a template needs before it renders; `rsmt apply` in a terminal
+/// provides each.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "for", rename_all = "snake_case")]
+pub enum WaitingFor {
+    /// A Bitwarden tool to unlock.
+    Locked { tool: String },
+    /// A secret command, which runs only in a terminal.
+    Command { name: String },
+    /// Vars this host has no value for.
+    Unset { vars: Vec<String> },
+}
+
+impl WaitingFor {
+    pub fn describe(&self) -> String {
+        match self {
+            Self::Locked { tool } => {
+                format!("waiting for {tool} to unlock; run `rsmt apply` in a terminal")
+            }
+            Self::Command { name } => {
+                format!("secret command `{name}` runs only in `rsmt apply` in a terminal")
+            }
+            Self::Unset { vars } => {
+                let names: Vec<String> = vars.iter().map(|var| format!("vars.{var}")).collect();
+                format!(
+                    "waiting for {} in host.toml; run `rsmt apply` in a terminal",
+                    names.join(", ")
+                )
+            }
+        }
+    }
 }
 
 /// Make the queue's dotfile items exactly `waiting`. An item keeps its ID
@@ -107,6 +145,12 @@ fn current(ctx: &Context, path: &Path) -> Result<(Dotfile, Sides)> {
 }
 
 fn unchanged(ctx: &Context, id: u32, item: &DotfileItem) -> Result<Dotfile> {
+    if let Some(waiting) = &item.waiting {
+        return Err(Error::Usage(format!(
+            "review item {id} is not a decision: {}",
+            waiting.describe()
+        )));
+    }
     let (entry, sides) = current(ctx, &item.path)?;
     if sides != item.sides {
         return Err(Error::Usage(format!(
