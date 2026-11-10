@@ -56,12 +56,15 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - run: cargo build --release --locked -p rosamta --target x86_64-unknown-linux-musl
       - name: Collect the binaries and test executables
+        # bash, unlike the default shell, runs with pipefail: a failed build fails the step.
+        shell: bash
         run: |
           mkdir bin
-          cp target/x86_64-unknown-linux-musl/release/rosamta target/x86_64-unknown-linux-musl/release/rsmt bin/
           cargo test --locked --no-run --target x86_64-unknown-linux-musl -p rosamta-core -p rosamta --message-format json \
             | jq -r 'select(.profile.test == true and .executable != null) | .executable' \
             | xargs -I{} cp {} bin/
+          test -n "$(ls bin)" || { echo "no test executables were built" >&2; exit 1; }
+          cp target/x86_64-unknown-linux-musl/release/rosamta target/x86_64-unknown-linux-musl/release/rsmt bin/
       - uses: actions/upload-artifact@v7
         with:
           name: rosamta-linux-musl
