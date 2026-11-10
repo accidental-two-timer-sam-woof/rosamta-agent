@@ -6,6 +6,8 @@
 	<string>tw.xinshou.rosamta</string>
 	<key>CFBundleName</key>
 	<string>rosamta</string>
+	<key>CFBundleIconFile</key>
+	<string>rosamta</string>
 	<key>CFBundleExecutable</key>
 	<string>rosamta-gui</string>
 	<key>CFBundlePackageType</key>
