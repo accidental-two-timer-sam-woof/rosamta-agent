@@ -175,6 +175,17 @@ fn set_up(ctx: &Context) -> bool {
     ctx.paths.host_config().is_file() && ctx.paths.repo().join(".git").exists()
 }
 
+/// Sleep until `ready`; `Some` when the executable was replaced meanwhile.
+fn wait_until(exe: &Option<(PathBuf, Identity)>, ready: impl Fn() -> bool) -> Option<Stop> {
+    while !ready() {
+        std::thread::sleep(TICK);
+        if let Some(stop) = replaced(exe) {
+            return Some(stop);
+        }
+    }
+    None
+}
+
 struct Daemon {
     ctx: Context,
     host: HostConfig,
@@ -204,17 +215,27 @@ pub fn run(
     receiver: Receiver<Event>,
 ) -> Result<Stop> {
     let exe = exe_identity();
-    // Started at login before `rsmt init`: wait instead of failing over and
-    // over under launchd's KeepAlive.
+    // Started at login before `rsmt init`, or with a broken host.toml: wait
+    // instead of failing over and over under launchd's KeepAlive.
     if !set_up(&ctx) {
         log(&ctx, "waiting for `rsmt init`");
-        while !set_up(&ctx) {
-            std::thread::sleep(TICK);
-            if let Some(stop) = replaced(&exe) {
-                return Ok(stop);
-            }
+        if let Some(stop) = wait_until(&exe, || set_up(&ctx)) {
+            return Ok(stop);
         }
     }
+    let host_config = [ctx.paths.host_config()];
+    let host = loop {
+        let seen = fingerprint(&host_config);
+        match host::load(&host_config[0]) {
+            Ok(host) => break host,
+            Err(err) => {
+                log(&ctx, &format!("waiting for host.toml to be fixed: {err}"));
+                if let Some(stop) = wait_until(&exe, || fingerprint(&host_config) != seen) {
+                    return Ok(stop);
+                }
+            }
+        }
+    };
     let watcher_events = events.clone();
     let mut debouncer = new_debouncer(DEBOUNCE, None, move |result: DebounceEventResult| {
         if let Ok(batch) = result {
@@ -232,7 +253,6 @@ pub fn run(
         }
     }
     drop(events);
-    let host = host::load(&ctx.paths.host_config())?;
     let mut daemon = Daemon {
         next_sync: Instant::now(),
         host,
