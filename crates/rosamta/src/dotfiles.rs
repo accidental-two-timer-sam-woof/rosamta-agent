@@ -6,6 +6,7 @@ use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
 use rosamta_core::apply::Context;
+use rosamta_core::config::Deploy;
 use rosamta_core::dotfiles::{crypt, manage};
 use rosamta_core::{Error, Result, adopt, time};
 
@@ -14,7 +15,7 @@ use crate::sync::after_commit;
 
 const TRIES: usize = 3;
 
-pub fn add(json: bool, paths: &[PathBuf], copy: bool, encrypt: bool) -> Result<ExitCode> {
+pub fn add(json: bool, paths: &[PathBuf], deploy: Deploy, encrypt: bool) -> Result<ExitCode> {
     let started = time::now();
     let ctx = Context::from_env()?;
     let cwd = current_dir()?;
@@ -23,7 +24,7 @@ pub fn add(json: bool, paths: &[PathBuf], copy: bool, encrypt: bool) -> Result<E
     if encrypt {
         ensure_key(&ctx, json)?;
     }
-    let added = manage::add(&ctx, &paths, copy, encrypt)?;
+    let added = manage::add(&ctx, &paths, deploy, encrypt)?;
     report(&ctx, json, "Added", &added);
     after_commit(&ctx, &lock, started, json);
     Ok(ExitCode::SUCCESS)

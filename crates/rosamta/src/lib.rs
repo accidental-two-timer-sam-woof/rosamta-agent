@@ -10,7 +10,7 @@ use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
 use clap::{Parser, Subcommand, ValueEnum};
-use rosamta_core::config::Shell;
+use rosamta_core::config::{Deploy, Shell};
 use rosamta_core::paths::Paths;
 use rosamta_core::schema::Kind;
 use rosamta_core::validate::{FileReport, Issue};
@@ -86,6 +86,9 @@ enum Command {
         /// Store encrypted in the repo; deploys as a copy
         #[arg(long)]
         encrypt: bool,
+        /// Deploy as a template rendered for each host
+        #[arg(long, conflicts_with = "copy")]
+        template: bool,
     },
     /// Stop managing a dotfile, leaving it in place
     Forget { path: PathBuf },
@@ -289,7 +292,15 @@ fn run(cli: &Cli) -> Result<ExitCode> {
             paths,
             copy,
             encrypt,
-        } => dotfiles::add(cli.json, paths, *copy, *encrypt),
+            template,
+        } => {
+            let deploy = match (template, copy) {
+                (true, _) => Deploy::Template,
+                (_, true) => Deploy::Copy,
+                _ => Deploy::Link,
+            };
+            dotfiles::add(cli.json, paths, deploy, *encrypt)
+        }
         Command::Forget { path } => dotfiles::forget(cli.json, path),
         Command::Publish => sync::publish(cli.json),
         Command::Pull => sync::pull(cli.json),
