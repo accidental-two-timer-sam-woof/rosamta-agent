@@ -156,17 +156,18 @@ fn problems(manifest: &DotfileManifest, repo_dir: &Path) -> Vec<(usize, String)>
             let path = repo_dir.join(&source);
             if path.is_dir() {
                 problem(format!("dotfile `{name}`: a template must be a file"));
-            } else if !entry.encrypted
-                && let Ok(bytes) = std::fs::read(&path)
-            {
+            } else if !entry.encrypted && path.exists() {
                 // Encrypted templates are checked when they are rendered.
-                match String::from_utf8(bytes) {
-                    Ok(text) => {
+                match std::fs::read(&path).map(String::from_utf8) {
+                    Ok(Ok(text)) => {
                         if let Err(err) = crate::template::check(&source, &text) {
                             problem(format!("dotfile `{name}`: {err}"));
                         }
                     }
-                    Err(_) => problem(format!("dotfile `{name}`: a template must be UTF-8 text")),
+                    Ok(Err(_)) => {
+                        problem(format!("dotfile `{name}`: a template must be UTF-8 text"))
+                    }
+                    Err(err) => problem(format!("dotfile `{name}`: cannot read {source}: {err}")),
                 }
             }
         }
