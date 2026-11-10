@@ -29,6 +29,16 @@ fn errors_use_the_typed_name() {
 }
 
 #[test]
+fn hints_use_the_typed_name() {
+    let home = Home::new();
+    home.cmd("rosamta")
+        .arg("apply")
+        .assert()
+        .code(2)
+        .stderr(predicate::str::contains("run `rosamta init` first"));
+}
+
+#[test]
 fn both_names_behave_the_same() {
     let home = Home::new();
     home.write("rosamta.toml", "format = 1\nhosts = [\"mbp\"]\n");
