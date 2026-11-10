@@ -803,46 +803,22 @@ pub fn execute(ctx: &Context, plan: Plan) -> Result<Vec<Adoption>> {
     let store = Store::new(ctx.paths.state());
     let mut adoptions = store.adoptions()?;
     let mut done = Vec::new();
-    // After a signing failure, the rest stays uncommitted too.
-    let mut can_commit = true;
-    for mut record in plan.records {
-        let candidate = plan
-            .candidates
+    let candidate_of = |record: &Adoption| {
+        plan.candidates
             .iter()
             .find(|candidate| candidate.hash == record.hash && candidate.file == record.file)
-            .expect("each record comes from a candidate");
-        if matches!(candidate.kind, Kind::Comment | Kind::Duplicate) {
-            done.push(record);
-            continue;
+            .expect("each record comes from a candidate")
+    };
+    for mut record in plan.records {
+        if !matches!(candidate_of(&record).kind, Kind::Comment | Kind::Duplicate) {
+            adoptions.next_id = adoptions.next_id.max(1);
+            record.id = adoptions.next_id;
+            adoptions.next_id += 1;
+            adoptions.adoptions.push(record.clone());
         }
-        if can_commit
-            && !record.local
-            && let Some(module) = &record.module
-        {
-            let repo_dir = ctx.paths.repo();
-            let rel = module.to_string_lossy();
-            let message = commit_message(candidate, &ctx.home, &host.id);
-            match git::commit(&repo_dir, &message, &[&rel])? {
-                git::Commit::Created => {
-                    record.commit = Some(
-                        git::run(&repo_dir, &["rev-parse", "HEAD"])?
-                            .trim()
-                            .to_string(),
-                    )
-                }
-                git::Commit::Clean => {}
-                git::Commit::SigningFailed(reason) => {
-                    crate::sync::signing_blocked(ctx, &reason)?;
-                    can_commit = false;
-                }
-            }
-        }
-        adoptions.next_id = adoptions.next_id.max(1);
-        record.id = adoptions.next_id;
-        adoptions.next_id += 1;
-        adoptions.adoptions.push(record.clone());
         done.push(record);
     }
+    // Saved before committing: the files are written whatever git does.
     store.save_adoptions(&adoptions)?;
     let mut queue = store.queue()?;
     let listed = queue.items.len();
@@ -856,6 +832,41 @@ pub fn execute(ctx: &Context, plan: Plan) -> Result<Vec<Adoption>> {
         store.save_queue(&queue)?;
     }
     update_notice(&store, &host, queue.items.len())?;
+    let repo_dir = ctx.paths.repo();
+    for record in done
+        .iter_mut()
+        .filter(|record| record.id > 0 && !record.local)
+    {
+        let Some(module) = &record.module else {
+            continue;
+        };
+        let message = commit_message(candidate_of(record), &ctx.home, &host.id);
+        // After a failed commit, the rest stays uncommitted too.
+        match git::commit(&repo_dir, &message, &[&module.to_string_lossy()]) {
+            Ok(git::Commit::Created) => {
+                record.commit = Some(
+                    git::run(&repo_dir, &["rev-parse", "HEAD"])?
+                        .trim()
+                        .to_string(),
+                )
+            }
+            Ok(git::Commit::Clean) => {}
+            Ok(git::Commit::SigningFailed(reason)) => {
+                crate::sync::signing_blocked(ctx, &reason)?;
+                break;
+            }
+            Err(err) => {
+                crate::sync::commit_blocked(ctx, &err)?;
+                break;
+            }
+        }
+    }
+    for record in done.iter().filter(|record| record.commit.is_some()) {
+        if let Some(saved) = adoptions.adoptions.iter_mut().find(|a| a.id == record.id) {
+            saved.commit.clone_from(&record.commit);
+        }
+    }
+    store.save_adoptions(&adoptions)?;
     Ok(done)
 }
 
@@ -1137,21 +1148,7 @@ pub fn undo(ctx: &Context, plan: Undo) -> Result<()> {
         }
         return Err(err);
     }
-    if let (Some(module), false) = (&plan.adoption.module, plan.adoption.local) {
-        let rel = module.to_string_lossy();
-        let name = plan.adoption.name.as_deref().unwrap_or("adopted");
-        let message = format!(
-            "restore({}): put back {name} in {} on {}",
-            plan.adoption.shell,
-            display(&plan.adoption.file, &ctx.home),
-            host.id
-        );
-        if let git::Commit::SigningFailed(reason) =
-            git::commit(&ctx.paths.repo(), &message, &[&rel])?
-        {
-            crate::sync::signing_blocked(ctx, &reason)?;
-        }
-    }
+    // Saved before committing: the files are written whatever git does.
     let store = Store::new(ctx.paths.state());
     let mut adoptions = store.adoptions()?;
     adoptions
@@ -1162,7 +1159,23 @@ pub fn undo(ctx: &Context, plan: Undo) -> Result<()> {
     if !ignored.hashes.contains(&plan.adoption.hash) {
         ignored.hashes.push(plan.adoption.hash.clone());
     }
-    store.save_ignored(&ignored)
+    store.save_ignored(&ignored)?;
+    if let (Some(module), false) = (&plan.adoption.module, plan.adoption.local) {
+        let rel = module.to_string_lossy();
+        let name = plan.adoption.name.as_deref().unwrap_or("adopted");
+        let message = format!(
+            "restore({}): put back {name} in {} on {}",
+            plan.adoption.shell,
+            display(&plan.adoption.file, &ctx.home),
+            host.id
+        );
+        match git::commit(&ctx.paths.repo(), &message, &[&rel]) {
+            Ok(git::Commit::SigningFailed(reason)) => crate::sync::signing_blocked(ctx, &reason)?,
+            Ok(_) => {}
+            Err(err) => crate::sync::commit_blocked(ctx, &err)?,
+        }
+    }
+    Ok(())
 }
 
 pub fn queue(ctx: &Context) -> Result<Vec<QueueItem>> {
