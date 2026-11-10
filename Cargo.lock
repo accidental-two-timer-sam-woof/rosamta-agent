@@ -5743,6 +5743,7 @@ dependencies = [
  "indexmap",
  "jsonschema",
  "libc",
+ "regex",
  "schemars",
  "serde",
  "serde_json",

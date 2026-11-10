@@ -40,11 +40,11 @@ impl Context {
         Snapshots::new(self.paths.state(), &self.home)
     }
 
-    fn installed(&self) -> Vec<Detected> {
+    pub(crate) fn installed(&self) -> Vec<Detected> {
         shells::detect(&self.path_var, &self.paths.state().join("shells.toml"))
     }
 
-    fn hook_env(&self, installed: &[Detected]) -> HookEnv {
+    pub(crate) fn hook_env(&self, installed: &[Detected]) -> HookEnv {
         let exe = |shell| {
             installed
                 .iter()
@@ -78,10 +78,34 @@ impl Context {
     }
 }
 
-/// Parse every module; any error sends the user to `rsmt validate`.
+/// Parse every module in the repo; any error sends the user to `rsmt validate`.
 pub fn load_modules(repo_dir: &Path) -> Result<Vec<(String, Module)>> {
+    parse_modules(repo::module_files(repo_dir)?)
+}
+
+/// Modules that stay on this host (secrets); they never enter the repo.
+pub fn load_local_modules(paths: &Paths) -> Result<Vec<(String, Module)>> {
+    parse_modules(repo::module_files(&paths.local())?)
+}
+
+/// Repo and local modules together; a name may be used only once.
+fn all_modules(paths: &Paths) -> Result<Vec<(String, Module)>> {
+    let mut modules = load_modules(&paths.repo())?;
+    for (name, module) in load_local_modules(paths)? {
+        if modules.iter().any(|(seen, _)| *seen == name) {
+            return Err(Error::Usage(format!(
+                "module `{name}` exists both in the repo and in {}; rename one",
+                paths.local().display()
+            )));
+        }
+        modules.push((name, module));
+    }
+    Ok(modules)
+}
+
+fn parse_modules(files: Vec<PathBuf>) -> Result<Vec<(String, Module)>> {
     let mut modules = Vec::new();
-    for path in repo::module_files(repo_dir)? {
+    for path in files {
         let text = std::fs::read_to_string(&path).map_err(Error::read(&path))?;
         let module: Module = validate::parse(&text).map_err(|issue| {
             Error::Usage(format!(
@@ -147,7 +171,7 @@ pub fn plan(ctx: &Context) -> Result<Plan> {
     }
     repo::ensure_supported(repo::read_manifest(&repo_dir)?.format)?;
     let facts = host_facts(&ctx.paths)?;
-    let modules = render::select(load_modules(&repo_dir)?, &facts);
+    let modules = render::select(all_modules(&ctx.paths)?, &facts);
 
     let installed = ctx.installed();
     let skipped = installed.iter().filter_map(Detected::unsupported).collect();
@@ -237,10 +261,43 @@ pub struct Applied {
 
 /// Render, smoke-test, then switch. On any failure the current version stays.
 pub fn apply(ctx: &Context) -> Result<Applied> {
+    migrate(ctx)?;
+    finish(ctx, &[])
+}
+
+/// Apply after `change` edits rc files or modules, judging shell startup
+/// against how shells started before the change.
+pub fn apply_after(ctx: &Context, change: impl FnOnce() -> Result<()>) -> Result<Applied> {
+    migrate(ctx)?;
+    let installed = ctx.installed();
+    let env = ctx.hook_env(&installed);
+    let generated_dir = ctx.paths.generated();
+    let baseline_dir = generated::current_id(&generated_dir).map_or_else(
+        || PathBuf::from("/nonexistent"),
+        |id| generated_dir.join(id),
+    );
+    let mut baselines = Vec::new();
+    for found in installed
+        .iter()
+        .filter(|found| found.unsupported().is_none())
+    {
+        if !hooks::hooked_files(found.shell, &env)?.is_empty() {
+            baselines.push((found.shell, smoke(ctx, found, &baseline_dir)));
+        }
+    }
+    change()?;
+    finish(ctx, &baselines)
+}
+
+fn migrate(ctx: &Context) -> Result<()> {
     let repo_dir = ctx.paths.repo();
     if repo_dir.join(repo::MANIFEST).is_file() {
         repo::migrate(&repo_dir, crate::config::CURRENT_FORMAT, repo::MIGRATIONS)?;
     }
+    Ok(())
+}
+
+fn finish(ctx: &Context, baselines: &[(Shell, Smoke)]) -> Result<Applied> {
     let plan = plan(ctx)?;
     let hooks_changed: Vec<PathBuf> = plan
         .hook_changes
@@ -262,11 +319,11 @@ pub fn apply(ctx: &Context) -> Result<Applied> {
     let id = generated::new_version_id();
     let layout = generated::layout(&generated_dir, ctx.paths.state(), &id);
     let facts = host_facts(&ctx.paths)?;
-    let modules = render::select(load_modules(&repo_dir)?, &facts);
+    let modules = render::select(all_modules(&ctx.paths)?, &facts);
     let files = render::render(&modules, &plan.shells, &layout);
     generated::write_version(&layout, &files)?;
 
-    let result = check_and_smoke(ctx, &plan, &layout, &files);
+    let result = check_and_smoke(ctx, &plan, &layout, &files, baselines);
     if let Err(err) = result {
         generated::remove_version(&layout);
         return Err(err);
@@ -282,6 +339,7 @@ fn check_and_smoke(
     plan: &Plan,
     layout: &Layout,
     files: &BTreeMap<PathBuf, String>,
+    baselines: &[(Shell, Smoke)],
 ) -> Result<()> {
     // dash and BusyBox ash exit on a parse error in a sourced file, so broken
     // snippets must never reach a shell.
@@ -330,7 +388,10 @@ fn check_and_smoke(
             Some(id) => ctx.paths.generated().join(id),
             None => PathBuf::from("/nonexistent"),
         };
-        let before = smoke(ctx, found, &baseline);
+        let before = baselines
+            .iter()
+            .find(|(shell, _)| *shell == found.shell)
+            .map_or_else(|| smoke(ctx, found, &baseline), |(_, smoke)| smoke.clone());
         let after = smoke(ctx, found, &layout.version_dir);
         // A line without a file name could come from any module this apply changed.
         let mut changed: Vec<String> = plan
@@ -358,7 +419,11 @@ fn check_and_smoke(
                     Smoke::TimedOut => Vec::new(),
                 };
                 for line in lines {
-                    if let Some(index) = known.iter().position(|seen| *seen == line) {
+                    let message = without_location(&line);
+                    if let Some(index) = known
+                        .iter()
+                        .position(|seen| without_location(seen) == message)
+                    {
                         known.remove(index);
                         continue;
                     }
@@ -389,6 +454,37 @@ fn kind_of(rel: &Path) -> Option<&str> {
     stem.rsplit_once('-').map(|(_, kind)| kind)
 }
 
+/// An error line without the file and line it came from, so an error that
+/// only moved (rc file to generated script) is not new:
+/// `f: line 3: msg` (bash), `f: 3: msg` (dash), `f:3: msg`, `f:.:3: msg` (zsh).
+fn without_location(line: &str) -> &str {
+    let Some((file, rest)) = line.split_once(':') else {
+        return line;
+    };
+    if file.contains(' ') || !(file.starts_with('/') || file.starts_with('~')) {
+        return line;
+    }
+    let rest = rest.trim_start();
+    let rest = rest.strip_prefix("line ").unwrap_or(rest);
+    let rest = match rest.split_once(':') {
+        // zsh names the builtin between file and line: `f:.:3: msg`.
+        Some((word, after))
+            if !word.is_empty()
+                && !word.contains(' ')
+                && !word.chars().all(|c| c.is_ascii_digit()) =>
+        {
+            after
+        }
+        _ => rest,
+    };
+    match rest.split_once(':') {
+        Some((digits, msg)) if !digits.is_empty() && digits.chars().all(|c| c.is_ascii_digit()) => {
+            msg.trim_start()
+        }
+        _ => line,
+    }
+}
+
 fn is_raw(rel: &Path) -> bool {
     kind_of(rel) == Some("raw")
 }
@@ -416,6 +512,7 @@ fn first_line(text: &str) -> &str {
     text.lines().next().unwrap_or(text)
 }
 
+#[derive(Clone)]
 enum Smoke {
     Stderr(Vec<String>),
     TimedOut,
@@ -650,21 +747,7 @@ pub fn restore_original(ctx: &Context) -> Result<Vec<PathBuf>> {
 
 /// Today's UTC date as YYYY-MM-DD.
 fn today() -> String {
-    let secs = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map_or(0, |since| since.as_secs());
-    let days = (secs / 86_400) as i64;
-    // Howard Hinnant's civil_from_days.
-    let z = days + 719_468;
-    let era = z.div_euclid(146_097);
-    let doe = z - era * 146_097;
-    let yoe = (doe - doe / 1_460 + doe / 36_524 - doe / 146_096) / 365;
-    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
-    let mp = (5 * doy + 2) / 153;
-    let day = doy - (153 * mp + 2) / 5 + 1;
-    let month = if mp < 10 { mp + 3 } else { mp - 9 };
-    let year = yoe + era * 400 + i64::from(month <= 2);
-    format!("{year:04}-{month:02}-{day:02}")
+    crate::time::date(crate::time::now())
 }
 
 #[cfg(test)]
@@ -682,6 +765,31 @@ mod tests {
         assert!(!is_raw(Path::new("zsh/0-0050-path-env.zsh")));
         assert!(is_fragment(Path::new("zsh/0-0050-path-env.zsh")));
         assert!(!is_fragment(Path::new("zsh/env.zsh")));
+    }
+
+    #[test]
+    fn errors_that_only_moved_compare_equal() {
+        let msg = "/h/.cargo/env: No such file or directory";
+        for line in [
+            "/h/.bashrc: line 3: /h/.cargo/env: No such file or directory",
+            "/g/v-1/bash/0-1-cargo-raw.bash: line 5: /h/.cargo/env: No such file or directory",
+            "/h/.profile: 3: /h/.cargo/env: No such file or directory",
+        ] {
+            assert_eq!(without_location(line), msg, "{line}");
+        }
+        assert_eq!(
+            without_location("/h/.zshenv:.:1: no such file or directory: /x"),
+            "no such file or directory: /x"
+        );
+        assert_eq!(
+            without_location("/h/.zshrc:12: command not found: x"),
+            "command not found: x"
+        );
+        assert_eq!(
+            without_location("bash: x: command not found"),
+            "bash: x: command not found"
+        );
+        assert_eq!(without_location("plain message"), "plain message");
     }
 
     #[test]

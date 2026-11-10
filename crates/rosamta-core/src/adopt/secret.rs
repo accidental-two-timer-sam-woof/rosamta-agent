@@ -1,0 +1,140 @@
+//! Spot content that looks like a secret, so it never reaches the repo.
+
+use std::sync::OnceLock;
+
+use regex::Regex;
+
+include!(concat!(env!("OUT_DIR"), "/gitleaks.rs"));
+
+/// Known token formats, from gitleaks (MIT; see THIRD_PARTY_NOTICES.md).
+/// Each compiles on first use, and only runs when one of its keywords
+/// appears: compiling all of them takes seconds.
+fn known_format(text: &str) -> bool {
+    static RULES: OnceLock<Vec<OnceLock<Regex>>> = OnceLock::new();
+    let rules = RULES.get_or_init(|| GITLEAKS.iter().map(|_| OnceLock::new()).collect());
+    let lower = text.to_lowercase();
+    GITLEAKS
+        .iter()
+        .zip(rules)
+        .filter(|((_, _, keywords), _)| {
+            keywords.is_empty() || keywords.iter().any(|keyword| lower.contains(keyword))
+        })
+        .any(|((_, pattern, _), rule)| {
+            rule.get_or_init(|| {
+                Regex::new(pattern).expect("build.rs kept only patterns that compile")
+            })
+            .is_match(text)
+        })
+}
+
+/// `NAME=literal` (POSIX) or `set ... NAME literal` (fish): a value with no
+/// expansion in it, which a secret-looking name makes suspicious.
+fn literal_assignments() -> &'static [Regex; 2] {
+    static RULES: OnceLock<[Regex; 2]> = OnceLock::new();
+    RULES.get_or_init(|| {
+        let value = r#"(?:'[^']+'|"[^"$`\\]+"|[^\s'"$`\\;()]+)\s*(?:;|#|$)"#;
+        [
+            Regex::new(&format!(
+                r"(?m)^\s*(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)={value}"
+            ))
+            .unwrap(),
+            Regex::new(&format!(
+                r"(?m)^\s*set\s+(?:-{{1,2}}[A-Za-z]+\s+)*([A-Za-z_][A-Za-z0-9_]*)\s+{value}"
+            ))
+            .unwrap(),
+        ]
+    })
+}
+
+const SECRET_NAMES: [&str; 4] = ["KEY", "TOKEN", "SECRET", "PASSWORD"];
+/// Shannon entropy above this, over at least `MIN_LEN` characters, is suspicious.
+const MIN_ENTROPY: f64 = 4.0;
+const MIN_LEN: usize = 20;
+
+/// Whether `text` holds what looks like a secret.
+pub fn looks_secret(text: &str) -> bool {
+    known_format(text) || secret_name(text) || high_entropy(text)
+}
+
+fn secret_name(text: &str) -> bool {
+    literal_assignments().iter().any(|rule| {
+        rule.captures_iter(text).any(|caps| {
+            let name = caps[1].to_ascii_uppercase();
+            SECRET_NAMES.iter().any(|word| name.contains(word))
+        })
+    })
+}
+
+fn high_entropy(text: &str) -> bool {
+    text.split(|c: char| !(c.is_ascii_alphanumeric() || "+/=_-.".contains(c)))
+        .filter(|token| token.len() >= MIN_LEN && !token.contains('/'))
+        .any(|token| entropy(token) > MIN_ENTROPY)
+}
+
+fn entropy(token: &str) -> f64 {
+    let mut counts = [0usize; 256];
+    for byte in token.bytes() {
+        counts[usize::from(byte)] += 1;
+    }
+    let len = token.len() as f64;
+    counts
+        .iter()
+        .filter(|&&count| count > 0)
+        .map(|&count| {
+            let p = count as f64 / len;
+            -p * p.log2()
+        })
+        .sum()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn known_token_formats() {
+        assert!(looks_secret(concat!(
+            "export OPENAI_API_KEY=sk-proj-abcdefghijABCDEFGHIJ1234567890abcdefghij",
+            "T3Blbk",
+            "FJabcdefghijABCDEFGHIJ1234567890"
+        )));
+        assert!(looks_secret(
+            "export GH=ghp_0123456789abcdefghijABCDEFGHIJ012345"
+        ));
+    }
+
+    #[test]
+    fn names_with_literal_values() {
+        assert!(looks_secret("export MY_API_KEY=abc123"));
+        assert!(looks_secret("export DB_PASSWORD='hunter2'"));
+        assert!(looks_secret("set -gx SERVICE_TOKEN abc"));
+        assert!(!looks_secret(
+            "export GITHUB_TOKEN=\"$(cat ~/.config/gh/token)\""
+        ));
+        assert!(!looks_secret("export SSH_KEY_PATH=$HOME/.ssh/id"));
+        assert!(!looks_secret("export TOKEN_FILE=`cat x`"));
+    }
+
+    #[test]
+    fn high_entropy_literals() {
+        assert!(looks_secret("export X=Zk3q9LmP2vR8tY6wB1nC4xJ7"));
+        assert!(!looks_secret(
+            "export PATH=\"$HOME/.local/share/pnpm:$PATH\""
+        ));
+        assert!(!looks_secret(
+            "__conda_setup=\"$('/home/me/miniforge3/bin/conda' 'shell.bash' 'hook' 2> /dev/null)\""
+        ));
+    }
+
+    #[test]
+    fn ordinary_installer_lines() {
+        for text in [
+            "export BUN_INSTALL=\"$HOME/.bun\"",
+            "eval \"$(/home/linuxbrew/.linuxbrew/bin/brew shellenv bash)\"",
+            "export NVM_DIR=\"$HOME/.nvm\"",
+            "source ~/.orbstack/shell/init.zsh 2>/dev/null || :",
+        ] {
+            assert!(!looks_secret(text), "{text}");
+        }
+    }
+}

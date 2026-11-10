@@ -283,6 +283,8 @@ pub struct Layout {
     pub version_id: String,
     /// Where `ROSAMTA_PROFILE=1` appends timings.
     pub profile_log: PathBuf,
+    /// One line interactive shells print, e.g. pending review items.
+    pub notice: PathBuf,
 }
 
 /// Render every file for `shells`, keyed by path relative to the version dir.
@@ -362,6 +364,13 @@ fn loader(shell: Shell, stage: Stage, frags: &[&Fragment], dir: &Path, layout: &
         .unwrap();
         if stage == Stage::Env {
             out.push_str("end\n");
+        } else {
+            let notice = fish_quote(&layout.notice.display().to_string());
+            writeln!(
+                out,
+                "test -r {notice}; and read -l __rosamta_notice < {notice}; and echo $__rosamta_notice"
+            )
+            .unwrap();
         }
         return out;
     }
@@ -399,6 +408,14 @@ fn loader(shell: Shell, stage: Stage, frags: &[&Fragment], dir: &Path, layout: &
     out.push_str("  :\nfi\n");
     if stage == Stage::Env {
         out.push_str("fi\n");
+    } else {
+        // A builtin read, so the reminder costs no process start.
+        let notice = posix_quote(&layout.notice.display().to_string());
+        writeln!(
+            out,
+            "if [ -r {notice} ] && IFS= read -r _rosamta_notice < {notice}; then printf '%s\\n' \"$_rosamta_notice\"; fi\nunset _rosamta_notice"
+        )
+        .unwrap();
     }
     out
 }
