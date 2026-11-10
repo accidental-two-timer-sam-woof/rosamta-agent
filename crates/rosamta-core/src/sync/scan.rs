@@ -10,12 +10,24 @@ use crate::git;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct Hit {
+    /// Empty for changes not committed yet.
     pub commit: String,
     /// Relative to the repo.
     pub file: String,
     pub line: usize,
     pub rule: &'static str,
 }
+
+/// Plain patches with zero context, whatever the user's diff settings.
+const PATCH: [&str; 7] = [
+    "--unified=0",
+    "--no-color",
+    "--no-ext-diff",
+    "--no-textconv",
+    "--no-renames",
+    "--src-prefix=a/",
+    "--dst-prefix=b/",
+];
 
 /// Lines added by each commit in `range` (arguments to `git log`), with
 /// their line numbers in that commit's version of the file.
@@ -25,18 +37,19 @@ pub(crate) fn scan(repo: &Path, range: &[&str]) -> Result<Vec<Hit>> {
         "core.quotePath=false",
         "log",
         "--patch",
-        "--unified=0",
         "--reverse",
         "--format=commit %H",
-        "--no-color",
-        "--no-ext-diff",
-        "--no-textconv",
         "--no-show-signature",
-        "--no-renames",
-        "--src-prefix=a/",
-        "--dst-prefix=b/",
     ];
+    args.extend(PATCH);
     args.extend_from_slice(range);
+    Ok(check(&added_lines(&git::run(repo, &args)?)))
+}
+
+/// Lines added by the staged changes.
+pub(crate) fn staged(repo: &Path) -> Result<Vec<Hit>> {
+    let mut args = vec!["-c", "core.quotePath=false", "diff", "--cached"];
+    args.extend(PATCH);
     Ok(check(&added_lines(&git::run(repo, &args)?)))
 }
 

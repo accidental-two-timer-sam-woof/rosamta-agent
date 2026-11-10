@@ -242,7 +242,7 @@ fn publish_locked(ctx: &Context, commit_edits: bool) -> Result<Published> {
         let range: Vec<&str> = range.iter().map(String::as_str).collect();
         let hits = scan::scan(&repo_dir, &range)?;
         if !hits.is_empty() {
-            return Err(secret_blocked(ctx, &hits, pushed));
+            return Err(secret_blocked(ctx, &hits, Some(pushed)));
         }
         let refspec = format!("HEAD:refs/heads/{}", remote.branch);
         let mut args = vec!["push", "--quiet"];
@@ -274,7 +274,8 @@ fn publish_locked(ctx: &Context, commit_edits: bool) -> Result<Published> {
     Ok(published)
 }
 
-fn secret_blocked(ctx: &Context, hits: &[Hit], unpushed: u32) -> Error {
+/// `unpushed` is `None` when the secret is in changes not committed yet.
+fn secret_blocked(ctx: &Context, hits: &[Hit], unpushed: Option<u32>) -> Error {
     let lines: Vec<String> = hits
         .iter()
         .map(|hit| format!("  {}:{} ({})", hit.file, hit.line, hit.rule))
@@ -289,14 +290,17 @@ fn secret_blocked(ctx: &Context, hits: &[Hit], unpushed: u32) -> Error {
     attempt.files.dedup();
     match state::update(ctx.paths.state(), |state| {
         state.publish = Some(attempt);
-        state.unpushed = unpushed;
+        if let Some(unpushed) = unpushed {
+            state.unpushed = unpushed;
+        }
     }) {
         Ok(()) => Error::Sync(text),
         Err(err) => err,
     }
 }
 
-/// Commit edits made outside rosamta, named after what changed.
+/// Commit edits made outside rosamta, named after what changed. A secret
+/// in them stops this before it is committed.
 fn commit_pending(ctx: &Context, repo_dir: &Path) -> Result<bool> {
     let status = git::run(
         repo_dir,
@@ -311,6 +315,12 @@ fn commit_pending(ctx: &Context, repo_dir: &Path) -> Result<bool> {
     )?;
     if status.trim().is_empty() {
         return Ok(false);
+    }
+    git::run(repo_dir, &["add", "--all"])?;
+    let hits = scan::staged(repo_dir)?;
+    if !hits.is_empty() {
+        git::run(repo_dir, &["reset", "--quiet"])?;
+        return Err(secret_blocked(ctx, &hits, None));
     }
     match git::commit(repo_dir, &edit_message(&status), &[])? {
         Commit::Clean => Ok(false),

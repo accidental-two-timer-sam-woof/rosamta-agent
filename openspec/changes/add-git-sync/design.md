@@ -22,7 +22,7 @@
 
 ### 推送流程
 
-1. 若工作目錄有變更：`git add -A` 後 commit，訊息依變更類型產生（例如 `edit(modules): update zoxide`）。接管等 rosamta 自己的 commit 之後觸發的自動推送跳過這一步，不替使用者 commit 還在編輯的檔案。
+1. 若工作目錄有變更：`git add -A`，先以秘密規則掃描暫存的內容（命中就取消暫存並停止，秘密不會進 commit），再 commit，訊息依變更類型產生（例如 `edit(modules): update zoxide`）。接管等 rosamta 自己的 commit 之後觸發的自動推送跳過這一步，不替使用者 commit 還在編輯的檔案。
 2. 以秘密規則掃描 `@{upstream}..HEAD` 每個 commit 新增的行（還沒有 upstream 時是 `HEAD --not --remotes=<remote>`）；命中就停止，回報檔案、行號與規則。
 3. `git push`。失敗時依錯誤分類：網路或連線問題標記為離線並保留 commit；被遠端拒絕（non-fast-forward）時先拉取再推送一次；憑證被拒或遠端沒有這個 repo 時標記為受阻。
 
