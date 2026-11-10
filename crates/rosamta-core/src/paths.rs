@@ -52,6 +52,15 @@ impl Paths {
     pub fn state(&self) -> &Path {
         &self.state
     }
+
+    /// Host-only content (secrets) laid out like a repo: `local/modules/`.
+    pub fn local(&self) -> PathBuf {
+        self.config.join("local")
+    }
+
+    pub fn local_modules(&self) -> PathBuf {
+        self.local().join(crate::repo::MODULES)
+    }
 }
 
 #[cfg(test)]

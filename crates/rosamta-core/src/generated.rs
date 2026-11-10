@@ -32,6 +32,7 @@ pub fn layout(generated: &Path, state: &Path, id: &str) -> Layout {
         version_dir: generated.join(id),
         version_id: id.to_string(),
         profile_log: state.join("profile.log"),
+        notice: state.join("notice"),
     }
 }
 
@@ -123,6 +124,24 @@ pub fn syntax_error(shell_path: &Path, shell: Shell, file: &Path) -> Option<Stri
     } else {
         message
     })
+}
+
+/// Whether `code` parses as complete code for `shell`.
+pub fn parses(shell_path: &Path, shell: Shell, code: &str) -> bool {
+    let mut cmd = std::process::Command::new(shell_path);
+    match shell {
+        Shell::Fish => cmd.args(["--no-config", "--no-execute"]),
+        Shell::Zsh => cmd.args(["-f", "-n"]),
+        _ => cmd.arg("-n"),
+    };
+    cmd.arg("-c")
+        .arg(code)
+        .env_remove("BASH_ENV")
+        .env_remove("ENV");
+    output_with_timeout(&mut cmd, Duration::from_secs(5))
+        .ok()
+        .flatten()
+        .is_some_and(|output| output.status.success())
 }
 
 #[cfg(test)]

@@ -23,6 +23,7 @@ impl Rendered {
             version_dir: root.join("generated/v-1"),
             version_id: "v-1".into(),
             profile_log: root.join("state/profile.log"),
+            notice: root.join("state/notice"),
         };
         std::fs::create_dir_all(root.join("state")).unwrap();
         let modules: Vec<(String, Module)> = modules

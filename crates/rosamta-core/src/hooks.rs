@@ -18,6 +18,10 @@ use crate::snapshot::Snapshots;
 pub const BEGIN: &str = "# >>> rosamta >>>";
 pub const END: &str = "# <<< rosamta <<<";
 
+/// The first line of a `~/.bash_profile` rosamta creates, so login bash
+/// still reads `~/.profile`. It is rosamta's, so adoption leaves it alone.
+pub const BASH_PROFILE_SEED: &str = "[ -r \"$HOME/.profile\" ] && . \"$HOME/.profile\"\n";
+
 /// Where the generated scripts live, as each shell computes it at startup.
 /// `ROSAMTA_CURRENT` lets apply's smoke test point a shell at a candidate.
 const POSIX_DIR: &str =
@@ -181,9 +185,7 @@ pub fn plan_install(shell: Shell, env: &HookEnv) -> Result<Vec<FileChange>> {
                 .unwrap_or_else(|| env.home.join(".bash_profile"));
             // Login bash reads only this file, so a new one must keep ~/.profile
             // working, and every one must reach ~/.bashrc in interactive shells.
-            let seed = profile
-                .is_none()
-                .then(|| "[ -r \"$HOME/.profile\" ] && . \"$HOME/.profile\"\n".to_string());
+            let seed = profile.is_none().then(|| BASH_PROFILE_SEED.to_string());
             let existing = read(&path)?.unwrap_or_default();
             let reaches_bashrc = strip_block(&existing).contains(".bashrc");
             let mut body = source_line("env.bash");
