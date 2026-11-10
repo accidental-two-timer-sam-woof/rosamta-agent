@@ -11,7 +11,7 @@
 - GitHub Actions：
   - `ci.yml`：每個 PR 與 push 執行 fmt、clippy、測試、cargo-deny，以及 Docker 的發行版 × shell 矩陣。
   - `release.yml`：推上 `v*` tag 時建置、簽章、notarize 並發布到 GitHub Releases、Homebrew tap 與 AUR。
-- Dependabot：`cargo` 與 `github-actions` 每週檢查，排除 `gpui-component` 與 `gpui-pre`（ADR 0005）。
+- Dependabot：`cargo` 與 `github-actions` 每週檢查，排除 `gpui-kit`、`gpui-component` 與 `gpui-pre*`（ADR 0005）。
 - Docker 測試環境：Ubuntu 22.04／24.04、Debian 12／13、Fedora、Arch、Alpine、AlmaLinux 9 各裝齊 sh、bash、zsh、fish；Rocky 8 只測 sh 與 bash。
 - 安裝程式 fixture：收集真實安裝程式寫入 rc 檔前後的內容，供接管功能測試。
 
