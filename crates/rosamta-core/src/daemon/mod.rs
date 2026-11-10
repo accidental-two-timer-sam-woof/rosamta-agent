@@ -545,6 +545,8 @@ impl Daemon {
                 }
             }
         }
+        // Pull and Publish can stop for the same reason.
+        problems.dedup();
         let state_dir = self.ctx.paths.state().to_path_buf();
         let Ok(Some(mut state)) = instance::load(&state_dir) else {
             return;
