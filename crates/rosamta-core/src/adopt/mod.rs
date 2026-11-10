@@ -176,8 +176,11 @@ pub fn scan(ctx: &Context) -> Result<Vec<Candidate>> {
         for segment in segments {
             let text = segment.text();
             let hash = segment::hash(&segment::normalize(&text, &ctx.home));
+            // Lines rosamta or fish wrote themselves are not the user's.
             let seed = watched.path.ends_with(".bash_profile") && text == hooks::BASH_PROFILE_SEED;
-            if seed || ignored.hashes.contains(&hash) {
+            let fish_default =
+                watched.path.ends_with("config.fish") && segment::fish_default(&text);
+            if seed || fish_default || ignored.hashes.contains(&hash) {
                 continue;
             }
             let mut candidate = Candidate {

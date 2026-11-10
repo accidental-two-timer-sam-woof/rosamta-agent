@@ -310,6 +310,17 @@ fn module_value(parts: &[Part]) -> Option<String> {
     Some(out)
 }
 
+/// An alias body every shell runs the same way: words, flags, paths and
+/// pipes. `$?`, quoting and substitutions differ between POSIX shells and
+/// fish, so those aliases stay in a snippet for their own shell.
+fn alias_body(parts: &[Part]) -> Option<String> {
+    let body = literal(parts)?;
+    let portable = body
+        .chars()
+        .all(|c| c.is_alphanumeric() || " -_./=,:@%+~|".contains(c));
+    (portable && !body.trim().is_empty()).then_some(body)
+}
+
 /// An alias body is literal text; a variable would expand at definition time.
 fn literal(parts: &[Part]) -> Option<String> {
     let mut out = String::new();
@@ -398,7 +409,7 @@ fn posix_command(words: &[Word], found: &mut Found) -> Option<()> {
                 body.push(Part::Lit(rest.to_string(), false));
             }
             body.extend(words[1][1..].iter().cloned());
-            found.aliases.insert(name.to_string(), literal(&body)?);
+            found.aliases.insert(name.to_string(), alias_body(&body)?);
             Some(())
         }
         _ if words.len() == 1 => {
@@ -663,7 +674,7 @@ fn fish_command(words: &[Word], found: &mut Found) -> Option<()> {
             if name.starts_with('-') {
                 return None;
             }
-            found.aliases.insert(name, literal(&body)?);
+            found.aliases.insert(name, alias_body(&body)?);
             Some(())
         }
         "export" if words.len() == 2 => {
@@ -768,6 +779,8 @@ mod tests {
             "alias x=\"cd $HOME\"",
             "export PATH=\"/a:$PATH\" \\",
             "typeset -U path",
+            "alias alert='notify-send -i \"$([ $? = 0 ] && echo terminal)\"'",
+            "alias x='a; b'",
             "eval \"$(/home/linuxbrew/.linuxbrew/bin/brew shellenv bash)\"",
         ] {
             assert!(structured(text, Dialect::Zsh).is_none(), "{text}");
