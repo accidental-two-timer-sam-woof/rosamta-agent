@@ -2,8 +2,8 @@
 
 ## 1. 宣告與驗證
 
-- [ ] 1.1 新增 `dotfiles.toml` 的型別與 `rsmt schema dotfiles`，`rsmt validate` 檢查路徑格式、來源存在、互相包含的路徑、搭配 link 的 `encrypted` 與權限格式
-- [ ] 1.2 實作選擇符合本機的宣告與「指名本機者優先」，以單元測試涵蓋重複宣告的情況
+- [x] 1.1 新增 `dotfiles.toml` 的型別與 `rsmt schema dotfiles`，`rsmt validate` 檢查路徑格式、來源存在、互相包含的路徑、搭配 link 的 `encrypted` 與權限格式
+- [x] 1.2 實作選擇符合本機的宣告與「指名本機者優先」，以單元測試涵蓋重複宣告的情況
 
 ## 2. 部署
 

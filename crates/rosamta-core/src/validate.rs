@@ -6,7 +6,7 @@ use std::path::{Path, PathBuf};
 use serde::Serialize;
 use serde::de::DeserializeOwned;
 
-use crate::config::{CURRENT_FORMAT, Module, RepoManifest};
+use crate::config::{CURRENT_FORMAT, DotfileManifest, Module, RepoManifest};
 use crate::error::{Error, Result};
 use crate::repo;
 
@@ -132,13 +132,36 @@ pub fn validate(repo_dir: &Path) -> Result<Report> {
         }
     }
 
-    // Their fields belong to later changes; for now only the syntax is checked.
-    for name in ["dotfiles.toml", "packages.toml"] {
-        let path = repo_dir.join(name);
-        if path.is_file() {
-            let issues = parse::<toml::Table>(&read(&path)?).err();
-            report.file(PathBuf::from(name)).errors.extend(issues);
+    let path = repo_dir.join(crate::dotfiles::MANIFEST);
+    if path.is_file() {
+        let rel = PathBuf::from(crate::dotfiles::MANIFEST);
+        match parse::<DotfileManifest>(&read(&path)?) {
+            Ok(manifest) => {
+                let problems = crate::dotfiles::check(&manifest, repo_dir);
+                report
+                    .file(rel.clone())
+                    .errors
+                    .extend(problems.into_iter().map(Issue::at));
+                for entry in &manifest.dotfile {
+                    for host in entry.when.hosts.iter().filter(|host| !hosts.contains(host)) {
+                        report.file(rel.clone()).warnings.push(Issue::at(format!(
+                            "dotfile `{}`: host ID `{host}` is not in the host list in rosamta.toml",
+                            entry.path
+                        )));
+                    }
+                }
+            }
+            Err(issue) => report.file(rel).errors.push(issue),
         }
+    }
+    // Its fields belong to a later change; for now only the syntax is checked.
+    let path = repo_dir.join("packages.toml");
+    if path.is_file() {
+        let issues = parse::<toml::Table>(&read(&path)?).err();
+        report
+            .file(PathBuf::from("packages.toml"))
+            .errors
+            .extend(issues);
     }
     Ok(report)
 }

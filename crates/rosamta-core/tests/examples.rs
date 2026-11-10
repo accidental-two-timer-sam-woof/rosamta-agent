@@ -1,6 +1,6 @@
 //! The example files parse into their types and pass their JSON Schemas.
 
-use rosamta_core::config::{HostConfig, Module, Os, Phase, RepoManifest};
+use rosamta_core::config::{Deploy, DotfileManifest, HostConfig, Module, Os, Phase, RepoManifest};
 use rosamta_core::schema::{Kind, schema};
 
 fn example(name: &str) -> String {
@@ -50,6 +50,16 @@ fn examples_parse() {
         (raw.phase, raw.raw.bash.as_deref()),
         (Some(Phase::Tools), None)
     );
+    let dotfiles: DotfileManifest = toml::from_str(&example("dotfiles.toml")).unwrap();
+    assert_eq!(
+        dotfiles
+            .dotfile
+            .iter()
+            .map(|entry| entry.deploy)
+            .collect::<Vec<_>>(),
+        [Deploy::Link, Deploy::Copy, Deploy::Link]
+    );
+    assert_eq!(dotfiles.dotfile[1].mode(), Some(0o600));
 }
 
 #[test]
@@ -60,6 +70,7 @@ fn examples_pass_their_schemas() {
         (Kind::Module, "structured.toml"),
         (Kind::Module, "raw.toml"),
         (Kind::Host, "host.toml"),
+        (Kind::Dotfiles, "dotfiles.toml"),
     ] {
         assert_eq!(
             schema_errors(kind, &example(file)),
@@ -75,4 +86,11 @@ fn schemas_reject_what_parsing_rejects() {
     assert!(!schema_errors(Kind::Module, "[when]\nos = [\"darwin\"]").is_empty());
     assert!(!schema_errors(Kind::Repo, "hosts = []").is_empty());
     assert!(!schema_errors(Kind::Host, "id = \"mbp\"\npull_interval = 0").is_empty());
+    for bad in [
+        "[[dotfile]]\ndeploy = \"copy\"",
+        "[[dotfile]]\npath = \"x\"\ndeploy = \"hardlink\"",
+        "[[dotfile]]\npath = \"x\"\npermissions = \"rw\"",
+    ] {
+        assert!(!schema_errors(Kind::Dotfiles, bad).is_empty(), "{bad}");
+    }
 }
