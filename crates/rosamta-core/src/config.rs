@@ -1,6 +1,7 @@
 //! Types for every file rosamta reads. Reading goes through serde; writing
 //! goes through `toml_edit` (see `edit`) so user comments survive.
 
+use indexmap::IndexMap;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
@@ -25,12 +26,104 @@ pub struct RepoManifest {
 pub struct Module {
     #[serde(default = "yes")]
     pub enabled: bool,
+    /// Phase for aliases (default `aliases`) and raw content (default
+    /// `late`). Environment variables and PATH always load in `env`.
     pub phase: Option<Phase>,
     /// Order within the phase; lower loads first.
     #[serde(default = "default_order")]
     pub order: u32,
     #[serde(default)]
     pub when: When,
+    /// Shells to render for; empty means every supported shell.
+    #[serde(default)]
+    pub shells: Vec<Shell>,
+    /// Exported variables. `$NAME`, `${NAME}` and a leading `~` expand.
+    #[serde(default)]
+    pub env: IndexMap<String, String>,
+    #[serde(default)]
+    pub path: PathEntries,
+    /// Defined only in interactive shells.
+    #[serde(default)]
+    pub aliases: IndexMap<String, String>,
+    /// Shell code copied as is, only into the shells it names.
+    #[serde(default)]
+    pub raw: Raw,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct PathEntries {
+    /// Put before the existing PATH, in this order.
+    #[serde(default)]
+    pub prepend: Vec<String>,
+    /// Put after the existing PATH, in this order.
+    #[serde(default)]
+    pub append: Vec<String>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct Raw {
+    pub sh: Option<String>,
+    pub bash: Option<String>,
+    pub zsh: Option<String>,
+    pub fish: Option<String>,
+}
+
+impl Raw {
+    pub fn get(&self, shell: Shell) -> Option<&str> {
+        match shell {
+            Shell::Sh => self.sh.as_deref(),
+            Shell::Bash => self.bash.as_deref(),
+            Shell::Zsh => self.zsh.as_deref(),
+            Shell::Fish => self.fish.as_deref(),
+        }
+    }
+}
+
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Deserialize, Serialize, JsonSchema,
+)]
+#[serde(rename_all = "lowercase")]
+pub enum Shell {
+    Sh,
+    Bash,
+    Zsh,
+    Fish,
+}
+
+impl Shell {
+    pub const ALL: [Shell; 4] = [Shell::Sh, Shell::Bash, Shell::Zsh, Shell::Fish];
+
+    pub fn name(self) -> &'static str {
+        match self {
+            Shell::Sh => "sh",
+            Shell::Bash => "bash",
+            Shell::Zsh => "zsh",
+            Shell::Fish => "fish",
+        }
+    }
+
+    pub fn ext(self) -> &'static str {
+        self.name()
+    }
+}
+
+impl std::fmt::Display for Shell {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.name())
+    }
+}
+
+impl std::str::FromStr for Shell {
+    type Err = String;
+
+    fn from_str(name: &str) -> Result<Self, Self::Err> {
+        Shell::ALL
+            .into_iter()
+            .find(|shell| shell.name() == name)
+            .ok_or_else(|| format!("unknown shell `{name}`, expected sh, bash, zsh or fish"))
+    }
 }
 
 #[derive(
@@ -38,6 +131,7 @@ pub struct Module {
 )]
 #[serde(rename_all = "lowercase")]
 pub enum Phase {
+    // Declaration order is load order.
     Env,
     Early,
     Framework,

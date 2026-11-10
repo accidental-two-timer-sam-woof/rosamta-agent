@@ -6,10 +6,12 @@ license.workspace = true
 repository.workspace = true
 
 [dependencies]
+indexmap = { version = "2.14.2", features = ["serde"] }
 libc = "0.2.191"
-schemars = "1.2.3"
+schemars = { version = "1.2.3", features = ["indexmap2"] }
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.154"
+similar = "3.2.1"
 thiserror = "2.0.21"
 toml = "1.2.1"
 toml_edit = "0.25.19"

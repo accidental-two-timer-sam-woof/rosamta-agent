@@ -34,6 +34,22 @@ fn examples_parse() {
     );
     let host: HostConfig = toml::from_str(&example("host.toml")).unwrap();
     assert_eq!(host.tags, ["lab", "personal"]);
+    let structured: Module = toml::from_str(&example("structured.toml")).unwrap();
+    assert_eq!(
+        structured.env.keys().collect::<Vec<_>>(),
+        ["EDITOR", "VISUAL"]
+    );
+    assert_eq!(
+        structured.path.prepend,
+        ["~/.local/bin", "$HOME/.cargo/bin"]
+    );
+    assert_eq!(structured.aliases["ll"], "ls -lh");
+    let raw: Module = toml::from_str(&example("raw.toml")).unwrap();
+    assert!(raw.raw.zsh.as_deref().unwrap().contains("ngrok completion"));
+    assert_eq!(
+        (raw.phase, raw.raw.bash.as_deref()),
+        (Some(Phase::Tools), None)
+    );
 }
 
 #[test]
@@ -41,6 +57,8 @@ fn examples_pass_their_schemas() {
     for (kind, file) in [
         (Kind::Repo, "rosamta.toml"),
         (Kind::Module, "module.toml"),
+        (Kind::Module, "structured.toml"),
+        (Kind::Module, "raw.toml"),
         (Kind::Host, "host.toml"),
     ] {
         assert_eq!(

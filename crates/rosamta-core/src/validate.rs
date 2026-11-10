@@ -103,6 +103,8 @@ pub fn validate(repo_dir: &Path) -> Result<Report> {
             .push(rel.clone());
         match parse::<Module>(&text) {
             Ok(module) => {
+                let problems = crate::render::check(&module).into_iter().map(Issue::at);
+                report.file(rel.clone()).errors.extend(problems);
                 for host in module
                     .when
                     .hosts
@@ -288,6 +290,20 @@ mod tests {
             .find(|file| file.path == Path::new("modules/x.toml"))
             .unwrap();
         assert!(file.warnings[0].message.contains("new-laptop"));
+    }
+
+    #[test]
+    fn bad_names_are_errors() {
+        let dir = repo(&[
+            ("rosamta.toml", "format = 1\n"),
+            ("modules/x.toml", "[env]\n\"MY-VAR\" = \"1\"\n"),
+        ]);
+        let report = validate(dir.path()).unwrap();
+        assert!(
+            errors(&report, "modules/x.toml")[0]
+                .message
+                .contains("MY-VAR")
+        );
     }
 
     #[test]
