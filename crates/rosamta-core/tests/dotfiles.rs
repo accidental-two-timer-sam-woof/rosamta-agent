@@ -459,3 +459,78 @@ mod review {
         );
     }
 }
+
+mod encrypted {
+    use super::*;
+    use rosamta_core::dotfiles::crypt;
+
+    const SSH: &str = "[[dotfile]]\npath = \".ssh/config\"\ndeploy = \"copy\"\npermissions = \"0600\"\nencrypted = true\n";
+
+    /// A repo with an encrypted `.ssh/config`, made on another host.
+    fn locked() -> Home {
+        let home = Home::new("auto");
+        crypt::create(&home.ctx, "correct horse").unwrap();
+        let sealed = crypt::encrypt(&home.ctx, b"Host secret\n").unwrap();
+        fs::create_dir_all(home.repo().join("home/.ssh")).unwrap();
+        fs::write(home.repo().join("home/.ssh/config"), sealed).unwrap();
+        home.repo_write("dotfiles.toml", SSH);
+        fs::remove_file(home.ctx.paths.age_key()).unwrap();
+        home
+    }
+
+    #[test]
+    fn the_repo_holds_ciphertext_only() {
+        let home = locked();
+        let stored = read(&home.repo().join("home/.ssh/config"));
+        assert!(
+            stored.starts_with("-----BEGIN AGE ENCRYPTED FILE-----"),
+            "{stored}"
+        );
+        assert!(!stored.contains("Host secret"));
+        let key = read(&home.repo().join(crypt::REPO_KEY));
+        assert!(
+            key.starts_with("-----BEGIN AGE ENCRYPTED FILE-----")
+                && !key.contains("AGE-SECRET-KEY")
+        );
+    }
+
+    #[test]
+    fn waits_for_the_passphrase_then_deploys() {
+        let home = locked();
+        assert!(crypt::locked(&home.ctx).unwrap());
+        assert_eq!(home.deploy(), one(".ssh/config", Action::Skipped));
+        assert!(!home.at(".ssh/config").exists());
+
+        assert!(!crypt::unlock(&home.ctx, "wrong").unwrap());
+        assert!(crypt::locked(&home.ctx).unwrap());
+        assert!(crypt::unlock(&home.ctx, "correct horse").unwrap());
+        assert_eq!(mode(&home.ctx.paths.age_key()), 0o600);
+        assert_eq!(home.deploy(), one(".ssh/config", Action::Copied));
+        assert_eq!(read(&home.at(".ssh/config")), "Host secret\n");
+        assert_eq!(mode(&home.at(".ssh/config")), 0o600);
+        assert_eq!(home.deploy(), one(".ssh/config", Action::Unchanged));
+    }
+
+    #[test]
+    fn saved_changes_are_encrypted_again() {
+        let home = locked();
+        crypt::unlock(&home.ctx, "correct horse").unwrap();
+        home.deploy();
+        write(&home.at(".ssh/config"), "Host changed\n");
+        assert_eq!(home.deploy(), one(".ssh/config", Action::Saved));
+        let stored = fs::read(home.repo().join("home/.ssh/config")).unwrap();
+        assert!(!String::from_utf8_lossy(&stored).contains("Host changed"));
+        assert_eq!(
+            crypt::decrypt(&home.ctx, &stored).unwrap().unwrap(),
+            b"Host changed\n"
+        );
+        assert_eq!(home.deploy(), one(".ssh/config", Action::Unchanged));
+    }
+
+    #[test]
+    fn a_second_key_is_refused() {
+        let home = locked();
+        let err = crypt::create(&home.ctx, "another").unwrap_err();
+        assert!(err.to_string().contains("already has a key"), "{err}");
+    }
+}
