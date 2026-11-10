@@ -8,6 +8,7 @@ use crate::config::{Deploy, Dotfile, DotfileManifest, HostFacts};
 use crate::error::{Error, Result};
 use crate::validate;
 
+pub mod crypt;
 pub mod deploy;
 mod history;
 pub mod review;
@@ -81,6 +82,11 @@ pub fn check(manifest: &DotfileManifest, repo_dir: &Path) -> Vec<String> {
         if entry.permissions.is_some() && entry.mode().is_none() {
             problems.push(format!(
                 "dotfile `{name}`: permissions must be an octal mode such as \"0600\""
+            ));
+        }
+        if entry.encrypted && repo_dir.join(entry.source()).is_dir() {
+            problems.push(format!(
+                "dotfile `{name}`: an encrypted dotfile must be a file"
             ));
         }
         if entry.encrypted && entry.deploy == Deploy::Link {

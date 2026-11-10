@@ -21,6 +21,27 @@ pub fn edit_toml(path: &Path, change: impl FnOnce(&mut DocumentMut)) -> Result<b
     Ok(true)
 }
 
+/// Write `text` to a file only its owner can read.
+pub(crate) fn write_private(path: &Path, text: &str) -> Result<()> {
+    use std::io::Write;
+    use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
+    let dir = path
+        .parent()
+        .expect("a private file has a parent directory");
+    std::fs::create_dir_all(dir).map_err(Error::write(dir))?;
+    let mut file = std::fs::OpenOptions::new()
+        .write(true)
+        .create(true)
+        .truncate(true)
+        .mode(0o600)
+        .open(path)
+        .map_err(Error::write(path))?;
+    // `mode` applies only when the file is created.
+    file.set_permissions(std::fs::Permissions::from_mode(0o600))
+        .map_err(Error::write(path))?;
+    file.write_all(text.as_bytes()).map_err(Error::write(path))
+}
+
 /// Write via a temporary file and rename, so readers never see half a file.
 pub(crate) fn write_atomic(path: &Path, text: &str) -> Result<()> {
     let name = path

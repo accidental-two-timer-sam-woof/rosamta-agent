@@ -1,8 +1,6 @@
 //! Where the GitHub token lives: the system keychain (macOS Keychain, Linux
 //! Secret Service), or a file only the user can read when there is none.
 
-use std::io::Write;
-use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
 use std::path::{Path, PathBuf};
 
 use crate::error::{Error, Result};
@@ -46,7 +44,7 @@ impl TokenStore {
             remove(&self.file)?;
             return Ok(Stored::Keychain);
         }
-        write_private(&self.file, token)?;
+        crate::edit::write_private(&self.file, &format!("{token}\n"))?;
         Ok(Stored::File(self.file.clone()))
     }
 
@@ -73,24 +71,6 @@ impl TokenStore {
     }
 }
 
-fn write_private(path: &Path, token: &str) -> Result<()> {
-    let dir = path
-        .parent()
-        .expect("the token file has a parent directory");
-    std::fs::create_dir_all(dir).map_err(Error::write(dir))?;
-    let mut file = std::fs::OpenOptions::new()
-        .write(true)
-        .create(true)
-        .truncate(true)
-        .mode(0o600)
-        .open(path)
-        .map_err(Error::write(path))?;
-    // `mode` applies only when the file is created.
-    file.set_permissions(std::fs::Permissions::from_mode(0o600))
-        .map_err(Error::write(path))?;
-    writeln!(file, "{token}").map_err(Error::write(path))
-}
-
 fn remove(path: &Path) -> Result<bool> {
     match std::fs::remove_file(path) {
         Ok(()) => Ok(true),
@@ -104,6 +84,8 @@ fn remove(path: &Path) -> Result<bool> {
 
 #[cfg(test)]
 mod tests {
+    use std::os::unix::fs::PermissionsExt;
+
     use super::*;
 
     #[test]

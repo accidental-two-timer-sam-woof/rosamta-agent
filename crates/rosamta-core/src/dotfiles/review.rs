@@ -8,7 +8,7 @@ use std::path::{Path, PathBuf};
 use serde::{Deserialize, Serialize};
 
 use super::state::Sides;
-use super::tree::{self, Content};
+use super::tree;
 use super::{Choice, MANIFEST, deploy};
 use crate::adopt::store::Store;
 use crate::adopt::{self, QueueItem, Scope};
@@ -115,13 +115,10 @@ fn unchanged(ctx: &Context, id: u32, item: &DotfileItem) -> Result<Dotfile> {
 /// this host alone (`Scope::Host`) or for every host using the declaration.
 pub(crate) fn keep(ctx: &Context, id: u32, item: &DotfileItem, scope: Scope) -> Result<()> {
     let entry = unchanged(ctx, id, item)?;
-    if entry.encrypted {
-        return Err(Error::Usage(
-            "encrypted dotfiles are not supported yet".into(),
-        ));
-    }
     let target = ctx.home.join(&item.path);
-    refuse_secret(&target)?;
+    if !entry.encrypted {
+        refuse_secret(&target)?;
+    }
     let host = adopt::host_config(ctx)?;
     let repo = ctx.paths.repo();
     let own = entry.when.hosts == [host.id.clone()];
@@ -141,7 +138,7 @@ pub(crate) fn keep(ctx: &Context, id: u32, item: &DotfileItem, scope: Scope) -> 
         paths.push(MANIFEST.to_string());
         variant.source()
     };
-    tree::put(Content::Tree(&target), &repo.join(&source))?;
+    deploy::save(ctx, &entry, &target, &repo.join(&source))?;
     paths.push(source);
     let paths: Vec<&str> = paths.iter().map(String::as_str).collect();
     sync::commit_scanned(ctx, &paths, None)?;
@@ -240,7 +237,15 @@ pub fn diff(ctx: &Context, item: &DotfileItem) -> Result<String> {
     let (entry, _) = current(ctx, &item.path)?;
     let target = ctx.home.join(&item.path);
     let local = contents(&target)?;
-    let repo = contents(&ctx.paths.repo().join(entry.source()))?;
+    let source = ctx.paths.repo().join(entry.source());
+    let repo = if entry.encrypted {
+        let sealed = std::fs::read(&source).map_err(Error::read(&source))?;
+        let plain = super::crypt::decrypt(ctx, &sealed)?
+            .ok_or_else(|| Error::Usage(deploy::LOCKED.into()))?;
+        BTreeMap::from([(PathBuf::new(), plain)])
+    } else {
+        contents(&source)?
+    };
     let mut out = String::new();
     for rel in local
         .keys()
