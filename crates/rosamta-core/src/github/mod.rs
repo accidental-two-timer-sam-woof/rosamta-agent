@@ -1,8 +1,6 @@
 //! Linking GitHub (ADR 0010): device flow sign-in, the token, the repo and
 //! how git reaches it.
 
-mod token;
-
 use std::path::Path;
 use std::time::{Duration, Instant};
 
@@ -13,7 +11,7 @@ use crate::git;
 use crate::paths::Paths;
 use crate::repo::{self, InitOutcome};
 
-pub use token::{Stored, TokenStore};
+pub use crate::token::{Stored, TokenStore};
 
 /// rosamta's OAuth App. Device flow needs only the client ID, which is public.
 pub const CLIENT_ID: &str = "Ov23liLGTz876ezcWYf7";
