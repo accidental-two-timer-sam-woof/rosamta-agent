@@ -49,6 +49,8 @@ const BATCH: Duration = Duration::from_secs(10);
 const TICK: Duration = Duration::from_secs(5);
 /// Wall time running this far ahead of monotonic time means the host slept.
 const SLEPT: Duration = Duration::from_secs(60);
+/// After waking, the network often takes a while to come back.
+const WAKE_RETRIES: [Duration; 2] = [Duration::from_secs(30), Duration::from_secs(120)];
 const LOG_LIMIT: u64 = 1 << 20;
 
 /// Directories to watch: the parents of watched files, without recursion,
@@ -202,6 +204,8 @@ struct Daemon {
     batch: Vec<u32>,
     batch_since: Option<Instant>,
     next_sync: Instant,
+    /// Retries left for a sync after waking that found no network.
+    wake_retries: &'static [Duration],
     clock: (Instant, SystemTime),
     exe: Option<(PathBuf, Identity)>,
     /// A problem found by applying the repo: kind and reason.
@@ -307,6 +311,7 @@ impl Daemon {
         let previous = instance::load(ctx.paths.state()).ok().flatten();
         Self {
             next_sync: Instant::now(),
+            wake_retries: &[],
             host,
             lang: Lang::system(),
             notifier,
@@ -529,9 +534,20 @@ impl Daemon {
         let wall_elapsed = now.1.duration_since(wall).unwrap_or_default();
         let woke = wall_elapsed > now.0.duration_since(mono) + SLEPT;
         self.clock = now;
+        if woke {
+            self.wake_retries = &WAKE_RETRIES;
+        }
         if woke || now.0 >= self.next_sync {
             self.next_sync = now.0 + Duration::from_secs(u64::from(self.host.pull_interval) * 60);
+            let started = crate::time::now();
             self.sync_now();
+            match self.wake_retries.split_first() {
+                Some((delay, rest)) if self.offline_since(started) => {
+                    self.next_sync = now.0 + *delay;
+                    self.wake_retries = rest;
+                }
+                _ => self.wake_retries = &[],
+            }
         }
         if self
             .batch_since
@@ -540,6 +556,16 @@ impl Daemon {
             self.announce();
         }
         replaced(&self.exe)
+    }
+
+    /// Whether a sync from `started` on could not reach the remote.
+    fn offline_since(&self, started: u64) -> bool {
+        sync::load_state(self.ctx.paths.state()).is_ok_and(|state| {
+            [state.publish, state.pull]
+                .into_iter()
+                .flatten()
+                .any(|attempt| attempt.at >= started && attempt.outcome == Outcome::Offline)
+        })
     }
 
     fn announce(&mut self) {

@@ -60,11 +60,15 @@ repo 的內容被修改（使用者手動編輯或拉取）後，背景服務 SH
 - **THEN** 新開的 shell 已使用新的 alias，且推送偏好為「自動」時遠端也已更新
 
 ### Requirement: Periodic sync
-拉取偏好為「自動」時，背景服務 SHALL 依設定的間隔執行同步；電腦從睡眠喚醒後 SHALL 立即同步一次。
+拉取偏好為「自動」時，背景服務 SHALL 依設定的間隔執行同步；電腦從睡眠喚醒後 SHALL 立即同步一次，連不上遠端時 SHALL 在約 30 秒與 2 分鐘後各重試一次，之後回到設定的間隔。
 
 #### Scenario: Interval
 - **WHEN** 拉取間隔為 15 分鐘
 - **THEN** 背景服務大約每 15 分鐘執行一次同步
+
+#### Scenario: Network not back after waking
+- **WHEN** 電腦從睡眠喚醒時網路還沒恢復
+- **THEN** 背景服務在約 30 秒與 2 分鐘後再同步，不必等到下一個間隔
 
 ### Requirement: Settings reload
 `host.toml` 被修改後，背景服務 SHALL 不需重新啟動就套用新的設定。
