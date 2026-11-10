@@ -18,5 +18,16 @@
 	<string>13.0</string>
 	<key>NSHighResolutionCapable</key>
 	<true/>
+	<key>CFBundleURLTypes</key>
+	<array>
+		<dict>
+			<key>CFBundleURLName</key>
+			<string>tw.xinshou.rosamta</string>
+			<key>CFBundleURLSchemes</key>
+			<array>
+				<string>rosamta</string>
+			</array>
+		</dict>
+	</array>
 </dict>
 </plist>
