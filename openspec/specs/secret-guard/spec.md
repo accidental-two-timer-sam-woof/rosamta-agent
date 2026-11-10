@@ -29,3 +29,14 @@
 #### Scenario: Review shows the marker
 - **WHEN** 使用者執行 `rsmt review`
 - **THEN** 疑似秘密的項目旁標示它只會存在本機
+
+### Requirement: Scan before pushing
+每次推送前，rosamta SHALL 以相同的秘密規則掃描所有即將推送的 commit 內容；為使用者手動修改建立 commit 之前，SHALL 先掃描這些修改。發現疑似秘密時 SHALL 停止推送、不建立也不修改任何 commit，並回報檔案、行號與命中的規則，推送狀態標記為受阻。
+
+#### Scenario: Secret in a hand-edited module
+- **WHEN** 使用者手動在 `modules/env.toml` 寫入一個 API key，並執行 `rsmt publish`
+- **THEN** 遠端沒有收到任何 commit，指令以 1 結束並指出 `modules/env.toml` 的行號
+
+#### Scenario: Secret already committed
+- **WHEN** 使用者自行以 git commit 了一個含 API key 的 module，並執行 `rsmt publish`
+- **THEN** 遠端沒有收到任何 commit，本機的 commit 維持原樣，指令以 1 結束並指出該檔案的行號
