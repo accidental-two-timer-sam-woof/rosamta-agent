@@ -101,7 +101,7 @@ pub fn restore(json: bool, yes: bool) -> Result<ExitCode> {
 }
 
 /// Show the diff and ask, unless `--yes`. Without a terminal, `--yes` is required.
-fn confirm(json: bool, yes: bool, changes: &[FileChange]) -> Result<bool> {
+pub(crate) fn confirm(json: bool, yes: bool, changes: &[FileChange]) -> Result<bool> {
     if yes {
         return Ok(true);
     }
