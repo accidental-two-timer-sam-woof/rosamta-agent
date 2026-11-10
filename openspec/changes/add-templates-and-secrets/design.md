@@ -69,6 +69,8 @@ template 就是 `deploy = "template"` 的 dotfile，來源仍在 `home/<path>`�
 
 - 鎖住時，終端機中的 `rsmt apply` 執行該工具的解鎖指令（`rbw unlock`、`bw unlock --raw`），讓工具自己詢問主密碼；bw 回傳的 session key 只用於這次套用。非互動執行與背景服務不解鎖。
 - bws 的 `field` 只接受省略（值）或 `note`。
+- rbw 與 bw 找不到完全同名的項目時會改用部分符合；rosamta 只接受名稱或 ID 完全相同的項目，bw 以 `bw list items --search` 列出後挑出同名者，同名的有多個時失敗。bws 同一個 key 有多個秘密時也失敗。
+- `totp` 取的是存在項目中的種子（base32 或 `otpauth://`），不是當下的驗證碼。
 - `rsmt secrets bws login` 以不回顯的方式讀入 access token，存進系統 keychain；`rsmt secrets bws logout` 刪除它。執行 bws 時以環境變數傳入 token，不寫進命令列。測試環境以 `ROSAMTA_NO_KEYCHAIN=1` 改用檔案。
 
 ### 以指令取值
@@ -132,3 +134,6 @@ dotfile 項目新增原因 `waiting`，並記錄在等什麼：哪個秘密來�
 - bws 以 key 名稱查詢需要列出所有秘密 → 一次套用只列一次。
 - 不同安裝方式的 socket 路徑依 Bitwarden 文件，Mac App Store 與 flatpak 版本的 SSH agent 支援狀況可能改變 → 只在 doctor 中回報 socket 不存在，不擋套用。
 - 背景服務不執行秘密指令，使用 `secret()` 的 template 只會在終端機套用時更新 → 等待項目與通知會提醒使用者。
+- rbw 在 `rbw unlocked` 與 `rbw get` 之間剛好自動鎖住時，`rbw get` 會自己叫出 pinentry；rbw 沒有關閉這個行為的選項 → 機率低，只記錄在此。bw 以 `BW_NOINTERACTION` 保證不詢問。
+- 鎖住的工具在終端機中解鎖時仍持有套用的鎖，背景服務要等密碼輸入完成。
+- 秘密指令的 `run` 第一個元素只能是 PATH 中的名稱或絕對路徑，不能來自 `{arg}`，避免依執行目錄或 template 參數改變要執行的程式。

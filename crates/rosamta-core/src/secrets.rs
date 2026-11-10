@@ -67,8 +67,18 @@ pub fn check(commands: &SecretCommands) -> Vec<String> {
     commands
         .commands
         .iter()
-        .filter(|(_, command)| command.run.first().is_none_or(|program| program.is_empty()))
-        .map(|(name, _)| format!("command `{name}`: run must start with a program"))
+        .filter_map(|(name, command)| {
+            let problem = match command.run.first().map(String::as_str) {
+                None | Some("") => "run must start with a program",
+                Some(program) if program.contains("{arg}") => "the program cannot come from {arg}",
+                // Relative to wherever rsmt runs, which may be any checkout.
+                Some(program) if program.contains('/') && !program.starts_with('/') => {
+                    "the program must be a name on PATH or an absolute path"
+                }
+                Some(_) => return None,
+            };
+            Some(format!("command `{name}`: {problem}"))
+        })
         .collect()
 }
 
@@ -101,6 +111,8 @@ struct State {
     bws_token: Option<Option<String>>,
     outputs: BTreeMap<(String, String), String>,
     waiting: Vec<Waiting>,
+    /// Whether the tool in use could be read, once checked.
+    unlocked: Option<std::result::Result<(), Failure>>,
     /// Secrets handed to templates, cached or not.
     used: usize,
 }
@@ -221,7 +233,22 @@ impl Session {
         let entry = match cached {
             Some(entry) => entry,
             None => {
-                self.unlock(tool, &program)?;
+                let unlocked = self.state().unlocked.clone();
+                let unlocked = match unlocked {
+                    Some(unlocked) => unlocked,
+                    None => {
+                        let unlocked = self.unlock(tool, &program);
+                        self.state().unlocked = Some(unlocked.clone());
+                        unlocked
+                    }
+                };
+                if let Err(failure) = unlocked {
+                    // Each render takes what it waited for.
+                    return Err(match failure {
+                        Failure::Waiting(waiting) => self.wait(waiting),
+                        error => error,
+                    });
+                }
                 let entry = self.fetch(tool, &program, item)?;
                 self.state().items.insert(item.to_string(), entry.clone());
                 entry
@@ -292,11 +319,14 @@ impl Session {
             return Ok(());
         }
         if !self.interactive {
-            return Err(self.wait(Waiting::Locked(tool)));
+            return Err(Failure::Waiting(Waiting::Locked(tool)));
         }
         let failed = |err: String| Failure::Error(format!("cannot unlock {}: {err}", tool.name()));
         let mut cmd = Command::new(program);
         cmd.stdin(Stdio::inherit()).stderr(Stdio::inherit());
+        for name in BW_OUTPUT_VARS {
+            cmd.env_remove(name);
+        }
         match tool {
             BitwardenTool::Rbw => {
                 let status = cmd
@@ -329,11 +359,30 @@ impl Session {
         program: &Path,
         item: &str,
     ) -> std::result::Result<Value, Failure> {
-        let result = match tool {
-            BitwardenTool::Rbw => run_json(program, &["get", "--raw", item], &[]),
-            _ => run_json(program, &["get", "item", item], &self.bw_env()),
-        };
-        result.map_err(|err| Failure::Error(format!("{} cannot read `{item}`: {err}", tool.name())))
+        let failed =
+            |err: String| Failure::Error(format!("{} cannot read `{item}`: {err}", tool.name()));
+        // Both tools fall back to partial matches; only the item named counts.
+        let named = |entry: &Value| entry["name"] == item || entry["id"] == item;
+        if tool == BitwardenTool::Rbw {
+            let entry = run_json(program, &["get", "--raw", "--", item], &[]).map_err(failed)?;
+            return match named(&entry) {
+                true => Ok(entry),
+                false => Err(failed(format!("no item is named `{item}`"))),
+            };
+        }
+        let search = format!("--search={item}");
+        let list =
+            run_json(program, &["list", "items", &search], &self.bw_env()).map_err(failed)?;
+        let mut found = list
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter(|entry| named(entry));
+        match (found.next(), found.next()) {
+            (Some(entry), None) => Ok(entry.clone()),
+            (None, _) => Err(failed(format!("no item is named `{item}`"))),
+            (Some(_), Some(_)) => Err(failed(format!("several items are named `{item}`"))),
+        }
     }
 
     /// bws has no items, only secrets with a key, a value and a note; one
@@ -357,20 +406,27 @@ impl Session {
             let token = self.bws_token().unwrap_or_default();
             let list = run_json(
                 program,
-                &["secret", "list", "--output", "json"],
+                &["secret", "list", "--output", "json", "--color", "no"],
                 &[("BWS_ACCESS_TOKEN", token)],
             )
             .map_err(|err| Failure::Error(format!("bws cannot list secrets: {err}")))?;
             self.state().bws_secrets = Some(list.as_array().cloned().unwrap_or_default());
         }
         let state = self.state();
-        let secret = state
+        let mut found = state
             .bws_secrets
             .iter()
             .flatten()
-            .find(|secret| secret["key"] == key)
-            .ok_or_else(|| Failure::Error(format!("bws has no secret with key `{key}`")))?;
-        Ok(secret[name].as_str().unwrap_or_default().to_string())
+            .filter(|secret| secret["key"] == key);
+        match (found.next(), found.next()) {
+            (Some(secret), None) => Ok(secret[name].as_str().unwrap_or_default().to_string()),
+            (None, _) => Err(Failure::Error(format!(
+                "bws has no secret with key `{key}`"
+            ))),
+            (Some(_), Some(_)) => Err(Failure::Error(format!(
+                "bws has several secrets with key `{key}`"
+            ))),
+        }
     }
 
     /// `secret(name, arg)`: the output of a command `secrets.toml` declares,
@@ -398,12 +454,7 @@ impl Session {
         let (program, args) = run
             .split_first()
             .ok_or_else(|| failed("run is empty".into()))?;
-        // The terminal stays the command's, for a password or Touch ID prompt.
-        let out = Command::new(program)
-            .args(args)
-            .stdin(Stdio::inherit())
-            .output()
-            .map_err(|err| failed(err.to_string()))?;
+        let out = run_in_terminal(program, args).map_err(|err| failed(err.to_string()))?;
         if !out.status.success() {
             let stderr = String::from_utf8_lossy(&out.stderr);
             let last = stderr.lines().rev().find(|line| !line.trim().is_empty());
@@ -449,6 +500,33 @@ fn field_of(tool: BitwardenTool, entry: &Value, field: Option<&str>) -> Option<S
     value.as_str().map(str::to_string)
 }
 
+/// The terminal stays the command's, for a password or Touch ID prompt:
+/// stdin is shared and stderr is shown as it comes, and kept for the error.
+fn run_in_terminal(program: &str, args: &[String]) -> std::io::Result<std::process::Output> {
+    use std::io::{Read, Write};
+    let mut child = Command::new(program)
+        .args(args)
+        .stdin(Stdio::inherit())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()?;
+    let mut stderr = child.stderr.take().expect("piped");
+    let echo = std::thread::spawn(move || {
+        let (mut kept, mut buf) = (Vec::new(), [0u8; 4096]);
+        while let Ok(read @ 1..) = stderr.read(&mut buf) {
+            let _ = std::io::stderr().write_all(&buf[..read]);
+            kept.extend_from_slice(&buf[..read]);
+        }
+        kept
+    });
+    let mut out = child.wait_with_output()?;
+    out.stderr = echo.join().unwrap_or_default();
+    Ok(out)
+}
+
+/// bw variables that reshape its output or exit code.
+const BW_OUTPUT_VARS: [&str; 3] = ["BW_RESPONSE", "BW_QUIET", "BW_CLEANEXIT"];
+
 fn run(
     program: &Path,
     args: &[&str],
@@ -456,6 +534,11 @@ fn run(
 ) -> std::result::Result<std::process::Output, String> {
     let mut cmd = Command::new(program);
     cmd.args(args);
+    // bw only: plain JSON and a real exit code, and no prompt when locked.
+    for name in BW_OUTPUT_VARS {
+        cmd.env_remove(name);
+    }
+    cmd.env("BW_NOINTERACTION", "true");
     for (name, value) in env {
         cmd.env(name, value);
     }

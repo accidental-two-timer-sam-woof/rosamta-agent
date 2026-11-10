@@ -33,7 +33,7 @@ fn bw(dir: &Path) {
         "bw",
         &format!(
             r#"status) echo '{{"status":"unlocked"}}' ;;
-get) echo '{ITEM},"login":{{"username":"me","password":"bw-pw"}}}}' ;;"#
+list) echo '[{ITEM},"login":{{"username":"me","password":"bw-pw"}}}},{{"name":"GitHub Enterprise"}}]' ;;"#
         ),
     );
 }
@@ -88,6 +88,36 @@ fn the_order_in_host_toml_wins() {
 }
 
 #[test]
+fn only_the_item_named_counts() {
+    let dir = tempfile::tempdir().unwrap();
+    rbw(dir.path());
+    std::fs::write(dir.path().join("unlocked"), "").unwrap();
+    // rbw falls back to a partial match: "Git" finds "GitHub".
+    let err = session(dir.path(), false, &[])
+        .bitwarden("Git", None)
+        .unwrap_err();
+    assert_eq!(
+        err,
+        Failure::Error("rbw cannot read `Git`: no item is named `Git`".into())
+    );
+    assert_eq!(calls(dir.path(), "rbw get --raw -- Git"), 1);
+
+    tool(
+        dir.path(),
+        "bw",
+        r#"status) echo '{"status":"unlocked"}' ;;
+list) echo '[{"name":"a"},{"name":"a"}]' ;;"#,
+    );
+    let err = session(dir.path(), false, &[BitwardenTool::Bw])
+        .bitwarden("a", None)
+        .unwrap_err();
+    assert_eq!(
+        err,
+        Failure::Error("bw cannot read `a`: several items are named `a`".into())
+    );
+}
+
+#[test]
 fn a_locked_tool_waits_outside_a_terminal() {
     let dir = tempfile::tempdir().unwrap();
     rbw(dir.path());
@@ -97,8 +127,15 @@ fn a_locked_tool_waits_outside_a_terminal() {
         secrets.bitwarden("GitHub", None).unwrap_err(),
         Failure::Waiting(waiting.clone())
     );
-    assert_eq!(secrets.take_waiting(), [waiting]);
+    assert_eq!(secrets.take_waiting(), std::slice::from_ref(&waiting));
     assert!(secrets.take_waiting().is_empty());
+    // Checked once; the next render waits again without asking rbw.
+    assert_eq!(
+        secrets.bitwarden("Other", None).unwrap_err(),
+        Failure::Waiting(waiting.clone())
+    );
+    assert_eq!(secrets.take_waiting(), [waiting]);
+    assert_eq!(calls(dir.path(), "rbw unlocked"), 1);
     assert_eq!(calls(dir.path(), "rbw get"), 0);
 }
 
@@ -128,7 +165,7 @@ fn bws_finds_a_secret_by_key_with_the_token_in_its_environment() {
         dir.path(),
         "bws",
         r#"secret) [ "$BWS_ACCESS_TOKEN" = "t0k" ] || exit 1
-echo '[{"key":"NPM_TOKEN","value":"npm_1","note":"ci"}]' ;;"#,
+echo '[{"key":"NPM_TOKEN","value":"npm_1","note":"ci"},{"key":"TWICE"},{"key":"TWICE"}]' ;;"#,
     );
     let secrets = Session::with(
         false,
@@ -146,6 +183,10 @@ echo '[{"key":"NPM_TOKEN","value":"npm_1","note":"ci"}]' ;;"#,
     assert_eq!(
         secrets.bitwarden("OTHER", None).unwrap_err(),
         Failure::Error("bws has no secret with key `OTHER`".into())
+    );
+    assert_eq!(
+        secrets.bitwarden("TWICE", None).unwrap_err(),
+        Failure::Error("bws has several secrets with key `TWICE`".into())
     );
     assert_eq!(calls(dir.path(), "bws secret list"), 1);
     // The token never reaches the command line.
@@ -197,16 +238,20 @@ fn secret_commands_wait_outside_a_terminal() {
 }
 
 #[test]
-fn empty_runs_are_reported() {
+fn programs_must_be_fixed_names_or_absolute_paths() {
     let commands: SecretCommands = toml::from_str(
-        "[commands.a]\nrun = []\n[commands.b]\nrun = [\"\"]\n[commands.c]\nrun = [\"pass\"]\n",
+        "[commands.a]\nrun = []\n[commands.b]\nrun = [\"\"]\n[commands.c]\nrun = [\"pass\"]\n\
+         [commands.d]\nrun = [\"{arg}\"]\n[commands.e]\nrun = [\"scripts/op.sh\"]\n\
+         [commands.f]\nrun = [\"/usr/bin/op\", \"{arg}\"]\n",
     )
     .unwrap();
     assert_eq!(
         check(&commands),
         [
             "command `a`: run must start with a program",
-            "command `b`: run must start with a program"
+            "command `b`: run must start with a program",
+            "command `d`: the program cannot come from {arg}",
+            "command `e`: the program must be a name on PATH or an absolute path",
         ]
     );
 }
