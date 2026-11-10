@@ -437,6 +437,132 @@ fn automatic_push_leaves_hand_edits_uncommitted() {
     );
 }
 
+/// The remote has a new commit, so the push is rejected and pulls first.
+#[test]
+fn automatic_push_after_a_rejected_push_leaves_hand_edits_uncommitted() {
+    let hosts = hosts();
+    run(&hosts.a, &["apply"]);
+    hosts
+        .a
+        .write("modules/editor.toml", "[env]\nEDITOR = \"vim\"\n");
+    run(&hosts.a, &["publish"]);
+    hosts.b.write("modules/b.toml", "[env]\nB = \"1\"\n");
+    run(&hosts.b, &["publish"]);
+    hosts
+        .a
+        .write("modules/editor.toml", "[env]\nEDITOR = \"nvim\"\n");
+    hosts
+        .a
+        .write("modules/zoxide.toml", "[env]\n_ZO_ECHO = \"1\"\n");
+    append(&hosts.a, ".profile", "export ONE=1\n");
+    run(&hosts.a, &["adopt", "--yes"]);
+    assert!(remote_log(&hosts)[0].starts_with("adopt(sh)"));
+    assert!(hosts.a.repo().join("modules/b.toml").is_file());
+    assert_eq!(
+        git(&hosts.a.repo(), &["status", "--porcelain"]),
+        " M modules/editor.toml\n?? modules/zoxide.toml\n"
+    );
+}
+
+/// Putting the edit back after the pull would conflict, so the pull stops
+/// before it starts.
+#[test]
+fn automatic_push_stops_at_a_hand_edit_the_remote_also_changed() {
+    let hosts = hosts();
+    run(&hosts.a, &["apply"]);
+    hosts
+        .a
+        .write("modules/editor.toml", "[env]\nEDITOR = \"vim\"\n");
+    run(&hosts.a, &["publish"]);
+    run(&hosts.b, &["pull"]);
+    hosts
+        .b
+        .write("modules/editor.toml", "[env]\nEDITOR = \"hx\"\n");
+    run(&hosts.b, &["publish"]);
+    let edit = "[env]\nEDITOR = \"nvim\"\n";
+    hosts.a.write("modules/editor.toml", edit);
+    append(&hosts.a, ".profile", "export ONE=1\n");
+    hosts
+        .a
+        .cmd("rsmt")
+        .args(["adopt", "--yes"])
+        .assert()
+        .success()
+        .stderr(predicate::str::contains("modules/editor.toml"));
+    let repo = hosts.a.repo();
+    assert_eq!(
+        git(&repo, &["status", "--porcelain"]),
+        " M modules/editor.toml\n"
+    );
+    assert_eq!(
+        fs::read_to_string(repo.join("modules/editor.toml")).unwrap(),
+        edit
+    );
+    assert_eq!(git(&repo, &["stash", "list"]), "");
+    assert_eq!(state(&hosts.a)["pull"]["outcome"], "conflict");
+}
+
+#[test]
+fn a_conflict_leaves_hand_edits_uncommitted() {
+    let hosts = hosts();
+    run(&hosts.a, &["pull"]);
+    hosts
+        .a
+        .write("modules/editor.toml", "[env]\nEDITOR = \"vim\"\n");
+    run(&hosts.a, &["publish"]);
+    run(&hosts.b, &["pull"]);
+    hosts
+        .a
+        .write("modules/editor.toml", "[env]\nEDITOR = \"nvim\"\n");
+    run(&hosts.a, &["publish"]);
+    let edit = "[env]\nEDITOR = \"hx\"\n";
+    hosts.b.write("modules/editor.toml", edit);
+    let repo = hosts.b.repo();
+    let head = git(&repo, &["rev-parse", "HEAD"]);
+
+    hosts
+        .b
+        .cmd("rsmt")
+        .arg("pull")
+        .assert()
+        .code(1)
+        .stderr(predicate::str::contains("modules/editor.toml"));
+    assert_eq!(git(&repo, &["rev-parse", "HEAD"]), head);
+    assert_eq!(
+        git(&repo, &["status", "--porcelain"]),
+        " M modules/editor.toml\n"
+    );
+    assert_eq!(
+        fs::read_to_string(repo.join("modules/editor.toml")).unwrap(),
+        edit
+    );
+    assert_eq!(state(&hosts.b)["pull"]["outcome"], "conflict");
+}
+
+#[test]
+fn a_pull_a_secret_stops_is_recorded_as_a_pull() {
+    let hosts = hosts();
+    run(&hosts.a, &["pull"]);
+    hosts
+        .b
+        .write("modules/greeting.toml", "[env]\nGREETING = \"hi\"\n");
+    run(&hosts.b, &["publish"]);
+    hosts.a.write(
+        "modules/env.toml",
+        "[env]\nGH = \"ghp_0123456789abcdefghijABCDEFGHIJ012345\"\n",
+    );
+    hosts
+        .a
+        .cmd("rsmt")
+        .arg("pull")
+        .assert()
+        .code(1)
+        .stderr(predicate::str::contains("modules/env.toml:2 (github-pat)"));
+    let state = state(&hosts.a);
+    assert_eq!(state["pull"]["outcome"], "blocked");
+    assert_eq!(state["pull"]["files"][0], "modules/env.toml");
+}
+
 #[test]
 fn a_host_that_never_applied_pulls_without_touching_rc_files() {
     let hosts = hosts();

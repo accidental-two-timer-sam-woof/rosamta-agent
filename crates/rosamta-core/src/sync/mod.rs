@@ -41,13 +41,13 @@ pub fn publish(ctx: &Context) -> Result<Published> {
 
 pub fn pull(ctx: &Context) -> Result<Pulled> {
     let _lock = adopt::lock(ctx)?;
-    pull_locked(ctx)
+    pull_locked(ctx, true)
 }
 
 /// Pull, then Publish.
 pub fn sync(ctx: &Context) -> Result<Published> {
     let _lock = adopt::lock(ctx)?;
-    let pulled = pull_locked(ctx)?;
+    let pulled = pull_locked(ctx, true)?;
     let mut published = publish_locked(ctx, true)?;
     if pulled.commits > 0 {
         published.pulled = Some(pulled);
@@ -258,7 +258,7 @@ fn publish_locked(ctx: &Context, commit_edits: bool) -> Result<Published> {
             Err(Error::Git { message, .. })
                 if !retry && git::classify(&message) == Failure::Rejected =>
             {
-                published.pulled = Some(pull_locked(ctx)?);
+                published.pulled = Some(pull_locked(ctx, commit_edits)?);
                 remote = Remote::required(&repo_dir)?;
                 continue;
             }
@@ -403,7 +403,9 @@ fn edit_message(status: &str) -> String {
     format!("edit({scope}): {}", parts.join(", "))
 }
 
-fn pull_locked(ctx: &Context) -> Result<Pulled> {
+/// `commit_edits`: commit edits the user has not committed before the
+/// rebase; otherwise they are set aside during it and put back.
+fn pull_locked(ctx: &Context, commit_edits: bool) -> Result<Pulled> {
     let repo_dir = ctx.paths.repo();
     // A rebase cut short (the process was killed) must not stay half done.
     if git::rebasing(&repo_dir) {
@@ -430,8 +432,22 @@ fn pull_locked(ctx: &Context) -> Result<Pulled> {
         record_pull(ctx, Attempt::new(Outcome::Failed, Some(err.to_string())))?;
         return Err(err);
     }
-    commit_pending(ctx, &repo_dir)?;
-    rebase(ctx, &repo_dir, &upstream)?;
+    let committed = if commit_edits {
+        let head = git::run(&repo_dir, &["rev-parse", "HEAD"])?;
+        commit_pending(ctx, &repo_dir)
+            .map_err(|err| edits_blocked(ctx, err))?
+            .then_some(head)
+    } else {
+        check_edits(ctx, &repo_dir, &upstream)?;
+        None
+    };
+    if let Err(err) = rebase(ctx, &repo_dir, &upstream) {
+        // What was committed above goes back to being edits.
+        if let Some(head) = committed {
+            git::run(&repo_dir, &["reset", "--quiet", head.trim()])?;
+        }
+        return Err(err);
+    }
     let unpushed = remote.unpushed(&repo_dir)?;
     state::update(ctx.paths.state(), |state| state.unpushed = unpushed)?;
     // A host that never applied keeps its shells untouched until it does.
@@ -468,10 +484,43 @@ fn check_format(repo_dir: &Path, upstream: &str) -> Result<()> {
     repo::ensure_supported(manifest.format)
 }
 
-/// Rebase local commits onto `upstream`; on any failure, abort so the repo
-/// is exactly as before.
+/// Pull stopped because the edits could not be committed. An `Error::Sync`
+/// was recorded for Publish already, and stops Pull for the same reason.
+fn edits_blocked(ctx: &Context, err: Error) -> Error {
+    let recorded = state::update(ctx.paths.state(), |state| {
+        state.pull = match &err {
+            Error::Sync(_) => state.publish.clone(),
+            other => Some(Attempt::new(Outcome::Failed, Some(other.to_string()))),
+        }
+    });
+    match recorded {
+        Ok(()) => err,
+        Err(recording) => recording,
+    }
+}
+
+/// Edits set aside during the rebase would conflict when put back on files
+/// the remote changed too: stop before the rebase instead.
+fn check_edits(ctx: &Context, repo_dir: &Path, upstream: &str) -> Result<()> {
+    let edited = git::run(repo_dir, &["diff", "--name-only", "-z", "HEAD"])?;
+    let incoming = format!("HEAD...{upstream}");
+    let incoming = git::run(repo_dir, &["diff", "--name-only", "-z", &incoming])?;
+    let edited: Vec<&str> = edited.split('\0').collect();
+    let files: Vec<String> = incoming
+        .split('\0')
+        .filter(|file| !file.is_empty() && edited.contains(file))
+        .map(str::to_string)
+        .collect();
+    if files.is_empty() {
+        return Ok(());
+    }
+    Err(conflict(ctx, files))
+}
+
+/// Rebase local commits onto `upstream`, setting edits not committed aside
+/// meanwhile; on any failure, abort so the repo is exactly as before.
 fn rebase(ctx: &Context, repo_dir: &Path, upstream: &str) -> Result<()> {
-    let Err(err) = git::run(repo_dir, &["rebase", "--quiet", upstream]) else {
+    let Err(err) = git::run(repo_dir, &["rebase", "--quiet", "--autostash", upstream]) else {
         return Ok(());
     };
     let files: Vec<String> = git::run(repo_dir, &["diff", "--name-only", "--diff-filter=U"])
@@ -480,28 +529,34 @@ fn rebase(ctx: &Context, repo_dir: &Path, upstream: &str) -> Result<()> {
         .map(str::to_string)
         .collect();
     git::run(repo_dir, &["rebase", "--abort"])?;
+    if !files.is_empty() {
+        return Err(conflict(ctx, files));
+    }
     let message = match &err {
         Error::Git { message, .. } => message.clone(),
         other => other.to_string(),
     };
-    let (mut attempt, text) = if !files.is_empty() {
-        let text = format!(
-            "pull stopped: changed both here and on the remote:\n  {}",
-            files.join("\n  ")
-        );
-        (Attempt::new(Outcome::Conflict, Some(text.clone())), text)
-    } else if git::classify(&message) == Failure::Signing {
-        let text = signing(&message);
-        (Attempt::new(Outcome::Blocked, Some(text.clone())), text)
+    let (outcome, text) = if git::classify(&message) == Failure::Signing {
+        (Outcome::Blocked, signing(&message))
     } else {
-        (
-            Attempt::new(Outcome::Failed, Some(message.clone())),
-            message,
-        )
+        (Outcome::Failed, message)
     };
-    attempt.files = files;
-    record_pull(ctx, attempt)?;
+    record_pull(ctx, Attempt::new(outcome, Some(text.clone())))?;
     Err(Error::Sync(text))
+}
+
+/// Record that Pull stopped on files changed both here and on the remote.
+fn conflict(ctx: &Context, files: Vec<String>) -> Error {
+    let text = format!(
+        "pull stopped: changed both here and on the remote:\n  {}",
+        files.join("\n  ")
+    );
+    let mut attempt = Attempt::new(Outcome::Conflict, Some(text.clone()));
+    attempt.files = files;
+    match record_pull(ctx, attempt) {
+        Ok(()) => Error::Sync(text),
+        Err(err) => err,
+    }
 }
 
 #[cfg(test)]
