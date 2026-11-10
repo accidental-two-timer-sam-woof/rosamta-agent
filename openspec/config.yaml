@@ -1,0 +1,37 @@
+schema: spec-driven
+
+context: |
+  Language: zh-TW
+  All artifacts must be written in zh-TW.
+  Keep OpenSpec structural headings and SHALL/MUST keywords in English.
+
+  Project: rosamta, a Rust dotfile manager (CLI named rosamta and rsmt, GPUI GUI,
+  background daemon) that fully replaces chezmoi.
+  Terms: GLOSSARY.md at the repo root is canonical. Use its terms; never the ones
+  listed under _Avoid_.
+  Decisions: docs/adr/ records hard-to-reverse decisions. Do not contradict an ADR
+  without proposing a new one.
+  Platforms: macOS and Linux first, Windows later. Shells: POSIX sh, bash >= 3.2,
+  zsh >= 5.8, fish >= 3.6.
+
+# Per-artifact rules (optional)
+# Add custom rules for specific artifacts.
+# Example:
+#   rules:
+#     proposal:
+#       - Keep proposals under 500 words
+#       - Always state what is out of scope
+#     tasks:
+#       - Break tasks into chunks of max 2 hours
+
+# Per-operation guidance (optional)
+# Add advisory guidance for how apply and archive work should be conducted.
+# This is separate from artifact rules above.
+# Example:
+#   operations:
+#     apply:
+#       guidance:
+#         - Keep test summaries concise
+#     archive:
+#       guidance:
+#         - Summarize the archive outcome before finishing
