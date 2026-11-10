@@ -22,7 +22,7 @@
 
 ## 4. 加密
 
-- [ ] 4.1 加入 `age`（armor）與 `rpassword`，實作產生金鑰、以密碼加密成 `key.age`、本機 `age.key` 與解開金鑰的 core 函式；更新 `THIRD_PARTY_NOTICES.md` 並通過 `cargo deny check`
+- [x] 4.1 加入 `age`（armor）與 `rpassword`，實作產生金鑰、以密碼加密成 `key.age`、本機 `age.key` 與解開金鑰的 core 函式；更新 `THIRD_PARTY_NOTICES.md` 並通過 `cargo deny check`
 - [ ] 4.2 部署時解密、寫回時重新加密；本機沒有私鑰時終端機要求密碼（最多三次），非互動執行略過並回報
 
 ## 5. 新增與移除
