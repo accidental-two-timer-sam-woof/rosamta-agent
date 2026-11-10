@@ -306,7 +306,7 @@ fn migrate(ctx: &Context) -> Result<()> {
     Ok(())
 }
 
-fn finish(ctx: &Context, baselines: &[(Shell, Smoke)]) -> Result<Applied> {
+fn finish(ctx: &Context, baselines: &[(Shell, Vec<Smoke>)]) -> Result<Applied> {
     let plan = plan(ctx)?;
     let hooks_changed: Vec<PathBuf> = plan
         .hook_changes
@@ -349,7 +349,7 @@ fn check_and_smoke(
     plan: &Plan,
     layout: &Layout,
     files: &BTreeMap<PathBuf, String>,
-    baselines: &[(Shell, Smoke)],
+    baselines: &[(Shell, Vec<Smoke>)],
 ) -> Result<()> {
     // dash and BusyBox ash exit on a parse error in a sourced file, so broken
     // snippets must never reach a shell.
@@ -417,35 +417,41 @@ fn check_and_smoke(
             [one] => format!("module {one}"),
             many => format!("one of modules {}", many.join(", ")),
         };
-        match after {
-            Smoke::TimedOut => failures.push(format!(
-                "{}: did not finish starting within {}s",
-                found.shell,
-                SMOKE_TIMEOUT.as_secs()
-            )),
-            Smoke::Stderr(lines) => {
-                let mut known = match before {
-                    Smoke::Stderr(lines) => lines,
-                    Smoke::TimedOut => Vec::new(),
-                };
-                for line in lines {
-                    let message = without_location(&line);
-                    if let Some(index) = known
-                        .iter()
-                        .position(|seen| without_location(seen) == message)
-                    {
-                        known.remove(index);
-                        continue;
-                    }
-                    let module = files
-                        .keys()
-                        .filter_map(|rel| rel.file_name()?.to_str())
-                        .find(|name| line.contains(*name));
-                    let who = module
-                        .map(|name| format!("module {}", module_of(Path::new(name))))
-                        .unwrap_or_else(|| suspects.clone());
-                    failures.push(format!("{} ({who}): {line}", found.shell));
+        for (before, after) in before.into_iter().zip(after) {
+            let lines = match after {
+                Smoke::Stderr(lines) => lines,
+                // Slow before this apply too, so not this apply's doing.
+                Smoke::TimedOut if matches!(before, Smoke::TimedOut) => continue,
+                Smoke::TimedOut => {
+                    failures.push(format!(
+                        "{}: did not finish starting within {}s",
+                        found.shell,
+                        SMOKE_TIMEOUT.as_secs()
+                    ));
+                    continue;
                 }
+            };
+            let mut known = match before {
+                Smoke::Stderr(lines) => lines,
+                Smoke::TimedOut => Vec::new(),
+            };
+            for line in lines {
+                let message = without_location(&line);
+                if let Some(index) = known
+                    .iter()
+                    .position(|seen| without_location(seen) == message)
+                {
+                    known.remove(index);
+                    continue;
+                }
+                let module = files
+                    .keys()
+                    .filter_map(|rel| rel.file_name()?.to_str())
+                    .find(|name| line.contains(*name));
+                let who = module
+                    .map(|name| format!("module {}", module_of(Path::new(name))))
+                    .unwrap_or_else(|| suspects.clone());
+                failures.push(format!("{} ({who}): {line}", found.shell));
             }
         }
     }
@@ -528,32 +534,39 @@ enum Smoke {
     TimedOut,
 }
 
-/// Start the shell the way a terminal would, pointed at `dir`.
-fn smoke(ctx: &Context, found: &Detected, dir: &Path) -> Smoke {
-    let mut cmd = std::process::Command::new(&found.path);
-    match found.shell {
-        Shell::Sh => cmd.args(["-l", "-c", "exit"]),
-        _ => cmd.args(["-i", "-c", "exit"]),
+/// Start the shell the way terminals do, pointed at `dir`: one result per
+/// way, as bash and zsh read other files as login shells.
+fn smoke(ctx: &Context, found: &Detected, dir: &Path) -> Vec<Smoke> {
+    let ways: &[&[&str]] = match found.shell {
+        Shell::Sh => &[&["-l", "-c", "exit"]],
+        Shell::Bash | Shell::Zsh => &[&["-i", "-c", "exit"], &["-l", "-i", "-c", "exit"]],
+        Shell::Fish => &[&["-i", "-c", "exit"]],
     };
-    cmd.env("ROSAMTA_CURRENT", dir)
-        .env("TERM", "dumb")
-        .env("HOME", &ctx.home)
-        .env_remove("ROSAMTA_ENV")
-        .env_remove("ROSAMTA_PROFILE");
-    match output_with_timeout(&mut cmd, SMOKE_TIMEOUT) {
-        Ok(Some(output)) => Smoke::Stderr(
-            String::from_utf8_lossy(&output.stderr)
-                .lines()
-                .map(str::to_string)
-                .filter(|line| !line.is_empty())
-                .collect(),
-        ),
-        Ok(None) => Smoke::TimedOut,
-        Err(err) => Smoke::Stderr(vec![format!(
-            "could not start {}: {err}",
-            found.path.display()
-        )]),
-    }
+    ways.iter()
+        .map(|args| {
+            let mut cmd = std::process::Command::new(&found.path);
+            cmd.args(*args)
+                .env("ROSAMTA_CURRENT", dir)
+                .env("TERM", "dumb")
+                .env("HOME", &ctx.home)
+                .env_remove("ROSAMTA_ENV")
+                .env_remove("ROSAMTA_PROFILE");
+            match output_with_timeout(&mut cmd, SMOKE_TIMEOUT) {
+                Ok(Some(output)) => Smoke::Stderr(
+                    String::from_utf8_lossy(&output.stderr)
+                        .lines()
+                        .map(str::to_string)
+                        .filter(|line| !line.is_empty())
+                        .collect(),
+                ),
+                Ok(None) => Smoke::TimedOut,
+                Err(err) => Smoke::Stderr(vec![format!(
+                    "could not start {}: {err}",
+                    found.path.display()
+                )]),
+            }
+        })
+        .collect()
 }
 
 /// `rsmt hook [shell...]`: install hooks and stop treating the shells as unhooked.
