@@ -88,7 +88,7 @@ fn run(runner: &Runner, script: &str, envs: &[(&str, &str)], root: &Path) -> Out
     cmd.env_clear()
         .env("PATH", "/usr/bin:/bin")
         .env("HOME", "/home/tester")
-        .env("USER", "tester");
+        .env("WHO", "tester"); // fish resets $USER from the real uid
     for (key, value) in envs {
         cmd.env(key, value);
     }
@@ -113,7 +113,7 @@ fn stdout(output: &Output) -> String {
 
 const VALUES: &str = r#"
 [env]
-A = "it's $USER"
+A = "it's $WHO"
 B = 'a "quoted" \backslash `tick`'
 C = "$5 literal $ and $-"
 D = "~/x"
