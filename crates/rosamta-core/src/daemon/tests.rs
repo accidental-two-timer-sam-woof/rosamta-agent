@@ -17,9 +17,10 @@ fn changed_paths_reach_the_right_handlers() {
     let ctx = ctx(dir.path());
     // Events report real paths; the temp dir may sit behind a symlink.
     let home = real(dir.path());
+    let rc = [home.join(".zshrc")];
     let routes = |paths: &[&str]| {
         let paths: Vec<PathBuf> = paths.iter().map(|path| home.join(path)).collect();
-        route(&ctx, &paths)
+        route(&ctx, &rc, &paths)
     };
     let repo = ".local/share/rosamta/repo";
     assert_eq!(
@@ -29,6 +30,8 @@ fn changed_paths_reach_the_right_handlers() {
             ..Routes::default()
         }
     );
+    // Shell history, written after every command, is not an rc file.
+    assert_eq!(routes(&[".zsh_history"]), Routes::default());
     assert_eq!(
         routes(&[&format!("{repo}/modules/a.toml")]),
         Routes {
