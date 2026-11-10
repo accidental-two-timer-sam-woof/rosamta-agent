@@ -7,12 +7,12 @@
 
 ## 2. 部署
 
-- [ ] 2.1 實作檔案與目錄的內容雜湊與 `deployed.json` 部署紀錄
-- [ ] 2.2 實作 link 部署（新建、內容相同時取代、衝突判斷）與權限設定
-- [ ] 2.3 實作 copy 部署（新建、目標未改時更新、本機修改的判斷）與權限設定
-- [ ] 2.4 實作 link 被換成一般檔案時寫回 repo 並重建 symlink，以及 copy 目標被改時依接管偏好處理
-- [ ] 2.5 實作不再宣告的路徑：copy 留在原地，link 換成一般檔案，來源已刪除時從 git 歷史取回
-- [ ] 2.6 把 dotfile 部署接進 `rsmt apply`（在 generated script 切換之後），含 `--dry-run`、`--json`、輸出與 template 的略過，覆蓋前存 snapshot
+- [x] 2.1 實作檔案與目錄的內容雜湊與 `deployed.json` 部署紀錄
+- [x] 2.2 實作 link 部署（新建、內容相同時取代、衝突判斷）與權限設定
+- [x] 2.3 實作 copy 部署（新建、目標未改時更新、本機修改的判斷）與權限設定
+- [x] 2.4 實作 link 被換成一般檔案時寫回 repo 並重建 symlink，以及 copy 目標被改時依接管偏好處理
+- [x] 2.5 實作不再宣告的路徑：copy 留在原地，link 換成一般檔案，來源已刪除時從 git 歷史取回
+- [x] 2.6 把 dotfile 部署接進 `rsmt apply`（在 generated script 切換之後），含 `--dry-run`、`--json`、輸出與 template 的略過，覆蓋前存 snapshot
 
 ## 3. 衝突與待處理清單
 

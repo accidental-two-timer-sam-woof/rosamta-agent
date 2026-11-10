@@ -3,8 +3,10 @@
 use std::io::{BufRead, IsTerminal, Write};
 use std::process::ExitCode;
 
+use rosamta_core::adopt;
 use rosamta_core::apply::{self, Context};
 use rosamta_core::config::Shell;
+use rosamta_core::dotfiles::{self, Action, Step};
 use rosamta_core::hooks::FileChange;
 use rosamta_core::{Error, Result};
 
@@ -14,34 +16,103 @@ pub fn apply(json: bool, dry_run: bool) -> Result<ExitCode> {
     let ctx = Context::from_env()?;
     if dry_run {
         let plan = apply::plan(&ctx)?;
+        let dotfiles = dotfiles::plan(&ctx)?;
         warn_skipped(&plan.skipped);
         if json {
-            print_json(&plan);
-        } else if plan.is_up_to_date() {
+            let steps: Vec<&Step> = dotfiles.iter().map(|planned| &planned.step).collect();
+            print_json(&DryRun {
+                plan: &plan,
+                dotfiles: steps,
+            });
+            return Ok(ExitCode::SUCCESS);
+        }
+        let changed: Vec<_> = dotfiles
+            .iter()
+            .filter(|planned| planned.step.action != Action::Unchanged)
+            .collect();
+        if plan.is_up_to_date() && changed.is_empty() {
             println!("Already up to date");
-        } else {
+        }
+        if !plan.is_up_to_date() {
             print!("{}", apply::diff(&plan, &ctx.paths.generated()));
+        }
+        for planned in changed {
+            print_step(&ctx, &planned.step);
+            if let Some((before, after)) = &planned.preview {
+                let name = ctx.home.join(&planned.step.path).display().to_string();
+                print!(
+                    "{}",
+                    apply::unified(&name, before.as_deref(), after.as_deref())
+                );
+            }
         }
         return Ok(ExitCode::SUCCESS);
     }
-    let applied = apply::apply(&ctx)?;
+    let applied = {
+        let _lock = adopt::lock(&ctx)?;
+        apply::apply(&ctx)?
+    };
     warn_skipped(&applied.skipped);
+    let failed = applied
+        .dotfiles
+        .iter()
+        .any(|step| step.action == Action::Failed);
     if json {
         print_json(&applied);
-    } else if applied.up_to_date {
-        println!("Already up to date");
     } else {
-        let shells: Vec<&str> = applied.shells.iter().map(|shell| shell.name()).collect();
-        println!(
-            "Applied {} for {}",
-            applied.version.as_deref().unwrap_or_default(),
-            shells.join(", ")
-        );
+        let changed: Vec<&Step> = applied
+            .dotfiles
+            .iter()
+            .filter(|step| step.action != Action::Unchanged)
+            .collect();
+        if applied.up_to_date && changed.is_empty() {
+            println!("Already up to date");
+        }
+        if !applied.up_to_date {
+            let shells: Vec<&str> = applied.shells.iter().map(|shell| shell.name()).collect();
+            println!(
+                "Applied {} for {}",
+                applied.version.as_deref().unwrap_or_default(),
+                shells.join(", ")
+            );
+        }
         for path in &applied.hooks_changed {
             println!("Hooked {}", path.display());
         }
+        for step in changed {
+            print_step(&ctx, step);
+        }
     }
-    Ok(ExitCode::SUCCESS)
+    Ok(if failed {
+        ExitCode::FAILURE
+    } else {
+        ExitCode::SUCCESS
+    })
+}
+
+#[derive(serde::Serialize)]
+struct DryRun<'a> {
+    #[serde(flatten)]
+    plan: &'a apply::Plan,
+    dotfiles: Vec<&'a Step>,
+}
+
+fn print_step(ctx: &Context, step: &Step) {
+    let path = ctx.home.join(&step.path);
+    let path = path.display();
+    let reason = step.reason.as_deref().unwrap_or_default();
+    match step.action {
+        Action::Unchanged => {}
+        Action::Linked => println!("Linked {path}"),
+        Action::Copied => println!("Copied {path}"),
+        Action::Updated => println!("Updated {path}"),
+        Action::Saved => println!("Saved {path} to the repo"),
+        Action::Released => println!("Released {path}"),
+        Action::Conflict => println!("Not deployed {path}: differs from the repo"),
+        Action::Changed => println!("Not deployed {path}: changed on this host"),
+        Action::Skipped => println!("Skipped {path}: {reason}"),
+        Action::Failed => eprintln!("error: {path}: {reason}"),
+    }
 }
 
 pub(crate) fn warn_skipped(skipped: &[String]) {

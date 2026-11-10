@@ -7,6 +7,7 @@ pub mod daemon;
 pub mod dotfiles;
 pub mod edit;
 pub mod error;
+mod fnv;
 pub mod generated;
 mod git;
 pub mod github;

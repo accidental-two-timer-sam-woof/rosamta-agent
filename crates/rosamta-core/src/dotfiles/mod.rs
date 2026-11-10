@@ -8,6 +8,13 @@ use crate::config::{Deploy, Dotfile, DotfileManifest, HostFacts};
 use crate::error::{Error, Result};
 use crate::validate;
 
+pub mod deploy;
+mod history;
+pub mod state;
+pub mod tree;
+
+pub use deploy::{Action, Step, deploy, plan};
+
 pub const MANIFEST: &str = "dotfiles.toml";
 
 /// `path` as plain relative components; `None` when it is absolute,
