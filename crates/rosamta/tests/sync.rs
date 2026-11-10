@@ -343,3 +343,38 @@ fn without_a_remote_publish_is_a_usage_error() {
         .code(2)
         .stderr(predicate::str::contains("the repo has no remote"));
 }
+
+#[test]
+fn automatic_push_leaves_hand_edits_uncommitted() {
+    let hosts = hosts();
+    run(&hosts.a, &["apply"]);
+    run(&hosts.a, &["pull"]);
+    hosts
+        .a
+        .write("modules/zoxide.toml", "[env]\n_ZO_ECHO = \"1\"\n");
+    append(&hosts.a, ".profile", "export ONE=1\n");
+    run(&hosts.a, &["adopt", "--yes"]);
+    assert!(remote_log(&hosts)[0].starts_with("adopt(sh)"));
+    assert_eq!(
+        git(&hosts.a.repo(), &["status", "--porcelain"]),
+        "?? modules/zoxide.toml\n"
+    );
+}
+
+#[test]
+fn a_host_that_never_applied_pulls_without_touching_rc_files() {
+    let hosts = hosts();
+    fs::write(hosts.b.root.join(".profile"), "export MINE=1\n").unwrap();
+    hosts
+        .a
+        .write("modules/greeting.toml", "[env]\nGREETING = \"hi\"\n");
+    run(&hosts.a, &["publish"]);
+
+    assert!(run(&hosts.b, &["pull"]).contains("Pulled"));
+    assert!(hosts.b.repo().join("modules/greeting.toml").is_file());
+    assert_eq!(
+        fs::read_to_string(hosts.b.root.join(".profile")).unwrap(),
+        "export MINE=1\n"
+    );
+    assert!(!hosts.b.root.join(".local/share/rosamta/generated").exists());
+}
