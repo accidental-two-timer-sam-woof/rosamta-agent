@@ -209,28 +209,28 @@ pub fn diff(text: &str, cx: &App) -> impl IntoElement {
         .py(px(S8))
         .font_family(font)
         .text_xs()
-        .children(
-            text.lines()
-                .filter(|line| !line.starts_with("--- ") && !line.starts_with("+++ "))
-                .map(|line| {
-                    let tint = if line.starts_with('+') {
-                        Some((p.ok_soft, p.ok))
-                    } else if line.starts_with('-') {
-                        Some((p.warn_soft, p.warn))
-                    } else {
-                        None
-                    };
-                    let muted = line.starts_with("@@")
-                        || line.starts_with("+++")
-                        || line.starts_with("---");
-                    div()
-                        .px(px(S12))
-                        .whitespace_nowrap()
-                        .when_some(tint, |line, (bg, fg)| line.bg(bg).text_color(fg))
-                        .when(muted, |line| line.text_color(p.muted))
-                        .child(SharedString::from(line.to_string()))
-                }),
-        )
+        .children(without_header(text).map(|line| {
+            let tint = if line.starts_with('+') {
+                Some((p.ok_soft, p.ok))
+            } else if line.starts_with('-') {
+                Some((p.warn_soft, p.warn))
+            } else {
+                None
+            };
+            let muted =
+                line.starts_with("@@") || line.starts_with("+++") || line.starts_with("---");
+            div()
+                .px(px(S12))
+                .whitespace_nowrap()
+                .when_some(tint, |line, (bg, fg)| line.bg(bg).text_color(fg))
+                .when(muted, |line| line.text_color(p.muted))
+                .child(SharedString::from(line.to_string()))
+        }))
+}
+
+/// The lines from the first hunk on: the title already names the file.
+fn without_header(text: &str) -> impl Iterator<Item = &str> {
+    text.lines().skip_while(|line| !line.starts_with("@@"))
 }
 
 /// A code block for whole files.
@@ -252,4 +252,16 @@ pub fn code(text: &str, cx: &App) -> impl IntoElement {
                         .child(SharedString::from(line.to_string()))
                 }),
         )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::without_header;
+
+    #[test]
+    fn diffs_keep_removed_lines_that_look_like_headers() {
+        let text = "--- a\n+++ b\n@@ -1,2 +1,1 @@\n--- comment\n+++ added\n";
+        let lines: Vec<&str> = without_header(text).collect();
+        assert_eq!(lines, ["@@ -1,2 +1,1 @@", "--- comment", "+++ added"]);
+    }
 }
