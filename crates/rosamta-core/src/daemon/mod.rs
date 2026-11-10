@@ -21,6 +21,7 @@ use crate::adopt::{self, Scope};
 use crate::apply::{self, Context};
 use crate::config::{HostConfig, SyncPolicy};
 use crate::error::Result;
+use crate::hooks::HookEnv;
 use crate::i18n::{self, Lang};
 use crate::sync::{self, Outcome};
 use crate::{generated, host, validate};
@@ -53,8 +54,7 @@ const LOG_LIMIT: u64 = 1 << 20;
 /// Directories to watch: the parents of watched files, without recursion,
 /// so an installer writing a new file and renaming it over the old one is
 /// seen; the repo and the config directory, recursively.
-fn watch_list(ctx: &Context) -> Vec<(PathBuf, RecursiveMode)> {
-    let env = ctx.hook_env(&ctx.installed());
+fn watch_list(ctx: &Context, env: &HookEnv) -> Vec<(PathBuf, RecursiveMode)> {
     let mut out: Vec<(PathBuf, RecursiveMode)> = Vec::new();
     for dir in [
         env.home.clone(),
@@ -144,7 +144,8 @@ struct Routes {
     rc: bool,
 }
 
-fn route(ctx: &Context, paths: &[PathBuf]) -> Routes {
+/// `rc` lists the watched rc files, as [`Daemon::rc_files`] names them.
+fn route(ctx: &Context, rc: &[PathBuf], paths: &[PathBuf]) -> Routes {
     let repo = real(&ctx.paths.repo());
     let local = real(&ctx.paths.local());
     let host = real(&ctx.paths.host_config());
@@ -155,11 +156,8 @@ fn route(ctx: &Context, paths: &[PathBuf]) -> Routes {
     Routes {
         host: paths.contains(&host),
         repo: paths.iter().any(in_repo),
-        // Everything else comes from the rc file directories; the scan
-        // decides whether a watched file really changed.
-        rc: paths
-            .iter()
-            .any(|path| !in_repo(path) && *path != host && !path.starts_with(&repo)),
+        // Not everything in HOME: shell history changes after each command.
+        rc: paths.iter().any(|path| rc.contains(path)),
     }
 }
 
@@ -191,8 +189,12 @@ struct Daemon {
     host: HostConfig,
     lang: Lang,
     notifier: Box<dyn Notifier>,
+    /// Where the shells read rc files; asking them is slow.
+    env: HookEnv,
     /// Watched rc files as of the last scan.
     rc_seen: Option<u64>,
+    /// Which files those were, so a deleted one is noticed.
+    rc_known: Vec<PathBuf>,
     /// Repo and local modules as of the last apply.
     repo_seen: Option<u64>,
     /// Review items already announced.
@@ -247,7 +249,8 @@ pub fn run(
         }
     })
     .map_err(|err| crate::Error::Daemon(format!("cannot watch files: {err}")))?;
-    for (dir, mode) in watch_list(&ctx) {
+    let env = ctx.hook_env(&ctx.installed());
+    for (dir, mode) in watch_list(&ctx, &env) {
         if let Err(err) = debouncer.watch(&dir, mode) {
             log(&ctx, &format!("cannot watch {}: {err}", dir.display()));
         }
@@ -258,7 +261,9 @@ pub fn run(
         host,
         lang: Lang::system(),
         notifier,
+        env,
         rc_seen: None,
+        rc_known: Vec::new(),
         repo_seen: None,
         announced: HashSet::new(),
         batch: Vec::new(),
@@ -317,7 +322,9 @@ impl Daemon {
     }
 
     fn changed(&mut self, paths: &[PathBuf]) {
-        let routes = route(&self.ctx, paths);
+        let mut rc = self.rc_files();
+        rc.extend_from_slice(&self.rc_known);
+        let routes = route(&self.ctx, &rc, paths);
         if routes.host {
             let host = self.ctx.paths.host_config();
             match host::load(&host) {
@@ -337,11 +344,17 @@ impl Daemon {
         }
     }
 
+    /// Watched rc files that exist, named as file events name them: the
+    /// directory resolved, not the file, which may be a symlink.
     fn rc_files(&self) -> Vec<PathBuf> {
-        let env = self.ctx.hook_env(&self.ctx.installed());
-        adopt::watched_files(&env)
+        adopt::watched_files(&self.env)
             .into_iter()
-            .map(|watched| watched.path)
+            .map(
+                |watched| match (watched.path.parent(), watched.path.file_name()) {
+                    (Some(dir), Some(name)) => real(dir).join(name),
+                    _ => watched.path,
+                },
+            )
             .collect()
     }
 
@@ -349,7 +362,8 @@ impl Daemon {
     fn rc_changed(&mut self) {
         // Taken before the scan: a write during the scan then still differs
         // from it when its own event arrives.
-        let mut seen = fingerprint(&self.rc_files());
+        let mut files = self.rc_files();
+        let mut seen = fingerprint(&files);
         if self.rc_seen == Some(seen) {
             return;
         }
@@ -359,7 +373,8 @@ impl Daemon {
             if !reviewed.adopted.is_empty() {
                 // Adopting rewrote the files; that write is rosamta's own,
                 // an edit made while the push runs is not.
-                seen = fingerprint(&self.rc_files());
+                files = self.rc_files();
+                seen = fingerprint(&files);
                 if let Err(err) = sync::publish_if_auto(&self.ctx, &lock) {
                     self.log(&err.to_string());
                 }
@@ -369,6 +384,7 @@ impl Daemon {
         match result {
             Ok(reviewed) => {
                 self.rc_seen = Some(seen);
+                self.rc_known = files;
                 self.log(&format!(
                     "scanned rc files: {} adopted, {} to review",
                     reviewed.adopted.len(),
@@ -412,8 +428,10 @@ impl Daemon {
             self.log(&err.to_string());
         }
         self.report_problems();
-        // A scan that failed on the previous repo can work now.
+        // Applying may have hooked another shell, and a scan that failed on
+        // the previous repo can work now.
         if self.repo_problem.is_none() {
+            self.env = self.ctx.hook_env(&self.ctx.installed());
             self.rc_changed();
         }
     }
