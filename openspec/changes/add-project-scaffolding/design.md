@@ -45,6 +45,7 @@ repo 目前只有規劃文件。相關的既定決策：GPUI 透過 `gpui-kit`�
   - GUI 以 `dlopen` 載入 Vulkan 與 Wayland，自動偵測看不到，deb 與 rpm 都手動列出。cargo-generate-rpm 內建的偵測會把建置機上的間接依賴與 soname 寫進去，所以 rpm 關閉自動偵測，改列 GUI 實際連結的 soname。
 - Homebrew：release 對 tap repo 開 PR 更新 cask；AUR：推送更新後的 PKGBUILD。
 - `release.yml` 提供 `workflow_dispatch` 的 dry-run 模式：只建置與打包，略過簽章與發布，用來在沒有 secrets 時驗證流程。
+- 版本帶 `-` 的 tag（例如 `v0.1.0-rc.1`）發布為 prerelease，不推送 AUR，用來在不佔用正式版本號的情況下測試完整流程。deb 版本由 cargo-deb 轉成 `0.1.0~rc.1`；rpm 版本不能含 `-`，由 workflow 轉成 `~`。
 - `.app` 的 bundle ID 為 `tw.xinshou.rosamta`，執行檔以 `MACOSX_DEPLOYMENT_TARGET=13.0` 建置。CLI 放在 `Contents/MacOS/rosamta`，由 cask 的 `binary` 連到 PATH，`rsmt` 也一樣。
 - deb 用 cargo-deb 的 symlink asset 建立 `rsmt`；cargo-generate-rpm 沒有 symlink asset，rpm 改在安裝後的腳本建立，完整移除時刪除。
 - 需要的 secrets：`MACOS_CERT_P12`、`MACOS_CERT_PASSWORD`、`MACOS_SIGN_IDENTITY`、`MACOS_NOTARY_KEY`、`MACOS_NOTARY_KEY_ID`、`MACOS_NOTARY_ISSUER`、`HOMEBREW_TAP_TOKEN`、`AUR_SSH_PRIVATE_KEY`；variables：`HOMEBREW_TAP`、`AUR_USERNAME`、`AUR_EMAIL`。

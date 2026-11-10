@@ -5369,7 +5369,7 @@ dependencies = [
 
 [[package]]
 name = "rosamta"
-version = "0.1.0"
+version = "0.1.0-rc.1"
 dependencies = [
  "clap",
  "rosamta-core",
@@ -5377,11 +5377,11 @@ dependencies = [
 
 [[package]]
 name = "rosamta-core"
-version = "0.1.0"
+version = "0.1.0-rc.1"
 
 [[package]]
 name = "rosamta-gui"
-version = "0.1.0"
+version = "0.1.0-rc.1"
 dependencies = [
  "gpui-kit",
  "rosamta-core",
