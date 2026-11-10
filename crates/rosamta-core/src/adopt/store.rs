@@ -82,7 +82,7 @@ impl Store {
         }
     }
 
-    fn load<T: DeserializeOwned + Default>(&self, name: &str) -> Result<T> {
+    pub(crate) fn load<T: DeserializeOwned + Default>(&self, name: &str) -> Result<T> {
         let path = self.dir.join(name);
         match std::fs::read_to_string(&path) {
             Ok(text) => serde_json::from_str(&text)
@@ -92,7 +92,7 @@ impl Store {
         }
     }
 
-    fn save<T: Serialize>(&self, name: &str, value: &T) -> Result<()> {
+    pub(crate) fn save<T: Serialize>(&self, name: &str, value: &T) -> Result<()> {
         std::fs::create_dir_all(&self.dir).map_err(Error::write(&self.dir))?;
         let text = serde_json::to_string_pretty(value).expect("state serializes");
         crate::edit::write_atomic(&self.dir.join(name), &format!("{text}\n"))

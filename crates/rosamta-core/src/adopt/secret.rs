@@ -8,8 +8,8 @@ include!(concat!(env!("OUT_DIR"), "/gitleaks.rs"));
 
 /// Known token formats, from gitleaks (MIT; see THIRD_PARTY_NOTICES.md).
 /// Each compiles on first use, and only runs when one of its keywords
-/// appears: compiling all of them takes seconds.
-fn known_format(text: &str) -> bool {
+/// appears: compiling all of them takes seconds. Returns the rule ID.
+fn known_format(text: &str) -> Option<&'static str> {
     static RULES: OnceLock<Vec<OnceLock<Regex>>> = OnceLock::new();
     let rules = RULES.get_or_init(|| GITLEAKS.iter().map(|_| OnceLock::new()).collect());
     let lower = text.to_lowercase();
@@ -19,12 +19,13 @@ fn known_format(text: &str) -> bool {
         .filter(|((_, _, keywords), _)| {
             keywords.is_empty() || keywords.iter().any(|keyword| lower.contains(keyword))
         })
-        .any(|((_, pattern, _), rule)| {
+        .find(|((_, pattern, _), rule)| {
             rule.get_or_init(|| {
                 Regex::new(pattern).expect("build.rs kept only patterns that compile")
             })
             .is_match(text)
         })
+        .map(|((id, _, _), _)| *id)
 }
 
 /// `NAME=literal` (POSIX) or `set ... NAME literal` (fish): a value with no
@@ -53,7 +54,14 @@ const MIN_LEN: usize = 20;
 
 /// Whether `text` holds what looks like a secret.
 pub fn looks_secret(text: &str) -> bool {
-    known_format(text) || secret_name(text) || high_entropy(text)
+    secret_rule(text).is_some()
+}
+
+/// The rule `text` matches: a gitleaks rule ID, `secret-name` or `high-entropy`.
+pub fn secret_rule(text: &str) -> Option<&'static str> {
+    known_format(text)
+        .or_else(|| secret_name(text).then_some("secret-name"))
+        .or_else(|| high_entropy(text).then_some("high-entropy"))
 }
 
 fn secret_name(text: &str) -> bool {
@@ -101,6 +109,16 @@ mod tests {
         assert!(looks_secret(
             "export GH=ghp_0123456789abcdefghijABCDEFGHIJ012345"
         ));
+    }
+
+    #[test]
+    fn rules_are_named() {
+        assert_eq!(
+            secret_rule("GH = \"ghp_0123456789abcdefghijABCDEFGHIJ012345\""),
+            Some("github-pat")
+        );
+        assert_eq!(secret_rule("export MY_API_KEY=abc123"), Some("secret-name"));
+        assert_eq!(secret_rule("ll = \"ls -lh\""), None);
     }
 
     #[test]

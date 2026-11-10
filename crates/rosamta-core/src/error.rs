@@ -22,6 +22,9 @@ pub enum Error {
     /// Applying stopped and nothing switched; the message says why.
     #[error("{0}")]
     Apply(String),
+    /// Publish or Pull stopped; `sync.json` records why.
+    #[error("{0}")]
+    Sync(String),
 }
 
 impl Error {

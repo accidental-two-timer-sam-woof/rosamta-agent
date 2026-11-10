@@ -2,9 +2,9 @@
 
 ## 1. git 操作基礎
 
-- [ ] 1.1 實作呼叫系統 `git` 的包裝（`GIT_TERMINAL_PROMPT=0`、錯誤分類），以本機 bare repo 測試網路錯誤與 non-fast-forward 的分類
-- [ ] 1.2 實作 commit 與簽章失敗偵測（不使用 `--no-gpg-sign`、失敗時 `reset --soft`），以設定了無效簽章金鑰的測試 repo 確認不會產生未簽章的 commit
-- [ ] 1.3 實作 `sync.json` 狀態檔，確認推送、拉取、受阻、離線各狀態都會正確寫入
+- [x] 1.1 實作呼叫系統 `git` 的包裝（`GIT_TERMINAL_PROMPT=0`、錯誤分類），以本機 bare repo 測試網路錯誤與 non-fast-forward 的分類
+- [x] 1.2 實作 commit 與簽章失敗偵測（不使用 `--no-gpg-sign`、失敗時 `git reset` 取消暫存），以設定了無效簽章金鑰的測試 repo 確認不會產生未簽章的 commit
+- [x] 1.3 實作 `sync.json` 狀態檔，確認推送、拉取、受阻、離線各狀態都會正確寫入
 
 ## 2. 推送、拉取與同步
 

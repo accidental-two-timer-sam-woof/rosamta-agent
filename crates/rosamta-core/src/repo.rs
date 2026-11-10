@@ -191,7 +191,7 @@ pub(crate) fn join_with(
     if let Some(parent) = repo_dir.parent() {
         std::fs::create_dir_all(parent).map_err(Error::write(parent))?;
     }
-    git::clone(url, &repo_dir)?;
+    git::clone(url, &repo_dir, &[])?;
     or_remove(
         &repo_dir,
         (|| {

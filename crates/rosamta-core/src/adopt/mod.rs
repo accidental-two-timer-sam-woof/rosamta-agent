@@ -5,7 +5,7 @@
 mod recognize;
 mod secret;
 mod segment;
-mod store;
+pub(crate) mod store;
 
 use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
@@ -13,7 +13,7 @@ use std::path::{Path, PathBuf};
 use serde::Serialize;
 
 pub use recognize::{Dialect, Recognizer, Structured, recognize, recognizers};
-pub use secret::looks_secret;
+pub use secret::{looks_secret, secret_rule};
 pub use segment::{Source, Watched};
 pub use store::{Adoption, QueueItem};
 
@@ -773,6 +773,8 @@ pub fn execute(ctx: &Context, plan: Plan) -> Result<Vec<Adoption>> {
     let store = Store::new(ctx.paths.state());
     let mut adoptions = store.adoptions()?;
     let mut done = Vec::new();
+    // After a signing failure, the rest stays uncommitted too.
+    let mut can_commit = true;
     for mut record in plan.records {
         let candidate = plan
             .candidates
@@ -783,22 +785,27 @@ pub fn execute(ctx: &Context, plan: Plan) -> Result<Vec<Adoption>> {
             done.push(record);
             continue;
         }
-        if !record.local
+        if can_commit
+            && !record.local
             && let Some(module) = &record.module
         {
             let repo_dir = ctx.paths.repo();
             let rel = module.to_string_lossy();
-            git::run(&repo_dir, &["add", "--", &rel])?;
             let message = commit_message(candidate, &ctx.home, &host.id);
-            git::run(
-                &repo_dir,
-                &["commit", "--quiet", "--message", &message, "--", &rel],
-            )?;
-            record.commit = Some(
-                git::run(&repo_dir, &["rev-parse", "HEAD"])?
-                    .trim()
-                    .to_string(),
-            );
+            match git::commit(&repo_dir, &message, &[&rel])? {
+                git::Commit::Created => {
+                    record.commit = Some(
+                        git::run(&repo_dir, &["rev-parse", "HEAD"])?
+                            .trim()
+                            .to_string(),
+                    )
+                }
+                git::Commit::Clean => {}
+                git::Commit::SigningFailed(reason) => {
+                    crate::sync::signing_blocked(ctx, &reason)?;
+                    can_commit = false;
+                }
+            }
         }
         adoptions.next_id = adoptions.next_id.max(1);
         record.id = adoptions.next_id;
@@ -1078,9 +1085,7 @@ pub fn undo(ctx: &Context, plan: Undo) -> Result<()> {
         return Err(err);
     }
     if let (Some(module), false) = (&plan.adoption.module, plan.adoption.local) {
-        let repo_dir = ctx.paths.repo();
         let rel = module.to_string_lossy();
-        git::run(&repo_dir, &["add", "--all", "--", &rel])?;
         let name = plan.adoption.name.as_deref().unwrap_or("adopted");
         let message = format!(
             "restore({}): put back {name} in {} on {}",
@@ -1088,10 +1093,11 @@ pub fn undo(ctx: &Context, plan: Undo) -> Result<()> {
             display(&plan.adoption.file, &ctx.home),
             host.id
         );
-        git::run(
-            &repo_dir,
-            &["commit", "--quiet", "--message", &message, "--", &rel],
-        )?;
+        if let git::Commit::SigningFailed(reason) =
+            git::commit(&ctx.paths.repo(), &message, &[&rel])?
+        {
+            crate::sync::signing_blocked(ctx, &reason)?;
+        }
     }
     let store = Store::new(ctx.paths.state());
     let mut adoptions = store.adoptions()?;

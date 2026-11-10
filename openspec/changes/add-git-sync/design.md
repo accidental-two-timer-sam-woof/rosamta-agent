@@ -18,24 +18,24 @@
 
 ### 呼叫系統 git，不用 libgit2 或 gitoxide
 
-系統 `git` 會自動使用使用者的 `~/.ssh/config`、SSH agent、credential helper 與 `commit.gpgsign`，rosamta 不需要重新實作。代價是每次操作都要啟動子程序，但同步的頻率很低，這點成本可以接受。所有呼叫都設定 `GIT_TERMINAL_PROMPT=0`，避免在背景卡在輸入提示。
+系統 `git` 會自動使用使用者的 `~/.ssh/config`、SSH agent、credential helper 與 `commit.gpgsign`，rosamta 不需要重新實作。代價是每次操作都要啟動子程序，但同步的頻率很低，這點成本可以接受。所有呼叫都設定 `GIT_TERMINAL_PROMPT=0`，避免在背景卡在輸入提示；也設定 `LC_ALL=C`，讓錯誤訊息固定是英文，才能分類。
 
 ### 推送流程
 
-1. 若工作目錄有變更：`git add -A` 後 commit，訊息依變更類型產生（例如 `edit(modules): update zoxide`）。
-2. 以秘密規則掃描 `@{upstream}..HEAD` 的內容；命中就停止。
-3. `git push`。失敗時依錯誤分類：網路或連線問題標記為離線並保留 commit；被遠端拒絕（non-fast-forward）時改走同步流程。
+1. 若工作目錄有變更：`git add -A` 後 commit，訊息依變更類型產生（例如 `edit(modules): update zoxide`）。接管等 rosamta 自己的 commit 之後觸發的自動推送跳過這一步，不替使用者 commit 還在編輯的檔案。
+2. 以秘密規則掃描 `@{upstream}..HEAD` 每個 commit 新增的行（還沒有 upstream 時是 `HEAD --not --remotes=<remote>`）；命中就停止，回報檔案、行號與規則。
+3. `git push`。失敗時依錯誤分類：網路或連線問題標記為離線並保留 commit；被遠端拒絕（non-fast-forward）時先拉取再推送一次；憑證被拒或遠端沒有這個 repo 時標記為受阻。
 
 ### 拉取流程
 
-1. `git fetch`。
-2. `git rebase @{upstream}`；失敗就 `git rebase --abort`，回報衝突的檔案。
-3. 檢查 `rosamta.toml` 的格式版本；較新就停止並提示升級。
-4. 執行 `apply`（render、smoke test、切換）；失敗時保留 repo 的新內容，但不切換 generated script。
+1. `git fetch`。沒有新的 commit 就結束。
+2. 以 `git show @{upstream}:rosamta.toml` 檢查格式版本；較新就停止並提示升級。在 rebase 之前檢查，repo 才不會先變成看不懂的格式。
+3. 工作目錄有變更時先 commit（rebase 需要乾淨的工作目錄），再 `git rebase @{upstream}`；失敗就 `git rebase --abort`，回報衝突的檔案。
+4. 以 `apply_after` 套用：smoke test 和拉取前的 shell 啟動結果比較，只有新出現的錯誤才算失敗；失敗時保留 repo 的新內容，但不切換 generated script。從未套用過的 host 不套用，維持「使用者執行 apply 之前不動 rc 檔」。
 
 ### 簽章失敗的偵測
 
-`git commit` 失敗且 stderr 含有 `gpg failed to sign` 或 `error: gpg` 時，視為簽章失敗：執行 `git reset --soft` 還原 index 狀態，把推送狀態寫成受阻並附上原因。rosamta 從不加上 `--no-gpg-sign`。
+`git commit` 失敗且 stderr 含有 `gpg failed to sign`、`error: gpg` 或 `failed to write commit object` 時，視為簽章失敗：簽章失敗時 git 不會建立 commit，所以只需要以 `git reset`（不加 `--soft`）取消暫存、保留工作目錄，再把推送狀態寫成受阻並附上原因。rosamta 從不加上 `--no-gpg-sign`。接管時遇到簽章失敗，接管本身照常完成，module 留在工作目錄，下一次推送再 commit。
 
 ### GitHub device flow
 
