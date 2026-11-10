@@ -1,7 +1,10 @@
+mod commands;
+
 use std::path::Path;
 use std::process::ExitCode;
 
 use clap::{Parser, Subcommand, ValueEnum};
+use rosamta_core::config::Shell;
 use rosamta_core::paths::Paths;
 use rosamta_core::schema::Kind;
 use rosamta_core::validate::{FileReport, Issue};
@@ -35,6 +38,42 @@ enum Command {
         #[arg(value_enum)]
         kind: SchemaKind,
     },
+    /// Render the modules for this host and switch shells to them
+    Apply {
+        /// Show what would change without writing anything
+        #[arg(long)]
+        dry_run: bool,
+    },
+    /// Add the rosamta block to a shell's startup files
+    Hook {
+        /// Shells to hook; all installed shells when omitted
+        #[arg(value_parser = parse_shell)]
+        shells: Vec<Shell>,
+    },
+    /// Remove the rosamta block from a shell's startup files
+    Unhook {
+        #[arg(value_parser = parse_shell)]
+        shell: Shell,
+    },
+    /// Write the current settings into the startup files and remove every hook
+    Eject {
+        /// Do not ask for confirmation
+        #[arg(long)]
+        yes: bool,
+    },
+    /// Put startup files back the way they were before rosamta changed them
+    Restore {
+        /// Restore the content from before rosamta's first change
+        #[arg(long, required = true)]
+        original: bool,
+        /// Do not ask for confirmation
+        #[arg(long)]
+        yes: bool,
+    },
+}
+
+fn parse_shell(name: &str) -> std::result::Result<Shell, String> {
+    name.parse()
 }
 
 #[derive(Clone, Copy, ValueEnum)]
@@ -84,6 +123,11 @@ fn run(cli: &Cli) -> Result<ExitCode> {
             print_json(&schema::schema(kind));
             Ok(ExitCode::SUCCESS)
         }
+        Command::Apply { dry_run } => commands::apply(cli.json, *dry_run),
+        Command::Hook { shells } => commands::hook(cli.json, shells),
+        Command::Unhook { shell } => commands::unhook(cli.json, *shell),
+        Command::Eject { yes } => commands::eject(cli.json, *yes),
+        Command::Restore { yes, .. } => commands::restore(cli.json, *yes),
     }
 }
 
@@ -155,7 +199,7 @@ fn location(repo_dir: &Path, file: &FileReport, issue: &Issue) -> String {
     location
 }
 
-fn print_json(value: &impl serde::Serialize) {
+pub(crate) fn print_json(value: &impl serde::Serialize) {
     println!(
         "{}",
         serde_json::to_string_pretty(value).expect("value serializes to JSON")

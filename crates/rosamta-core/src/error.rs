@@ -19,6 +19,9 @@ pub enum Error {
     },
     #[error("git {command} failed: {message}")]
     Git { command: String, message: String },
+    /// Applying stopped and nothing switched; the message says why.
+    #[error("{0}")]
+    Apply(String),
 }
 
 impl Error {
