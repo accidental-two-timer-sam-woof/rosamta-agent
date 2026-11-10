@@ -29,6 +29,17 @@ pub(crate) fn run(dir: &Path, args: &[&str]) -> Result<String> {
     check(args, output)
 }
 
+/// Whether `git args` exits with 0; for questions such as `diff --quiet`.
+pub(crate) fn succeeds(dir: &Path, args: &[&str]) -> Result<bool> {
+    let output = git().arg("-C").arg(dir).args(args).output();
+    output
+        .map(|output| output.status.success())
+        .map_err(|err| Error::Git {
+            command: args.join(" "),
+            message: err.to_string(),
+        })
+}
+
 pub(crate) fn clone(url: &str, dest: &Path, config: &[&str]) -> Result<()> {
     let output = git()
         .args(config.iter().flat_map(|setting| ["-c", setting]))
