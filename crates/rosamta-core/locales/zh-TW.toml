@@ -4,6 +4,8 @@
 line = "{file}：1 行新內容待處理"
 lines = "{file}：{lines} 行新內容待處理"
 many = "{count} 項變動待處理"
+dotfile_conflict = "{file}：與 repo 的版本不同"
+dotfile_changed = "{file}：在這台主機上被修改"
 
 [action]
 adopt = "接管"
@@ -19,3 +21,4 @@ conflict = "拉取中止，這台與其他主機都修改了：{files}"
 apply_failed = "新設定沒有套用：{reason}"
 invalid = "repo 中有格式錯誤的檔案：{reason}"
 upgrade = "repo 需要較新版本的 rosamta"
+locked = "加密的設定檔需要輸入密碼"

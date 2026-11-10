@@ -5,6 +5,8 @@
 line = "{file}: 1 new line to review"
 lines = "{file}: {lines} new lines to review"
 many = "{count} changes to review"
+dotfile_conflict = "{file}: differs from the repo"
+dotfile_changed = "{file}: changed on this host"
 
 [action]
 adopt = "Adopt"
@@ -20,3 +22,4 @@ conflict = "Pull stopped: changed here and on another host: {files}"
 apply_failed = "New settings were not applied: {reason}"
 invalid = "The repo has an invalid file: {reason}"
 upgrade = "The repo needs a newer rosamta"
+locked = "Encrypted dotfiles need the passphrase"
