@@ -5,7 +5,7 @@
 <br>
 
 [![License](https://img.shields.io/github/license/accidental-two-timer-sam-woof/rosamta-agent?style=for-the-badge)](LICENSE)
-[![Version](https://img.shields.io/badge/Version-v0.1.0--rc.1-00BB00?style=for-the-badge)](https://github.com/accidental-two-timer-sam-woof/rosamta-agent/releases)
+[![Version](https://img.shields.io/badge/Version-v0.1.0--rc.1-00BB00?style=for-the-badge)](Cargo.toml)
 [![macOS](https://img.shields.io/badge/macOS-13%2B-black?style=for-the-badge&logo=apple&logoColor=white)](#系統需求)
 [![Linux](https://img.shields.io/badge/Linux-x86__64%20%7C%20aarch64-FCC624?style=for-the-badge&logo=linux&logoColor=black)](#系統需求)
 
@@ -13,15 +13,15 @@
 
 ## 總覽
 
-rosamta 是跨 shell、跨主機的 dotfile 管理工具。設定宣告在 git repo 裡，render 成各 shell 載入的腳本；安裝程式之後寫進 shell 設定檔的內容，也會被接管回 repo。命令列程式有 `rosamta` 與 `rsmt` 兩個名稱，用法完全相同；macOS 另有桌面 App。目前仍在開發中。
+rosamta 是跨 shell、跨主機的 dotfile 管理工具。設定宣告在 git repo 裡，render 成各 shell 載入的腳本；安裝程式之後寫進 shell 設定檔的內容，也可以接管回 repo。命令列程式有 `rosamta` 與 `rsmt` 兩個名稱，用法完全相同；另有桌面 App。目前仍在開發中。
 
 ### 🐚 **一份設定，四種 shell**
 - module 以 TOML 宣告環境變數、PATH 與 alias，同一份套用到 sh、bash、zsh 與 fish
 - 只適用於特定 shell 的程式碼放在 `[raw]`；可依主機、作業系統、架構或標籤限定套用範圍
 - 套用前先以新的設定啟動每個 shell，出現新的錯誤就取消，shell 繼續使用原本的設定
 
-### 📥 **接管設定檔**
-- 把 `~/.zshrc` 等設定檔原有的內容搬進 repo，搬完後設定檔只剩 rosamta 的區塊
+### 📥 **接管 shell 設定檔**
+- 把 `~/.zshrc` 等 shell 設定檔原有的內容搬進 repo，搬完後只剩 rosamta 的區塊
 - 安裝程式之後寫入的內容列入待處理清單，可接管到這台主機或所有主機，也可以忽略
 - 看起來像 API key 或 token 的內容不進 repo，只留在這台主機
 
@@ -31,21 +31,21 @@ rosamta 是跨 shell、跨主機的 dotfile 管理工具。設定宣告在 git r
 - 目標位置已有不同內容時不覆蓋，顯示差異讓你決定
 
 ### 🔄 **多主機同步**
-- 每次變更都是一個 commit，自動推送，並定時拉取其他主機的變更
+- 每次變更都是一個 commit，預設自動推送；背景服務定時拉取其他主機的變更
 - 推送前檢查 API key 與 token，發現時停止推送
 - 登入 GitHub 後可直接建立 private repo 作為遠端
 
 ### 🛰️ **背景服務**
 - 登入後自動啟動：macOS 為登入項目，Linux 為 systemd 使用者服務
-- 出現待處理的內容時發出通知；macOS 上可以直接選擇接管、忽略或查看差異
+- 出現待處理的內容時發出通知，可以直接選擇接管、忽略或查看差異
 
-### 🖥️ **桌面 App**（macOS）
+### 🖥️ **桌面 App**
 - 總覽、待處理項目的差異、module 開關、設定檔狀態、提交紀錄與快照、本機設定
 - 跟隨系統的淺色與深色外觀
 
 ### ↩️ **隨時退出**
-- 修改設定檔前先存快照，可還原單次接管，或全部還原成使用 rosamta 之前的內容
-- `rsmt eject` 把目前的設定寫回設定檔，移除 rosamta 後 shell 的行為不變
+- 修改 shell 設定檔前先存快照，可還原單次接管，或全部還原成使用 rosamta 之前的內容
+- `rsmt eject` 把目前的設定寫回 shell 設定檔，移除 rosamta 後 shell 的行為不變
 
 ## 示例圖
 
@@ -72,26 +72,27 @@ rosamta 是跨 shell、跨主機的 dotfile 管理工具。設定宣告在 git r
 
 ## 安裝
 
-從 [Releases](https://github.com/accidental-two-timer-sam-woof/rosamta-agent/releases) 下載：
+正式版發布前，請從原始碼安裝：
+
+```sh
+cargo install --locked --git https://github.com/accidental-two-timer-sam-woof/rosamta-agent rosamta      # 命令列程式
+cargo install --locked --git https://github.com/accidental-two-timer-sam-woof/rosamta-agent rosamta-gui  # 桌面 App
+```
+
+發布後可從 [Releases](https://github.com/accidental-two-timer-sam-woof/rosamta-agent/releases) 下載：
 
 | 平台 | 檔案 |
 |---|---|
-| macOS | `.dmg`，含桌面 App 與背景服務 |
-| Linux | `.deb`、`.rpm` 或 tarball，含命令列程式與背景服務 |
-
-也可以從原始碼安裝命令列程式：
-
-```sh
-cargo install --locked --git https://github.com/accidental-two-timer-sam-woof/rosamta-agent rosamta
-```
+| macOS | `.dmg`：桌面 App 與背景服務；命令列程式在 `rosamta.app/Contents/MacOS/rosamta` |
+| Linux | `.deb`、`.rpm` 或 tarball：命令列程式、桌面 App 與背景服務 |
 
 ## 系統需求
 
 | 項目 | 需求 |
 |------|------|
-| macOS | 13 以上，Apple 晶片或 Intel |
-| Linux | x86_64 或 aarch64；背景服務需要 systemd 使用者服務，否則自行執行 `rsmt daemon run` |
-| shell | sh、bash、zsh、fish |
+| macOS | 13 以上，Apple 晶片或 Intel；背景服務需要 rosamta.app |
+| Linux | x86_64 或 aarch64，發行的套件需要 glibc 2.28 以上；背景服務需要 systemd 使用者服務，否則自行執行 `rsmt daemon run` |
+| shell | sh、bash 3.2、zsh 5.8、fish 3.6 以上 |
 | git | 必要 |
 | keychain（選用） | Linux 為 Secret Service；沒有時 GitHub token 存成只有你能讀取的檔案 |
 
@@ -430,9 +431,10 @@ rsmt schema module > module.schema.json
 [![Rust](https://img.shields.io/badge/Rust-1.99-000000?style=for-the-badge&logo=rust&logoColor=white)](https://www.rust-lang.org)
 
 ### 需求
-- Rust：版本由 `rust-toolchain.toml` 決定，第一次執行 `cargo` 時自動下載
-- macOS：建置桌面 App 需要 Xcode 與 Metal 編譯器
-- Linux：建置桌面 App 需要的系統套件見 [CONTRIBUTING.md](CONTRIBUTING.md)
+- rustup：Rust 版本由 `rust-toolchain.toml` 決定，第一次執行 `cargo` 時自動下載
+- macOS：Xcode 與 Metal 編譯器
+- Linux：桌面 App 需要的系統套件見 [CONTRIBUTING.md](CONTRIBUTING.md)
+- 建置或測試整個 workspace 都會建置桌面 App
 - Docker 或 OrbStack：發行版測試需要
 
 ### 建置與執行
@@ -458,18 +460,18 @@ cargo test --workspace --locked
 rosamta-agent/
 ├── crates/
 │   ├── rosamta-core/             # 核心邏輯，命令列程式、App 與背景服務共用
-│   │   ├── locales/              # 使用者看到的文字（繁體中文、英文）
+│   │   ├── locales/              # 背景服務與 App 的文字（繁體中文、英文）
 │   │   └── src/
-│   │       ├── adopt/            # 接管設定檔、待處理清單、秘密偵測
+│   │       ├── adopt/            # 接管 shell 設定檔、待處理清單、秘密偵測
 │   │       ├── daemon/           # 背景服務、login shell 環境、通知
 │   │       ├── dotfiles/         # 設定檔部署、加密、衝突處理
 │   │       ├── github/           # GitHub 登入與 token 保存
 │   │       ├── sync/             # 拉取、推送與推送前檢查
 │   │       ├── render.rs         # 把 module render 成各 shell 的腳本
 │   │       ├── apply.rs          # 套用與 shell 啟動檢查
-│   │       ├── hooks.rs          # 設定檔中的 rosamta 區塊
+│   │       ├── hooks.rs          # shell 設定檔中的 rosamta 區塊
 │   │       ├── snapshot.rs       # 修改前的快照與還原
-│   │       └── validate.rs       # TOML 檢查與 JSON Schema
+│   │       └── validate.rs       # 檢查 repo 中的 TOML 檔
 │   ├── rosamta/                  # 命令列程式（rosamta / rsmt）
 │   └── rosamta-gui/              # 桌面 App（GPUI）
 │       └── src/pages/            # 總覽、待處理、模組、設定檔、歷史、設定
@@ -477,7 +479,7 @@ rosamta-agent/
 ├── packaging/                    # macOS App bundle、Homebrew、AUR
 ├── tests/
 │   ├── docker/                   # 各發行版的 shell 測試映像
-│   └── fixtures/installers/      # 安裝程式寫入設定檔前後的內容
+│   └── fixtures/installers/      # 安裝程式寫入 shell 設定檔前後的內容
 ├── docs/adr/                     # 架構決策紀錄
 ├── openspec/                     # 功能規格與變更提案
 ├── GLOSSARY.md                   # 用語定義
@@ -487,10 +489,10 @@ rosamta-agent/
 ## 貢獻
 歡迎 PR 與 Issue！
 
-送出前請確認
+送出前請確認：
 1. 依 [CONTRIBUTING.md](CONTRIBUTING.md) 在本機跑過格式、clippy、測試與 `cargo deny`
 2. 用語以 [GLOSSARY.md](GLOSSARY.md) 為準，設計不違反 [docs/adr](docs/adr) 的決策
-3. 影響架構或跨多次工作階段的變更，先在 `openspec/changes/` 以 [OpenSpec](https://github.com/Fission-AI/OpenSpec) 規劃
+3. 影響架構或規模較大的變更，先在 `openspec/changes/` 以 [OpenSpec](https://github.com/Fission-AI/OpenSpec) 規劃
 4. commit message 使用英文的 Conventional Commits
 
 ## 授權
