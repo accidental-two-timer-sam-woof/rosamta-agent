@@ -21,11 +21,15 @@ rosamta SHALL 在所有平台使用 XDG 路徑：設定在 `$XDG_CONFIG_HOME/ros
 - **THEN** rosamta 使用 `~/.local/state/rosamta`
 
 ### Requirement: Host settings stay local
-`host.toml` SHALL 只存在本機、不進 repo。它記錄識別名稱、標籤、接管偏好、rc 檔原內容的處理方式、推送偏好、拉取偏好與間隔、開 shell 提醒。
+`host.toml` SHALL 只存在本機、不進 repo。它記錄識別名稱、標籤、接管偏好、rc 檔原內容的處理方式、推送偏好、拉取偏好與間隔、開 shell 提醒。拉取間隔以分鐘為單位，SHALL 至少為 1。
 
 #### Scenario: Defaults
 - **WHEN** rosamta 第一次建立 `host.toml`
 - **THEN** 接管偏好為「詢問」、rc 檔原內容為「刪除」、推送偏好為「自動」、拉取偏好為「自動」且間隔 15 分鐘、開 shell 提醒為開啟
+
+#### Scenario: Zero pull interval
+- **WHEN** `host.toml` 的拉取間隔為 0
+- **THEN** rosamta 拒絕讀取 `host.toml`，並指出該行與「至少 1 分鐘」
 
 ### Requirement: Stable host ID
 rosamta 第一次建立 `host.toml` 時 SHALL 從系統 hostname 產生識別名稱並寫入；之後系統 hostname 改變時，識別名稱 SHALL 維持不變。
@@ -35,11 +39,15 @@ rosamta 第一次建立 `host.toml` 時 SHALL 從系統 hostname 產生識別名
 - **THEN** rosamta 仍以原本的識別名稱判斷套用範圍
 
 ### Requirement: Rename host ID
-使用者修改識別名稱時，rosamta SHALL 同時更新 repo 中所有引用舊名稱的套用範圍與 host 清單，並以一個 commit 記錄。
+使用者修改識別名稱時，rosamta SHALL 同時更新 repo 中所有引用舊名稱的套用範圍與 host 清單，以及本機專用 module 的套用範圍，並以一個只含 repo 中這些檔案的 commit 記錄。任一檔案無法解析時 SHALL 不修改任何檔案；新名稱已在 host 清單中時 SHALL 拒絕改名。
 
 #### Scenario: Rename
 - **WHEN** 使用者把識別名稱從 `mbp` 改成 `work-mbp`
 - **THEN** 所有 `hosts` 含有 `mbp` 的 module 與 dotfile 改為 `work-mbp`，host 清單也一併更新
+
+#### Scenario: Name of another host
+- **WHEN** host 清單已有 `lab`，使用者把識別名稱從 `mbp` 改成 `lab`
+- **THEN** rosamta 拒絕改名，所有檔案維持原狀
 
 ### Requirement: Sorted tags
 host 的標籤 SHALL 以字母順序儲存與顯示，且不重複。
