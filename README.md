@@ -81,6 +81,8 @@ rsmt apply
 
 第一次套用時，每個已安裝 shell 的設定檔會加入一段以 `# >>> rosamta >>>` 開頭、`# <<< rosamta <<<` 結尾的區塊，區塊外的內容不會變動。修改設定檔之前，原本的內容會先存到 `~/.local/state/rosamta/snapshots`。
 
+Debian 與 Ubuntu 預設的 `~/.bashrc` 開頭會讓非互動的 bash 直接結束，所以 `ssh 主機 指令` 執行的指令讀不到 rosamta 的環境變數。需要時，把 `~/.bashrc` 中的區塊移到這段之前；之後套用時會在原處更新。
+
 套用前會先以新的設定啟動每個 shell；啟動時若出現新的錯誤，這次套用會取消並列出造成錯誤的 module，shell 繼續使用原本的設定。
 
 ## 接管設定檔的內容

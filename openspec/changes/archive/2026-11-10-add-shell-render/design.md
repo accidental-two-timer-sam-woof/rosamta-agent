@@ -103,4 +103,5 @@ login zsh 在 `.zshenv` 之後才執行全域的 zprofile：macOS 的 `/etc/zpro
 
 - [`<shell> -i -c exit` 可能因使用者既有的設定而卡住，例如等待輸入] → 逾時 5 秒並視為失敗，訊息中說明是逾時，而不是錯誤輸出；基準也逾時時不算新錯誤。
 - [使用者自己的 rc 內容在 hook 之後又改了 PATH] → 不處理；交給 `add-providers-and-doctor` 的診斷規則偵測。
+- [Debian 與 Ubuntu 預設的 `~/.bashrc` 開頭在非互動 shell 中直接 `return`，區塊在檔尾，`ssh 主機 指令` 讀不到 env] → 不把 env 拆到檔案開頭的第二個區塊，因為每個檔案只有一個區塊是 hook 與 adopt 共同的前提，而整個區塊放到開頭又會讓互動階段早於使用者自己的設定；README 說明可以自行把區塊移到該段之前，之後的套用會在原處更新。
 - [5 ms 預算在慢速機器上不易量測] → 以 CI 的固定機型量測中位數，並與沒有 hook 的基準比較，而不是看絕對值。
