@@ -8,11 +8,16 @@ use minijinja::{Environment, UndefinedBehavior, Value, context};
 
 use crate::config::HostConfig;
 
+/// Instructions one render may run: far more than a dotfile needs, and a
+/// bound on a template that would loop for hours.
+const FUEL: u64 = 1_000_000;
+
 /// No loader, so `include`, `import` and `extends` find nothing; undefined
 /// names are errors rather than empty text.
 fn environment() -> Environment<'static> {
     let mut env = Environment::new();
     env.set_undefined_behavior(UndefinedBehavior::Strict);
+    env.set_fuel(Some(FUEL));
     env
 }
 
@@ -142,6 +147,13 @@ mod tests {
                 "{text}"
             );
         }
+    }
+
+    #[test]
+    fn endless_templates_stop() {
+        let text =
+            "{% for a in range(100000) %}{% for b in range(100000) %}{% endfor %}{% endfor %}";
+        assert!(render("t", text, &host(&[], &[]), Path::new("/h")).is_err());
     }
 
     #[test]

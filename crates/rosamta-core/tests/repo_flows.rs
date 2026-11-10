@@ -498,7 +498,10 @@ fn an_unknown_bitwarden_tool_is_an_error_with_its_line() {
     )
     .unwrap();
     let err = host::load(&file).unwrap_err().to_string();
-    assert!(err.contains("lastpass") && err.contains("host.toml:11:"), "{err}");
+    assert!(
+        err.contains("lastpass") && err.contains("host.toml:11:"),
+        "{err}"
+    );
     fs::write(
         &file,
         format!("{text}\n[secrets]\nbitwarden = [\"bw\", \"rbw\"]\n"),

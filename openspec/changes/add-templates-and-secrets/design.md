@@ -127,7 +127,8 @@ dotfile 項目新增原因 `waiting`，並記錄在等什麼：哪個秘密來�
 ## Risks / Trade-offs
 
 - 每次終端機中的 `rsmt apply` 都取一次秘密 → rbw 與已解鎖的 bw 很快；鎖住時才詢問。若之後覺得太慢，再加上只 render 輸入改變的選項。
-- 靜態分析會列出寫在 `{% if %}` 裡的變數 → 第一次會詢問，答空白即可，之後不再問。
+- 靜態分析會列出寫在 `{% if %}` 裡、或以 `default`、`is defined` 保護的變數 → 第一次會詢問；答空白會存成空字串，此後 `default` 不再生效，因此需要預設值的 template 應以 `vars.x or "預設"` 判斷空字串。只有 `vars.<name>` 的寫法會被詢問，`vars["name"]` 等寫法在 render 時才以錯誤指出。
+- template 可能寫出極長的迴圈 → render 以 minijinja 的 fuel 限制指令數，超過時該 template render 失敗。
 - bws 以 key 名稱查詢需要列出所有秘密 → 一次套用只列一次。
 - 不同安裝方式的 socket 路徑依 Bitwarden 文件，Mac App Store 與 flatpak 版本的 SSH agent 支援狀況可能改變 → 只在 doctor 中回報 socket 不存在，不擋套用。
 - 背景服務不執行秘密指令，使用 `secret()` 的 template 只會在終端機套用時更新 → 等待項目與通知會提醒使用者。
