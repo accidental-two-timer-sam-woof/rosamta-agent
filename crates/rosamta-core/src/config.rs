@@ -310,7 +310,10 @@ pub struct HostConfig {
     #[serde(default)]
     pub pull: SyncPolicy,
     /// Minutes between automatic pulls.
-    #[serde(default = "default_pull_interval")]
+    #[serde(
+        default = "default_pull_interval",
+        deserialize_with = "at_least_one_minute"
+    )]
     #[schemars(range(min = 1))]
     pub pull_interval: u32,
     /// Print a one-line reminder in interactive shells when items await review.
@@ -368,6 +371,15 @@ fn default_order() -> u32 {
 
 fn default_pull_interval() -> u32 {
     15
+}
+
+fn at_least_one_minute<'de, D: serde::Deserializer<'de>>(deserializer: D) -> Result<u32, D::Error> {
+    match u32::deserialize(deserializer)? {
+        0 => Err(serde::de::Error::custom(
+            "pull_interval must be at least 1 minute",
+        )),
+        minutes => Ok(minutes),
+    }
 }
 
 #[cfg(test)]
@@ -456,6 +468,14 @@ tags = ["work"]
             (SyncPolicy::Auto, SyncPolicy::Auto, 15)
         );
         assert!(host.shell_notice);
+    }
+
+    #[test]
+    fn zero_pull_interval_is_rejected() {
+        let err = toml::from_str::<HostConfig>("id = \"mbp\"\npull_interval = 0").unwrap_err();
+        assert!(err.message().contains("at least 1"), "{err}");
+        let host: HostConfig = toml::from_str("id = \"mbp\"\npull_interval = 1").unwrap();
+        assert_eq!(host.pull_interval, 1);
     }
 
     #[test]

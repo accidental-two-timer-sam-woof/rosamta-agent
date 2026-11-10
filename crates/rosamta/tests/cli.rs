@@ -29,6 +29,16 @@ fn errors_use_the_typed_name() {
 }
 
 #[test]
+fn hints_use_the_typed_name() {
+    let home = Home::new();
+    home.cmd("rosamta")
+        .arg("apply")
+        .assert()
+        .code(2)
+        .stderr(predicate::str::contains("run `rosamta init` first"));
+}
+
+#[test]
 fn both_names_behave_the_same() {
     let home = Home::new();
     home.write("rosamta.toml", "format = 1\nhosts = [\"mbp\"]\n");
@@ -124,6 +134,50 @@ fn unreadable_repo_exits_1() {
 }
 
 #[test]
+fn unreadable_repo_dir_exits_1() {
+    use std::os::unix::fs::PermissionsExt;
+    let home = Home::new();
+    home.write("rosamta.toml", "format = 1\n");
+    let repo = home.repo();
+    fs::set_permissions(&repo, fs::Permissions::from_mode(0o000)).unwrap();
+    let readable_anyway = fs::read_dir(&repo).is_ok(); // running as root
+    let assert = home.cmd("rsmt").arg("validate").assert();
+    fs::set_permissions(&repo, fs::Permissions::from_mode(0o755)).unwrap();
+    if !readable_anyway {
+        assert
+            .code(1)
+            .stderr(predicate::str::contains(repo.display().to_string()));
+    }
+}
+
+#[test]
+fn apply_refuses_duplicate_module_names() {
+    let local = ".config/rosamta/local/modules/bun.toml";
+    for (first, second) in [
+        (".local/share/rosamta/repo/modules/bun.toml", local),
+        (
+            ".local/share/rosamta/repo/modules/adopted/bun.toml",
+            ".local/share/rosamta/repo/modules/bun.toml",
+        ),
+    ] {
+        let home = Home::new();
+        home.write("rosamta.toml", "format = 1\n");
+        home.write_host("mbp");
+        for rel in [first, second] {
+            let path = home.root.join(rel);
+            fs::create_dir_all(path.parent().unwrap()).unwrap();
+            fs::write(path, "").unwrap();
+        }
+        home.cmd("rsmt").arg("apply").assert().code(2).stderr(
+            predicate::str::contains(home.root.join(first).display().to_string()).and(
+                predicate::str::contains(home.root.join(second).display().to_string()),
+            ),
+        );
+        assert!(!home.root.join(".local/share/rosamta/generated").exists());
+    }
+}
+
+#[test]
 fn newer_format_is_refused() {
     let home = Home::new();
     home.write("rosamta.toml", "format = 99\n");
@@ -198,6 +252,24 @@ fn init_twice_exits_2_and_changes_nothing() {
         .code(2)
         .stderr(predicate::str::contains("already exists"));
     assert_eq!(home.snapshot(&home.repo().join(".git")), before);
+}
+
+#[test]
+fn init_sets_up_a_host_for_a_repo_without_host_toml() {
+    let home = Home::new();
+    home.write_host("mbp");
+    home.cmd("rsmt").arg("init").assert().success();
+    fs::remove_file(home.host_config()).unwrap();
+    home.cmd("rsmt")
+        .arg("init")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Using existing repo at"));
+    assert!(home.host_config().is_file());
+    home.cmd("rsmt")
+        .args(["apply", "--dry-run"])
+        .assert()
+        .success();
 }
 
 #[test]

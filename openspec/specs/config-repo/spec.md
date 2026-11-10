@@ -6,7 +6,7 @@
 ## Requirements
 
 ### Requirement: Repo layout
-repo SHALL 在根目錄包含 `rosamta.toml`，並可包含 `modules/`、`home/`、`dotfiles.toml`、`packages.toml`。`modules/` 底下（含子目錄）每個 `.toml` 檔是一個 module，檔名去掉副檔名即為 module 名稱。
+repo SHALL 在根目錄包含 `rosamta.toml`，並可包含 `modules/`、`home/`、`dotfiles.toml`、`packages.toml`。`modules/` 底下（含子目錄）每個 `.toml` 檔是一個 module，檔名去掉副檔名即為 module 名稱；名稱以 `.` 開頭的檔案與目錄（例如編輯器的鎖定檔）SHALL 略過。
 
 #### Scenario: Minimal repo
 - **WHEN** repo 只有 `rosamta.toml`
@@ -16,12 +16,20 @@ repo SHALL 在根目錄包含 `rosamta.toml`，並可包含 `modules/`、`home/`
 - **WHEN** repo 有 `modules/adopted/bun.toml`
 - **THEN** rosamta 把它載入為名稱 `bun` 的 module
 
+#### Scenario: Editor lock file
+- **WHEN** Emacs 在 `modules/` 留下鎖定檔 `.#bun.toml`
+- **THEN** rosamta 不把它當成 module，`rsmt validate` 與 `rsmt apply` 照常執行
+
 ### Requirement: Unique module names
 module 名稱 SHALL 在整個 repo 內唯一；`modules/` 的子目錄只用來整理檔案，不構成命名空間。
 
 #### Scenario: Duplicate name
 - **WHEN** repo 同時有 `modules/bun.toml` 與 `modules/adopted/bun.toml`
 - **THEN** `rsmt validate` 失敗，並列出兩個檔案的路徑
+
+#### Scenario: Apply with a duplicate name
+- **WHEN** repo 同時有 `modules/bun.toml` 與 `modules/adopted/bun.toml`，使用者執行 `rsmt apply`
+- **THEN** 指令以 2 結束並列出兩個檔案的路徑，不 render 任何 script
 
 ### Requirement: Format version
 `rosamta.toml` SHALL 宣告正整數 `format`。rosamta 讀到較舊的格式時 SHALL 自動遷移 repo 並以一個 commit 記錄；讀到比自己支援的更新的格式時 SHALL 拒絕讀取 repo。
@@ -35,11 +43,15 @@ module 名稱 SHALL 在整個 repo 內唯一；`modules/` 的子目錄只用來�
 - **THEN** rosamta 不 render、不寫入 repo，並提示使用者升級 rosamta
 
 ### Requirement: Host registry
-`rosamta.toml` SHALL 記錄曾經加入這個 repo 的所有 host 識別名稱。host 第一次加入 repo 時，rosamta SHALL 把它的識別名稱加進清單。
+`rosamta.toml` SHALL 記錄曾經加入這個 repo 的所有 host 識別名稱。host 第一次加入 repo 時，rosamta SHALL 把它的識別名稱加進清單。新 host 從 hostname 產生的識別名稱已在清單中時，rosamta SHALL 依序改用加上 `-2`、`-3` 等後綴中第一個不在清單中的名稱，並在輸出中說明。
 
 #### Scenario: Second host joins
 - **WHEN** 一台識別名稱為 `lab-server` 的 host 加入既有的 repo
 - **THEN** `rosamta.toml` 的 host 清單新增 `lab-server`，原有的名稱保留
+
+#### Scenario: Generated ID already taken
+- **WHEN** 一台沒有 `host.toml` 的 host 加入 repo，它從 hostname 產生的識別名稱 `mbp` 已在 host 清單中
+- **THEN** 這台 host 的識別名稱為 `mbp-2`，`rsmt init` 的輸出說明 `mbp` 已被其他 host 使用
 
 ### Requirement: Strict validation
 `rsmt validate` SHALL 檢查 repo 中所有 TOML 檔的語法與欄位，把未定義的欄位視為錯誤，並回報每個錯誤的檔案、行號與原因；驗證過程 SHALL 不修改任何檔案。
@@ -63,15 +75,23 @@ rosamta SHALL 能輸出 repo 中每種檔案的 JSON Schema，供編輯器與 AI
 - **THEN** stdout 輸出 module 檔的 JSON Schema
 
 ### Requirement: Create a new repo
-`rsmt init` 不帶參數時 SHALL 在 repo 位置建立只含 `rosamta.toml` 的 git repo、建立 `host.toml`，並把本機加進 host 清單。repo 位置已經有 repo 時 SHALL 拒絕執行。
+`rsmt init` 不帶參數時 SHALL 在 repo 位置建立只含 `rosamta.toml` 的 git repo、建立 `host.toml`，並把本機加進 host 清單。repo 位置已經有 repo（有 `rosamta.toml`）且本機已有 `host.toml` 時 SHALL 拒絕執行；已有 repo 但沒有 `host.toml` 時 SHALL 建立 `host.toml` 並把本機加進 host 清單，不修改 repo 的其他內容。
 
 #### Scenario: First run
 - **WHEN** 本機沒有 repo，使用者執行 `rsmt init`
 - **THEN** repo 位置出現一個含 `rosamta.toml` 的 git repo，`host.toml` 也已建立
 
 #### Scenario: Already initialized
-- **WHEN** repo 位置已經有 repo，使用者執行 `rsmt init`
+- **WHEN** repo 位置已經有 repo，本機也有 `host.toml`，使用者執行 `rsmt init`
 - **THEN** 指令以 2 結束，現有的 repo 與 `host.toml` 都不被修改
+
+#### Scenario: Repo without host.toml
+- **WHEN** repo 位置已經有 repo，但 `host.toml` 不存在，使用者執行 `rsmt init`
+- **THEN** rosamta 建立 `host.toml`，並以只含 `rosamta.toml` 的 commit 把本機加進 host 清單
+
+#### Scenario: Interrupted init
+- **WHEN** 上次的 `rsmt init` 中斷，repo 位置只留下沒有 `rosamta.toml` 的目錄
+- **THEN** `rsmt init` 在該目錄照常建立 repo
 
 ### Requirement: Join an existing repo
 `rsmt init <git-url>` SHALL 把該 repo clone 到 repo 位置、建立 `host.toml`，並把本機加進 host 清單。在使用者確認套用之前，rosamta SHALL 不修改任何 rc 檔或 dotfile。
