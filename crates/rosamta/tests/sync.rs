@@ -334,6 +334,38 @@ fn a_commit_that_cannot_be_signed_is_not_made() {
 }
 
 #[test]
+fn a_commit_a_hook_stops_is_not_made_and_says_why() {
+    let hosts = hosts();
+    let hook = hosts.a.repo().join(".git/hooks/pre-commit");
+    fs::write(&hook, "#!/bin/sh\necho stopped by hook\nexit 1\n").unwrap();
+    let mut permissions = fs::metadata(&hook).unwrap().permissions();
+    std::os::unix::fs::PermissionsExt::set_mode(&mut permissions, 0o755);
+    fs::set_permissions(&hook, permissions).unwrap();
+    hosts
+        .a
+        .write("modules/zoxide.toml", "[env]\n_ZO_ECHO = \"1\"\n");
+    hosts
+        .a
+        .cmd("rsmt")
+        .arg("publish")
+        .assert()
+        .code(1)
+        .stderr(predicate::str::contains("stopped by hook"));
+    assert_eq!(
+        git(&hosts.a.repo(), &["status", "--porcelain"]),
+        "?? modules/\n"
+    );
+    let state = state(&hosts.a);
+    assert_eq!(state["publish"]["outcome"], "failed");
+    assert!(
+        state["publish"]["reason"]
+            .as_str()
+            .unwrap()
+            .contains("stopped by hook")
+    );
+}
+
+#[test]
 fn without_a_remote_publish_is_a_usage_error() {
     let home = Home::new();
     run(&home, &["init"]);
