@@ -1,0 +1,13 @@
+[[dotfile]]
+path = ".config/nvim"
+
+[[dotfile]]
+path = ".ssh/config"
+deploy = "copy"
+permissions = "0600"
+encrypted = true
+
+[[dotfile]]
+path = ".gitconfig"
+source = "hosts/mbp/.gitconfig"
+when = { hosts = ["mbp"] }

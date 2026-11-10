@@ -4,6 +4,7 @@ pub mod adopt;
 pub mod apply;
 pub mod config;
 pub mod daemon;
+pub mod dotfiles;
 pub mod edit;
 pub mod error;
 pub mod generated;

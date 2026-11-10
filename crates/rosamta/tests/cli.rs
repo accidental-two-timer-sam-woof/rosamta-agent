@@ -54,6 +54,24 @@ fn invalid_module_exits_2_with_location() {
 }
 
 #[test]
+fn nested_dotfiles_exit_2() {
+    let home = Home::new();
+    home.write("rosamta.toml", "format = 1\n");
+    home.write("home/.config/nvim/init.lua", "");
+    home.write(
+        "dotfiles.toml",
+        "[[dotfile]]\npath = \".config/nvim\"\n\n[[dotfile]]\npath = \".config/nvim/init.lua\"\n",
+    );
+    home.cmd("rsmt")
+        .arg("validate")
+        .assert()
+        .code(2)
+        .stderr(predicate::str::contains(
+            "dotfile `.config/nvim/init.lua` is inside dotfile `.config/nvim`",
+        ));
+}
+
+#[test]
 fn json_output_is_one_document() {
     let home = Home::new();
     home.write("rosamta.toml", "format = 1\n");

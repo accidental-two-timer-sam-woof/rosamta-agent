@@ -175,6 +175,82 @@ pub enum Arch {
     Aarch64,
 }
 
+/// `dotfiles.toml`: every dotfile the repo deploys (ADR 0007).
+#[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct DotfileManifest {
+    #[serde(default)]
+    pub dotfile: Vec<Dotfile>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct Dotfile {
+    /// Where it goes, relative to the home directory.
+    pub path: String,
+    /// Its content in the repo, relative to the repo root; `home/<path>` by default.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source: Option<String>,
+    #[serde(default, skip_serializing_if = "is_default")]
+    pub deploy: Deploy,
+    /// Octal mode set on the file or directory itself, such as "0600".
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(regex(pattern = r"^0?[0-7]{3}$"))]
+    pub permissions: Option<String>,
+    /// Stored encrypted with age; deploys as copy.
+    #[serde(default, skip_serializing_if = "is_default")]
+    pub encrypted: bool,
+    #[serde(default, skip_serializing_if = "is_default")]
+    pub when: When,
+}
+
+impl Dotfile {
+    pub fn new(path: &str) -> Self {
+        Self {
+            path: path.into(),
+            source: None,
+            deploy: Deploy::Link,
+            permissions: None,
+            encrypted: false,
+            when: When::default(),
+        }
+    }
+
+    pub fn source(&self) -> String {
+        self.source
+            .clone()
+            .unwrap_or_else(|| format!("home/{}", self.path))
+    }
+
+    /// `permissions` as a mode; `None` when absent or not octal.
+    pub fn mode(&self) -> Option<u32> {
+        let text = self.permissions.as_deref()?;
+        let digits = text
+            .strip_prefix('0')
+            .filter(|_| text.len() == 4)
+            .unwrap_or(text);
+        (digits.len() == 3 && digits.bytes().all(|b| (b'0'..=b'7').contains(&b)))
+            .then(|| u32::from_str_radix(digits, 8).ok())
+            .flatten()
+    }
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
+#[serde(rename_all = "lowercase")]
+pub enum Deploy {
+    /// A symlink to the repo.
+    #[default]
+    Link,
+    /// A copy, written again when the repo changes.
+    Copy,
+    /// Rendered from a template.
+    Template,
+}
+
+fn is_default<T: Default + PartialEq>(value: &T) -> bool {
+    *value == T::default()
+}
+
 /// What a condition is checked against.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct HostFacts {

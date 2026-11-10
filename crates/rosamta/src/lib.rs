@@ -175,6 +175,8 @@ enum SchemaKind {
     Module,
     /// host.toml
     Host,
+    /// dotfiles.toml
+    Dotfiles,
 }
 
 /// Entry point shared by the `rosamta` and `rsmt` binaries.
@@ -214,6 +216,7 @@ fn run(cli: &Cli) -> Result<ExitCode> {
                 SchemaKind::Repo => Kind::Repo,
                 SchemaKind::Module => Kind::Module,
                 SchemaKind::Host => Kind::Host,
+                SchemaKind::Dotfiles => Kind::Dotfiles,
             };
             print_json(&schema::schema(kind));
             Ok(ExitCode::SUCCESS)
