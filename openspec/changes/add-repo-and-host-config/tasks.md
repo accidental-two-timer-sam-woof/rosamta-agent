@@ -16,11 +16,11 @@
 ## 3. 套用範圍
 
 - [x] 3.1 實作 `when` 的判斷規則，以表格驅動測試涵蓋「欄位內任一符合、欄位間全部符合」與沒有 `when` 的情況
-- [ ] 3.2 對不在 host 清單中的識別名稱輸出警告，確認 `rsmt validate` 仍以 0 結束
+- [x] 3.2 對不在 host 清單中的識別名稱輸出警告，確認 `rsmt validate` 仍以 0 結束
 
 ## 4. CLI
 
-- [ ] 4.1 建立 CLI 骨架：依 argv[0] 顯示命令名稱、`--json`、結束碼，確認以 `assert_cmd` 撰寫的測試涵蓋 `rosamta` 與 `rsmt` 兩個名稱
-- [ ] 4.2 實作 `rsmt init` 與 `rsmt init <git-url>`，以本機 bare repo 做整合測試，確認不會修改任何 rc 檔
-- [ ] 4.3 實作格式版本檢查與遷移框架，確認較舊格式會遷移並 commit、較新格式會拒絕
-- [ ] 4.4 實作 `rsmt validate` 與 `rsmt schema`，並在 README 撰寫這三個指令的用法，確認文件中的範例可照抄執行
+- [x] 4.1 建立 CLI 骨架：依 argv[0] 顯示命令名稱、`--json`、結束碼，確認以 `assert_cmd` 撰寫的測試涵蓋 `rosamta` 與 `rsmt` 兩個名稱
+- [x] 4.2 實作 `rsmt init` 與 `rsmt init <git-url>`，以本機 bare repo 做整合測試，確認不會修改任何 rc 檔
+- [x] 4.3 實作格式版本檢查與遷移框架，確認較舊格式會遷移並 commit、較新格式會拒絕
+- [x] 4.4 實作 `rsmt validate` 與 `rsmt schema`，並在 README 撰寫這三個指令的用法，確認文件中的範例可照抄執行

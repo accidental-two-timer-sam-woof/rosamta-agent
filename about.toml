@@ -1,4 +1,6 @@
 # Keep in sync with the license allow list in deny.toml.
+# Notices cover what ships; test-only crates never reach the binaries.
+ignore-dev-dependencies = true
 accepted = [
     "MIT",
     "Apache-2.0",
