@@ -4,6 +4,7 @@
 mod common;
 
 use std::fs;
+use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 
 use common::{Home, git_env, has, sessions};
@@ -463,7 +464,13 @@ fn secrets_stay_on_this_host() {
     ]);
     assert_eq!(String::from_utf8_lossy(&out.stdout).trim(), secret);
     assert!(!repo_git(&home, &["log", "-p", "--all"]).contains(secret));
-    assert!(read(&home, ".config/rosamta/local/modules/openai-api-key.toml").contains(secret));
+    let local = ".config/rosamta/local/modules/openai-api-key.toml";
+    assert!(read(&home, local).contains(secret));
+    let mode = fs::metadata(home.root.join(local))
+        .unwrap()
+        .permissions()
+        .mode();
+    assert_eq!(mode & 0o777, 0o600);
 }
 
 /// Shell startup that appends to `.zshrc` once, the way another process
