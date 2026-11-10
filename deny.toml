@@ -1,0 +1,40 @@
+# Licenses must be compatible with Apache-2.0; anything else fails CI until a human decides.
+
+[graph]
+# Only the platforms we ship; Windows joins when it is supported.
+targets = [
+    "x86_64-unknown-linux-gnu",
+    "aarch64-unknown-linux-gnu",
+    "x86_64-unknown-linux-musl",
+    "x86_64-apple-darwin",
+    "aarch64-apple-darwin",
+]
+
+[advisories]
+# Unmaintained crates deep in the GPUI tree are upstream's to replace; vulnerabilities still fail.
+unmaintained = "workspace"
+ignore = []
+
+[licenses]
+allow = [
+    "MIT",
+    "Apache-2.0",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "ISC",
+    "Zlib",
+    "Unicode-3.0",
+    "MPL-2.0",
+    # Public-domain style; notify (file watching) and tiny-keccak use CC0, enum-iterator uses 0BSD.
+    "0BSD",
+    "CC0-1.0",
+]
+confidence-threshold = 0.8
+
+[bans]
+# GPUI pulls several versions of the same crates; reporting them is noise.
+multiple-versions = "allow"
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"
