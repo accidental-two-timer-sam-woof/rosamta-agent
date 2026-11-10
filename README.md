@@ -28,6 +28,7 @@ rosamta 是跨 shell、跨主機的 dotfile 管理工具。設定宣告在 git r
 ### 🗂️ **設定檔部署**
 - 以 symlink 或複製部署 `~/.config` 等設定檔，個別主機可以有自己的版本
 - 敏感的設定檔加密後存進 repo，私鑰以密碼保護
+- template 依主機產生不同內容，密碼與 token 在套用時從 Bitwarden 或自訂指令取得，不進 repo
 - 目標位置已有不同內容時不覆蓋，顯示差異讓你決定
 
 ### 🔄 **多主機同步**
@@ -233,7 +234,7 @@ when = { hosts = ["mbp"] }
 |---|---|
 | `path` | 相對於家目錄的位置 |
 | `source` | repo 中的內容，預設為 `home/<path>` |
-| `deploy` | `link`：symlink 回 repo（預設）；`copy`：複製 |
+| `deploy` | `link`：symlink 回 repo（預設）；`copy`：複製；`template`：依主機產生內容 |
 | `permissions` | 部署後設定的權限，例如 `"0600"` |
 | `encrypted` | 加密後存在 repo 中，須搭配 `deploy = "copy"` |
 | `when` | 套用範圍，寫法與 module 相同 |
@@ -268,6 +269,58 @@ rsmt add --encrypt ~/.ssh/config
 ```
 
 第一次加密時要設定密碼。加密用的私鑰以這個密碼加密後存成 repo 的 `key.age`，這台主機的副本存在 `~/.config/rosamta/age.key`。新主機第一次在終端機執行 `rsmt apply` 時輸入一次密碼即可；背景服務不會詢問密碼，會先略過加密的設定檔。密碼遺失後無法找回，只有已經解開私鑰的主機還能讀取加密的設定檔。
+
+#### Template
+
+```sh
+rsmt add --template ~/.gitconfig
+```
+
+`deploy = "template"` 的設定檔以 [minijinja](https://github.com/mitsuhiko/minijinja)（Jinja 語法）產生內容，`rsmt add --template` 會原樣加入，之後在 repo 中改寫依主機不同的部分：
+
+```jinja
+[user]
+	name = {{ vars.name }}
+	email = {% if "work" in host.tags %}me@work.example{% else %}me@example.com{% endif %}
+	signingkey = {{ bitwarden("GPG key", "notes") }}
+```
+
+| 名稱 | 內容 |
+|---|---|
+| `host.id`、`host.tags` | 本機的識別名稱與標籤 |
+| `host.os`、`host.arch` | 例如 `macos`、`aarch64` |
+| `host.home` | 家目錄 |
+| `vars.<名稱>` | `host.toml` 的 `[vars]`，只存在這台主機 |
+| `bitwarden(項目, 欄位)` | Bitwarden 項目的欄位，省略時為密碼；另有 `username`、`notes`、`totp`（TOTP 金鑰，不是驗證碼）與自訂欄位 |
+| `secret(名稱, 參數)` | 執行 `secrets.toml` 宣告的指令，取它的輸出 |
+| `bitwarden_ssh_socket()` | Bitwarden SSH agent 的 socket 路徑，沒有安裝時為空字串 |
+
+template 不能讀取其他檔案或執行其他程式。缺少 `vars` 時，在終端機執行 `rsmt apply` 會逐一詢問並寫進 `host.toml`：
+
+```toml
+[vars]
+name = "Tsai"
+
+[secrets]
+bitwarden = ["rbw", "bw"]
+```
+
+`bitwarden()` 依序使用已登入的 [rbw](https://github.com/doy/rbw)、[bw](https://bitwarden.com/help/cli/) 與 [bws](https://bitwarden.com/help/secrets-manager-cli/)（Secrets Manager，以 key 名稱查詢），`[secrets] bitwarden` 可以改變順序。bws 的 access token 存在系統鑰匙圈：
+
+```sh
+rsmt secrets bws login
+```
+
+其他密碼管理工具在 repo 的 `secrets.toml` 宣告，`{arg}` 換成 `secret()` 的第二個參數：
+
+```toml
+[commands.op]
+run = ["op", "read", "{arg}"]
+```
+
+只有在終端機執行的 `rsmt apply` 會解鎖密碼管理工具或執行 `secrets.toml` 的指令，每次套用每個值只取一次。背景服務、App 與非互動執行遇到鎖住的工具、需要執行指令或缺少 `vars` 時，保留原本的內容，並在待處理清單列出在等待什麼；在終端機執行 `rsmt apply` 後就會消失。
+
+產生的檔案沒有宣告權限時為 `0600`。本機修改了產生的內容時會列在待處理清單：`accept` 把它存成這台主機專用的 `copy`，`discard` 重新產生。用到 `bitwarden()` 或 `secret()` 的 template 沒有加密時不能 `accept`，請改寫 repo 中的 template。
 
 ### 同步到其他主機
 
@@ -394,7 +447,7 @@ rsmt restore --original
 
 ### 編輯器支援
 
-`rsmt schema` 輸出各種檔案的 JSON Schema，種類有 `repo`（`rosamta.toml`）、`module`、`host`（`host.toml`）與 `dotfiles`（`dotfiles.toml`）：
+`rsmt schema` 輸出各種檔案的 JSON Schema，種類有 `repo`（`rosamta.toml`）、`module`、`host`（`host.toml`）、`dotfiles`（`dotfiles.toml`）與 `secrets`（`secrets.toml`）：
 
 ```sh
 rsmt schema module > module.schema.json
