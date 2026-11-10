@@ -16,7 +16,7 @@ use crate::repo::{self, InitOutcome};
 pub use token::{Stored, TokenStore};
 
 /// rosamta's OAuth App. Device flow needs only the client ID, which is public.
-pub const CLIENT_ID: &str = "";
+pub const CLIENT_ID: &str = "Ov23liLGTz876ezcWYf7";
 const SCOPE: &str = "repo";
 /// The credential helper rosamta adds to a repo that reaches GitHub over HTTPS.
 const HELPER_KEY: &str = "credential.https://github.com.helper";

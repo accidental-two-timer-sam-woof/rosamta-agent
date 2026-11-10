@@ -126,3 +126,17 @@ mod tests {
         assert!(!store.delete().unwrap());
     }
 }
+
+#[cfg(test)]
+mod keychain {
+    /// Writes, reads and deletes a throwaway item in the real keychain.
+    /// Needs the real HOME: macOS finds the default keychain through it.
+    #[test]
+    #[ignore = "touches the system keychain"]
+    fn round_trip() {
+        let entry = keyring::Entry::new("rosamta-probe", "probe").unwrap();
+        entry.set_password("probe-value").unwrap();
+        assert_eq!(entry.get_password().unwrap(), "probe-value");
+        entry.delete_credential().unwrap();
+    }
+}
