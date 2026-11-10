@@ -71,7 +71,7 @@ rosamta SHALL 只 render 套用範圍符合目前 host 的 module。
 - **THEN** bash、sh、fish 的 generated script 都不包含它
 
 ### Requirement: Environment in every shell mode
-env 階段的設定 SHALL 在 login shell、非 login 的互動 shell，以及非互動 shell 中都生效。macOS 上 PATH 的順序 SHALL 不被系統的 `path_helper` 打亂。
+env 階段的設定 SHALL 在 login shell、非 login 的互動 shell，以及非互動 shell 中都生效。login zsh 中，系統的 zprofile（例如 macOS 的 `path_helper`、Alpine 的 `/etc/profile`）SHALL 不會打亂或移除 module 宣告的 PATH 項目。
 
 #### Scenario: Non-interactive zsh
 - **WHEN** 使用者執行 `zsh -c 'echo $EDITOR'`

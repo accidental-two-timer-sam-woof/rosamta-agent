@@ -46,6 +46,71 @@ rsmt validate
 rsmt validate --json
 ```
 
+## 撰寫 module
+
+每個 module 是 repo 中 `modules/` 底下的一個 TOML 檔，例如 `modules/editor.toml`：
+
+```toml
+[env]
+EDITOR = "nvim"
+
+[path]
+prepend = ["~/.local/bin"]
+
+[aliases]
+ll = "ls -lh"
+```
+
+同一份宣告會套用到 sh、bash、zsh 與 fish。只適用於特定 shell 的程式碼放在 `[raw]`：
+
+```toml
+[raw]
+zsh = '''
+bindkey -e
+'''
+```
+
+## 套用
+
+```sh
+rsmt apply --dry-run
+rsmt apply
+```
+
+`--dry-run` 只顯示產生的腳本與 shell 設定檔會有的差異，不寫入任何檔案。
+
+第一次套用時，每個已安裝 shell 的設定檔會加入一段以 `# >>> rosamta >>>` 開頭、`# <<< rosamta <<<` 結尾的區塊，區塊外的內容不會變動。修改設定檔之前，原本的內容會先存到 `~/.local/state/rosamta/snapshots`。
+
+套用前會先以新的設定啟動每個 shell；啟動時若出現新的錯誤，這次套用會取消並列出造成錯誤的 module，shell 繼續使用原本的設定。
+
+## 移除 hook
+
+```sh
+rsmt unhook zsh
+```
+
+只移除該 shell 的區塊，之後的 `rsmt apply` 也不會再加回去。要重新加入：
+
+```sh
+rsmt hook zsh
+```
+
+## 停止使用
+
+```sh
+rsmt eject
+```
+
+把目前生效的設定直接寫進各 shell 的設定檔並移除區塊；之後即使移除 rosamta，shell 的 PATH、環境變數與 alias 都不變。
+
+```sh
+rsmt restore --original
+```
+
+把 rosamta 改過的每個設定檔還原成第一次修改前的內容，並刪除 rosamta 建立的設定檔。
+
+兩個指令都會先顯示差異並要求確認；不在終端機中執行時，要加上 `--yes`。
+
 ## 編輯器支援
 
 `rsmt schema` 輸出各種檔案的 JSON Schema，種類有 `repo`（`rosamta.toml`）、`module` 與 `host`（`host.toml`）：
