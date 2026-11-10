@@ -210,17 +210,16 @@ fn selected(app: &Rosamta, cx: &mut Context<Rosamta>) -> Option<impl IntoElement
         h_flex()
             .gap(px(S8))
             .child(
+                // `children`, unlike `child`, keeps each button's own `disabled`.
                 super::segments(ButtonGroup::new("scope"), cx)
-                    .child(
+                    .children([
                         super::segment(Button::new("this-host"), scope == Scope::Host, cx)
                             .label(t("item.this_host")),
-                    )
-                    .child(
                         super::segment(Button::new("all-hosts"), scope == Scope::All, cx)
                             .label(t("item.all_hosts"))
                             // Lines holding a secret stay on this host.
                             .disabled(item.local),
-                    )
+                    ])
                     .on_click(cx.listener(|this, clicks: &Vec<usize>, _, cx| {
                         let scope = if clicks.contains(&1) {
                             Scope::All

@@ -140,9 +140,12 @@ pub fn render(
                             .label(t(key))
                             .disabled(busy)
                         }))
-                        .on_click(cx.listener(|this, clicks: &Vec<usize>, window, cx| {
-                            if let Some(&(_, minutes)) =
-                                clicks.first().and_then(|&i| INTERVALS.get(i))
+                        .on_click(cx.listener(move |this, clicks: &Vec<usize>, window, cx| {
+                            // The track around the pills reports the current choice.
+                            if let Some(&(_, minutes)) = clicks
+                                .first()
+                                .and_then(|&i| INTERVALS.get(i))
+                                .filter(|(_, minutes)| *minutes != interval)
                             {
                                 this.run(window, cx, move |core| {
                                     actions::set_host(core, "pull_interval", minutes)
@@ -216,6 +219,7 @@ fn choice(
     busy: bool,
     cx: &mut Context<Rosamta>,
 ) -> impl IntoElement {
+    let current = current.to_string();
     row(cx).child(label(t(key), cx)).child(
         super::segments(ButtonGroup::new(setting), cx)
             .small()
@@ -225,7 +229,11 @@ fn choice(
                     .disabled(busy)
             }))
             .on_click(cx.listener(move |this, clicks: &Vec<usize>, window, cx| {
-                if let Some(&(_, value)) = clicks.first().and_then(|&i| options.get(i)) {
+                if let Some(&(_, value)) = clicks
+                    .first()
+                    .and_then(|&i| options.get(i))
+                    .filter(|(_, value)| *value != current)
+                {
                     this.run(window, cx, move |core| {
                         actions::set_host(core, setting, value)
                     });
