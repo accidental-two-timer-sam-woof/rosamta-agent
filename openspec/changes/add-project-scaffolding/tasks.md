@@ -8,8 +8,8 @@
 
 ## 2. 授權與相依套件
 
-- [ ] 2.1 新增 `deny.toml`，確認 `cargo deny check` 通過
-- [ ] 2.2 新增 `about.toml` 並產生 `THIRD_PARTY_NOTICES.md`，確認檔案列出所有相依套件的授權
+- [x] 2.1 新增 `deny.toml`，確認 `cargo deny check` 通過
+- [x] 2.2 新增 `about.toml` 並產生 `THIRD_PARTY_NOTICES.md`，確認檔案列出所有相依套件的授權
 
 ## 3. CI
 

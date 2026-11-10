@@ -29,7 +29,7 @@ repo 目前只有規劃文件。相關的既定決策：GPUI 透過 `gpui-kit`�
 
 ### 授權檢查
 
-`deny.toml` 允許 MIT、Apache-2.0、BSD-2-Clause、BSD-3-Clause、ISC、Zlib、Unicode-3.0、MPL-2.0；其他授權讓 CI 失敗，交由人工判斷。`cargo-about` 依 `about.toml` 產生第三方聲明，release 時一併打包。
+`deny.toml` 允許 MIT、Apache-2.0、BSD-2-Clause、BSD-3-Clause、ISC、Zlib、Unicode-3.0、MPL-2.0，以及經人工判斷後加入的 0BSD 與 CC0-1.0（`notify` 與 GPUI 的依賴使用）；其他授權讓 CI 失敗，交由人工判斷。已知漏洞一律失敗；unmaintained 只檢查 workspace 直接依賴的 crate，GPUI 深層依賴的部分交給上游。`cargo-about` 依 `about.toml` 產生第三方聲明，release 時一併打包。
 
 ### CI
 
