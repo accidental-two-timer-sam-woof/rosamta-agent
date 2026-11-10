@@ -130,10 +130,28 @@ fn a_secret_stops_publish_before_anything_leaves() {
         .code(1)
         .stderr(predicate::str::contains("modules/env.toml:2 (github-pat)"));
     assert_eq!(remote_log(&hosts), before);
-    let state = state(&hosts.a);
-    assert_eq!(state["publish"]["outcome"], "blocked");
-    assert_eq!(state["publish"]["files"][0], "modules/env.toml");
-    assert_eq!(state["unpushed"], 1);
+    // Not committed either: removing the line is all it takes.
+    assert_eq!(
+        git(&hosts.a.repo(), &["status", "--porcelain"]),
+        "?? modules/\n"
+    );
+    let blocked = state(&hosts.a);
+    assert_eq!(blocked["publish"]["outcome"], "blocked");
+    assert_eq!(blocked["publish"]["files"][0], "modules/env.toml");
+    assert_eq!(blocked["unpushed"], 0);
+
+    // One already committed is caught too, before the push.
+    git(&hosts.a.repo(), &["add", "--all"]);
+    git(&hosts.a.repo(), &["commit", "--quiet", "-m", "env"]);
+    hosts
+        .a
+        .cmd("rsmt")
+        .arg("publish")
+        .assert()
+        .code(1)
+        .stderr(predicate::str::contains("modules/env.toml:2 (github-pat)"));
+    assert_eq!(remote_log(&hosts), before);
+    assert_eq!(state(&hosts.a)["unpushed"], 1);
 }
 
 #[test]
