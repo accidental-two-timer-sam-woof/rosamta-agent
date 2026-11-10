@@ -43,7 +43,7 @@ pub fn render(app: &Rosamta, cx: &mut Context<Rosamta>) -> impl IntoElement {
                 })),
         );
     let body = v_flex()
-        .gap(px(S24))
+        .gap(px(S32))
         .children(attention(app, cx))
         .child(section(t("overview.status"), status(app, cx), cx))
         .child(section(t("overview.shells"), shells(app, cx), cx))
@@ -234,7 +234,7 @@ fn activity(app: &Rosamta, cx: &App) -> impl IntoElement {
             .child(
                 div()
                     .flex_none()
-                    .w(px(88.))
+                    .w(px(96.))
                     .text_color(p.muted)
                     .child(when(commit.at)),
             )

@@ -44,7 +44,7 @@ pub fn render(
     let p = palette(cx);
     let snap = &app.snap;
     let busy = app.busy;
-    let mut body = v_flex().gap(px(S24));
+    let mut body = v_flex().gap(px(S32));
     if let Some(host) = &snap.host {
         let tags = h_flex()
             .flex_1()
