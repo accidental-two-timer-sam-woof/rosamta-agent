@@ -6,7 +6,7 @@
 
 ## What Changes
 
-- provider：每個 provider 以資料檔描述偵測方式、選項（含中英文顯示名稱，介面不顯示 CLI 參數）、各 shell 的產生內容、載入階段、互斥關係、需要的套件，以及接管時要辨識的寫法；複雜的部分以 Rust 實作。
+- provider：每個 provider 以資料檔描述偵測方式、選項（含中英文顯示名稱，介面不顯示 CLI 參數）、各 shell 的產生內容、載入階段、互斥關係、需要的應用程式，以及接管時要辨識的寫法；複雜的部分以 Rust 實作。
 - 第一批 provider：
   - prompt：starship、oh-my-posh、powerlevel10k
   - 框架與插件：oh-my-zsh、zsh-autosuggestions、zsh-syntax-highlighting
@@ -44,4 +44,4 @@
 ## Impact
 
 - 新增 provider 資料檔目錄與 `rsmt doctor`（`--json`、`--fix <id>`）。
-- 部分 provider 需要套件，依賴 `add-packages` 安裝；在它完成前只提示缺少的套件。
+- 部分 provider 需要應用程式，依賴 `add-packages` 安裝；在它完成前只提示缺少的應用程式。

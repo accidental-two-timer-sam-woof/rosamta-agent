@@ -116,16 +116,16 @@ _Avoid_: 用「同步」指稱接管
 檢查 host 上 shell 設定的問題與可最佳化之處，並為每一項提供可直接套用的修正。
 _Avoid_: health check, lint, 健檢
 
-### 套件
+### 應用程式
 
-**Package**（套件）:
+**Package**（應用程式）:
 repo 裡宣告某些 host 應該安裝的軟體，以 catalog 裡的名稱指稱。
-_Avoid_: dependency, app
+_Avoid_: dependency, app, 套件
 
-**Catalog**（套件目錄）:
-隨 rosamta 發布的資料，把一個 package 名稱對應到各套件管理器的套件 ID。
+**Catalog**（應用程式目錄）:
+隨 rosamta 發布的資料，把一個 package 名稱對應到各套件管理器裡的 ID。使用者可以在 repo 裡自行新增項目。
 _Avoid_: registry, package database
 
-**Bootstrap**（補齊套件）:
+**Bootstrap**（補齊應用程式）:
 在 host 上補裝 repo 已宣告、但尚未安裝的 package。
 _Avoid_: provision, setup
