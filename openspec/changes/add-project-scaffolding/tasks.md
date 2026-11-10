@@ -24,6 +24,7 @@
 - [ ] 4.2 確認 deb 與 rpm 在對應的 Docker 映像中安裝後，`rosamta` 與 `rsmt` 都能執行
 - [ ] 4.3 加入 macOS 簽章、notarization 與 staple 步驟，在使用者設定好 secrets 後以測試 tag 驗證 `spctl --assess` 通過
 - [ ] 4.4 加入 Homebrew tap PR 與 AUR 推送步驟，對測試用的 tap repo 驗證會產生正確的 cask PR
+- [ ] 4.5 AUR 開放註冊後建立帳號、設定 `AUR_SSH_PRIVATE_KEY`、`AUR_USERNAME` 與 `AUR_EMAIL`，以測試 tag 驗證 `rosamta-bin` 推送成功；在那之前 AUR job 會跳過
 
 ## 5. 安裝程式 fixture
 

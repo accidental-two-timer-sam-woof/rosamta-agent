@@ -175,6 +175,8 @@ jobs:
 
   aur:
     needs: [version, publish]
+    # Skipped until an AUR account exists; the placeholder variable holds a single space.
+    if: vars.AUR_USERNAME != '' && vars.AUR_USERNAME != ' '
     runs-on: ubuntu-24.04
     env:
       VERSION: ${{ needs.version.outputs.version }}
