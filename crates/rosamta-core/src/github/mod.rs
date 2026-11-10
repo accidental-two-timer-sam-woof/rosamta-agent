@@ -299,9 +299,17 @@ pub fn init_new(
     name: &str,
     transport: &Transport,
 ) -> Result<InitOutcome> {
-    repo::refuse_existing(&paths.repo())?;
-    let created = github.create_repo(token, name)?;
+    // Local steps fail first: once the GitHub repo exists, a retry stops at
+    // "name already exists".
     let outcome = repo::init_new(paths)?;
+    let created = match github.create_repo(token, name) {
+        Ok(created) => created,
+        Err(err) => {
+            // Only what `repo::init_new` just made, so a retry starts clean.
+            let _ = std::fs::remove_dir_all(&outcome.repo);
+            return Err(err);
+        }
+    };
     let url = transport.url(&created.full_name);
     git::run(&outcome.repo, &["remote", "add", "origin", &url])?;
     if let Transport::Https { helper } = transport {

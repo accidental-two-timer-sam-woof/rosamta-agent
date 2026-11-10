@@ -151,6 +151,42 @@ fn api_errors_carry_githubs_message() {
     );
 }
 
+/// A local failure must not leave a GitHub repo behind that makes every
+/// retry fail with "name already exists".
+#[test]
+fn a_new_github_repo_waits_for_the_local_repo() {
+    crate::git::tests::isolate();
+    let home = tempfile::tempdir().unwrap();
+    let paths = Paths::from_vars(|name| (name == "HOME").then(|| home.path().into())).unwrap();
+    let init = |mock: &Mock| {
+        init_new(
+            &paths,
+            &github(mock),
+            "gho_abc",
+            "dotfiles",
+            &Transport::Ssh,
+        )
+    };
+    std::fs::create_dir_all(paths.host_config().parent().unwrap()).unwrap();
+    std::fs::write(paths.host_config(), "id = 1\n").unwrap();
+    let created = mock(&[(
+        201,
+        r#"{"full_name":"me/dotfiles","ssh_url":"git@github.com:me/dotfiles.git","clone_url":"https://github.com/me/dotfiles.git","private":true}"#,
+    )]);
+    assert!(init(&created).is_err());
+    assert!(created.requests.lock().unwrap().is_empty());
+
+    // GitHub refusing leaves no local repo in the way either.
+    std::fs::write(paths.host_config(), "id = \"a\"\n").unwrap();
+    let refused = mock(&[(422, r#"{"message":"Repository creation failed."}"#)]);
+    assert!(init(&refused).is_err());
+    assert!(!paths.repo().exists());
+
+    let outcome = init(&created).unwrap();
+    let url = git::run(&outcome.repo, &["remote", "get-url", "origin"]).unwrap();
+    assert_eq!(url, "git@github.com:me/dotfiles.git\n");
+}
+
 #[test]
 fn credential_replies_only_for_github_over_https() {
     let request = "protocol=https\nhost=github.com\n";
