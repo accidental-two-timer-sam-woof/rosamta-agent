@@ -43,14 +43,34 @@ pub(crate) fn write_private(path: &Path, text: &str) -> Result<()> {
 }
 
 /// Write via a temporary file and rename, so readers never see half a file.
+/// A symlink (stow, yadm) stays one: the file it points at is replaced,
+/// keeping its permissions.
 pub(crate) fn write_atomic(path: &Path, text: &str) -> Result<()> {
-    let name = path
+    use std::io::Write;
+    use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
+    let target = std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
+    let name = target
         .file_name()
         .map(|name| name.to_string_lossy().into_owned())
         .unwrap_or_default();
-    let tmp = path.with_file_name(format!(".{name}.rosamta-tmp"));
-    std::fs::write(&tmp, text).map_err(Error::write(&tmp))?;
-    std::fs::rename(&tmp, path).map_err(Error::write(path))
+    let tmp = target.with_file_name(format!(".{name}.rosamta-tmp"));
+    let permissions = std::fs::metadata(&target)
+        .ok()
+        .map(|meta| meta.permissions());
+    let mut options = std::fs::OpenOptions::new();
+    options.write(true).create(true).truncate(true);
+    if let Some(permissions) = &permissions {
+        options.mode(permissions.mode());
+    }
+    let mut file = options.open(&tmp).map_err(Error::write(&tmp))?;
+    // `mode` applies only when the file is created, and through the umask.
+    if let Some(permissions) = permissions {
+        file.set_permissions(permissions)
+            .map_err(Error::write(&tmp))?;
+    }
+    file.write_all(text.as_bytes())
+        .map_err(Error::write(&tmp))?;
+    std::fs::rename(&tmp, &target).map_err(Error::write(path))
 }
 
 pub fn set_module_enabled(path: &Path, enabled: bool) -> Result<bool> {
@@ -117,6 +137,24 @@ mod tests {
         let module: Module = toml::from_str(&text).unwrap();
         assert!(!module.enabled);
         assert_eq!(module.when.hosts, ["mbp"]);
+    }
+
+    #[test]
+    fn atomic_writes_keep_symlinks_and_modes() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().unwrap();
+        let real = dir.path().join("dotfiles/zshrc");
+        std::fs::create_dir_all(real.parent().unwrap()).unwrap();
+        std::fs::write(&real, "old\n").unwrap();
+        std::fs::set_permissions(&real, std::fs::Permissions::from_mode(0o600)).unwrap();
+        let link = dir.path().join(".zshrc");
+        std::os::unix::fs::symlink("dotfiles/zshrc", &link).unwrap();
+
+        write_atomic(&link, "new\n").unwrap();
+        assert!(link.symlink_metadata().unwrap().file_type().is_symlink());
+        assert_eq!(std::fs::read_to_string(&real).unwrap(), "new\n");
+        let mode = std::fs::metadata(&real).unwrap().permissions().mode();
+        assert_eq!(mode & 0o777, 0o600);
     }
 
     #[test]

@@ -810,6 +810,15 @@ fn write_text(path: &Path, text: Option<&str>) -> Result<()> {
     }
 }
 
+/// Local modules can hold secrets, so only their owner may read them.
+fn write_module(ctx: &Context, path: &Path, text: &str) -> Result<()> {
+    if path.starts_with(local_dir(ctx)) {
+        crate::edit::write_private(path, text)
+    } else {
+        write_text(path, Some(text))
+    }
+}
+
 /// Adopt: snapshot rc files, write modules and rc files, apply, then commit
 /// each adoption. If apply fails, every file goes back as it was.
 pub fn adopt(ctx: &Context, candidates: &[Candidate], scope: Scope) -> Result<Vec<Adoption>> {
@@ -838,7 +847,7 @@ pub fn execute(ctx: &Context, plan: Plan) -> Result<Vec<Adoption>> {
         }
         written = true;
         for (path, text) in &plan.modules {
-            write_text(path, Some(text))?;
+            write_module(ctx, path, text)?;
         }
         for change in &plan.files {
             write_text(&change.path, change.after.as_deref())?;
@@ -1209,7 +1218,7 @@ pub fn undo(ctx: &Context, plan: Undo) -> Result<()> {
         if written {
             let _ = write_text(&plan.file.path, plan.file.before.as_deref());
             if let Some((path, text)) = &plan.module {
-                let _ = write_text(path, Some(text));
+                let _ = write_module(ctx, path, text);
             }
         }
         return Err(err);
