@@ -220,17 +220,10 @@ pub fn diff(plan: &Plan, generated_dir: &Path) -> String {
 
 pub fn unified(name: &str, before: Option<&str>, after: Option<&str>) -> String {
     let diff = similar::TextDiff::from_lines(before.unwrap_or(""), after.unwrap_or(""));
-    let old = if before.is_some() {
-        format!("a/{name}")
-    } else {
-        "/dev/null".into()
-    };
-    let new = if after.is_some() {
-        format!("b/{name}")
-    } else {
-        "/dev/null".into()
-    };
-    diff.unified_diff().header(&old, &new).to_string()
+    // Paths are absolute, so no a/ and b/ prefixes.
+    let old = if before.is_some() { name } else { "/dev/null" };
+    let new = if after.is_some() { name } else { "/dev/null" };
+    diff.unified_diff().header(old, new).to_string()
 }
 
 #[derive(Debug, Clone, serde::Serialize)]
@@ -339,6 +332,20 @@ fn check_and_smoke(
         };
         let before = smoke(ctx, found, &baseline);
         let after = smoke(ctx, found, &layout.version_dir);
+        // A line without a file name could come from any module this apply changed.
+        let mut changed: Vec<String> = plan
+            .file_changes
+            .iter()
+            .map(|(rel, _, _)| rel)
+            .filter(|rel| rel.starts_with(found.shell.name()) && is_fragment(rel))
+            .map(|rel| module_of(rel))
+            .collect();
+        changed.dedup();
+        let suspects = match changed.as_slice() {
+            [] => "unknown module".to_string(),
+            [one] => format!("module {one}"),
+            many => format!("one of modules {}", many.join(", ")),
+        };
         match after {
             Smoke::TimedOut => failures.push(format!(
                 "{}: did not finish starting within {}s",
@@ -361,7 +368,7 @@ fn check_and_smoke(
                         .find(|name| line.contains(*name));
                     let who = module
                         .map(|name| format!("module {}", module_of(Path::new(name))))
-                        .unwrap_or_else(|| "unknown module".into());
+                        .unwrap_or_else(|| suspects.clone());
                     failures.push(format!("{} ({who}): {line}", found.shell));
                 }
             }
@@ -377,10 +384,18 @@ fn check_and_smoke(
     }
 }
 
+fn kind_of(rel: &Path) -> Option<&str> {
+    let stem = rel.file_stem()?.to_str()?;
+    stem.rsplit_once('-').map(|(_, kind)| kind)
+}
+
 fn is_raw(rel: &Path) -> bool {
-    rel.file_stem()
-        .and_then(|stem| stem.to_str())
-        .is_some_and(|stem| stem.ends_with("-raw"))
+    kind_of(rel) == Some("raw")
+}
+
+/// A module's fragment, as opposed to a loader such as `env.zsh`.
+fn is_fragment(rel: &Path) -> bool {
+    matches!(kind_of(rel), Some("env" | "alias" | "raw"))
 }
 
 /// `6-0050-ngrok-raw.zsh` -> `ngrok`.
@@ -497,7 +512,9 @@ pub fn plan_eject(ctx: &Context) -> Result<Vec<FileChange>> {
                 ),
                 (Shell::Zsh, ".zshrc") => inline("rc")?,
                 (Shell::Zsh, ".zprofile") => {
-                    std::fs::read_to_string(version.join("zsh/profile.zsh")).unwrap_or_default()
+                    let text = std::fs::read_to_string(version.join("zsh/profile.zsh"))
+                        .unwrap_or_default();
+                    without_header(&text).to_string()
                 }
                 (Shell::Bash, ".bashrc") => format!(
                     "{}if [[ $- == *i* ]]; then\n{}fi\n",
@@ -555,9 +572,15 @@ fn inline(version: &Path, shell: Shell, stage: &str) -> Result<String> {
             continue;
         };
         let path = PathBuf::from(path.replace(r"'\''", "'").replace(r"\'", "'"));
-        out.push_str(&std::fs::read_to_string(&path).map_err(Error::read(&path))?);
+        let text = std::fs::read_to_string(&path).map_err(Error::read(&path))?;
+        out.push_str(without_header(&text));
     }
     Ok(out)
+}
+
+/// Ejected code is the user's to edit, so the "generated" notice goes.
+fn without_header(text: &str) -> &str {
+    text.strip_prefix(render::HEADER).unwrap_or(text)
 }
 
 pub fn eject(ctx: &Context, changes: &[FileChange]) -> Result<()> {
@@ -657,6 +680,8 @@ mod tests {
         );
         assert!(is_raw(Path::new("zsh/6-0050-ngrok-raw.zsh")));
         assert!(!is_raw(Path::new("zsh/0-0050-path-env.zsh")));
+        assert!(is_fragment(Path::new("zsh/0-0050-path-env.zsh")));
+        assert!(!is_fragment(Path::new("zsh/env.zsh")));
     }
 
     #[test]
