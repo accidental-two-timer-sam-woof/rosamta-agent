@@ -28,6 +28,29 @@ pub fn date_time(secs: u64) -> String {
     format!("{} {:02}:{:02} UTC", date(secs), minutes / 60, minutes % 60)
 }
 
+/// Local `(YYYY-MM-DD, HH:MM)` for a Unix time, for showing to the user.
+pub fn local(secs: u64) -> (String, String) {
+    let time = secs as libc::time_t;
+    // SAFETY: an all-zero `tm` is valid, and `localtime_r` only writes into it.
+    let mut tm: libc::tm = unsafe { std::mem::zeroed() };
+    if unsafe { libc::localtime_r(&time, &mut tm) }.is_null() {
+        let minutes = secs % 86_400 / 60;
+        return (
+            date(secs),
+            format!("{:02}:{:02}", minutes / 60, minutes % 60),
+        );
+    }
+    (
+        format!(
+            "{:04}-{:02}-{:02}",
+            tm.tm_year + 1900,
+            tm.tm_mon + 1,
+            tm.tm_mday
+        ),
+        format!("{:02}:{:02}", tm.tm_hour, tm.tm_min),
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
