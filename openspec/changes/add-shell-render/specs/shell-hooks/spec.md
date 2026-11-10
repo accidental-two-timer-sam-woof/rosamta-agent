@@ -7,7 +7,7 @@
 ## ADDED Requirements
 
 ### Requirement: Hook locations
-rosamta SHALL 在下列位置安裝 hook：sh 為 `~/.profile`；bash 為 `~/.bashrc` 與 login 時實際讀取的 profile 檔；zsh 為 `$ZDOTDIR` 下的 `.zshenv`、`.zshrc`，macOS 另加 `.zprofile`；fish 為 fish 設定目錄下 `conf.d/rosamta.fish` 這個獨立檔案。
+rosamta SHALL 在下列位置安裝 hook：sh 為 `~/.profile`；bash 為 `~/.bashrc` 與 login 時實際讀取的 profile 檔；zsh 為 `$ZDOTDIR` 下的 `.zshenv`、`.zshrc` 與 `.zprofile`；fish 為 fish 設定目錄下 `conf.d/rosamta.fish` 這個獨立檔案。
 
 #### Scenario: zsh with ZDOTDIR
 - **WHEN** 使用者在 `~/.zshenv` 把 `ZDOTDIR` 設為 `~/.config/zsh`
