@@ -12,6 +12,9 @@ review = "查看差異"
 
 [problem]
 publish_blocked = "推送受阻：{reason}"
+publish_failed = "推送失敗：{reason}"
+pull_blocked = "拉取受阻：{reason}"
+pull_failed = "拉取失敗：{reason}"
 conflict = "拉取中止，這台與其他主機都修改了：{files}"
 apply_failed = "新設定沒有套用：{reason}"
 invalid = "repo 中有格式錯誤的檔案：{reason}"
