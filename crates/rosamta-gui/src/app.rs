@@ -57,12 +57,25 @@ pub struct Rosamta {
     /// The host ID last put into `host_id`, so a new one replaces what is typed.
     pub shown_host_id: Option<String>,
     fingerprint: u64,
+    /// Bumped per request, so only the newest snapshot or preview is shown.
+    reloads: u64,
+    previews: u64,
+    /// An action finished; `busy` ends when the snapshot after it is shown.
+    settling: bool,
+    /// The last queue refresh problem shown, so it is not shown on every focus.
+    refresh_problem: Option<String>,
+    /// Reading the login shell's environment failed; shown once.
+    environment_error: Option<String>,
     _poll: Task<()>,
     _subscriptions: Vec<Subscription>,
 }
 
 impl Rosamta {
-    pub fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
+    pub fn new(
+        environment_error: Option<String>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Self {
         let search = cx.new(|cx| InputState::new(window, cx).placeholder(t("modules.search")));
         let tag = cx.new(|cx| InputState::new(window, cx));
         let host_id = cx.new(|cx| InputState::new(window, cx));
@@ -79,8 +92,16 @@ impl Rosamta {
                 }
             }),
             cx.subscribe_in(&host_id, window, |this, _, event, window, cx| {
-                if matches!(event, InputEvent::PressEnter { .. } | InputEvent::Blur) {
+                // Enter only: renaming commits to the repo, so not on leaving the field.
+                if matches!(event, InputEvent::PressEnter { .. }) {
                     this.rename(window, cx);
+                }
+            }),
+            // Without the background service, new rc file content shows up
+            // when the app is opened or brought back.
+            cx.observe_window_activation(window, |this, window, cx| {
+                if window.is_window_active() {
+                    this.refresh_queue(window, cx);
                 }
             }),
         ];
@@ -113,25 +134,64 @@ impl Rosamta {
             url,
             shown_host_id: None,
             fingerprint: 0,
+            reloads: 0,
+            previews: 0,
+            settling: false,
+            refresh_problem: None,
+            environment_error,
             _poll: poll,
             _subscriptions: subscriptions,
         };
         this.open_urls(cx);
-        this.reload(cx);
+        this.refresh_queue(window, cx);
         this
     }
 
     /// Read everything again in the background, then show it.
     pub fn reload(&mut self, cx: &mut Context<Self>) {
+        self.reloads += 1;
+        let request = self.reloads;
         cx.spawn(async move |this, cx| {
             let snap = cx.background_spawn(async { state::load() }).await;
-            this.update(cx, |this, cx| this.show(snap, cx)).ok();
+            this.update(cx, |this, cx| {
+                if this.reloads == request {
+                    this.show(snap, cx);
+                }
+            })
+            .ok();
+        })
+        .detach();
+    }
+
+    /// Queue what changed in rc files, as `rsmt review` does, then reload.
+    fn refresh_queue(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        cx.spawn_in(window, async move |this, cx| {
+            let result = cx
+                .background_spawn(async {
+                    Core::from_env().and_then(|core| actions::refresh(&core))
+                })
+                .await;
+            this.update_in(cx, |this, window, cx| {
+                if let Some(err) = this.environment_error.take() {
+                    window.push_notification(Notification::warning(err), cx);
+                }
+                let problem = result.unwrap_or_else(|err| Some(err.to_string()));
+                if let Some(text) = problem.as_ref().filter(|_| problem != this.refresh_problem) {
+                    window.push_notification(Notification::error(text.clone()), cx);
+                }
+                this.refresh_problem = problem;
+                this.reload(cx);
+            })
+            .ok();
         })
         .detach();
     }
 
     fn show(&mut self, snap: Snapshot, cx: &mut Context<Self>) {
         self.snap = snap;
+        if std::mem::take(&mut self.settling) {
+            self.busy = false;
+        }
         let item = |id| {
             self.snap
                 .queue
@@ -140,11 +200,13 @@ impl Rosamta {
         };
         let selected = self.selected.and_then(item).map(|item| item.id);
         let selected = selected.or_else(|| self.snap.queue.first().map(|item| item.id));
-        if selected != self.selected || self.detail.is_none() {
+        if selected != self.selected {
             self.selected = selected;
+            self.scope = Scope::Host;
             self.detail = None;
-            self.load_detail(cx);
         }
+        // The item may have changed underneath, or what accepting it writes.
+        self.load_detail(cx);
         cx.notify();
     }
 
@@ -176,12 +238,14 @@ impl Rosamta {
             return;
         };
         let scope = self.scope;
+        self.previews += 1;
+        let request = self.previews;
         cx.spawn(async move |this, cx| {
             let detail = cx
                 .background_spawn(async move { pages::review::detail(&item, scope) })
                 .await;
             this.update(cx, |this, cx| {
-                if this.selected == Some(id) && this.scope == scope {
+                if this.previews == request {
                     this.detail = Some(detail);
                     cx.notify();
                 }
@@ -191,12 +255,13 @@ impl Rosamta {
         .detach();
     }
 
-    /// Run a write in the background; show its error, then read everything again.
+    /// Run a write in the background; show its error or warning, then read
+    /// everything again. Buttons wait until the new snapshot is shown.
     pub fn run(
         &mut self,
         window: &mut Window,
         cx: &mut Context<Self>,
-        action: impl FnOnce(&Core) -> rosamta_core::Result<()> + Send + 'static,
+        action: impl FnOnce(&Core) -> actions::Done + Send + 'static,
     ) {
         if self.busy {
             return;
@@ -208,11 +273,18 @@ impl Rosamta {
                 .background_spawn(async move { Core::from_env().and_then(|core| action(&core)) })
                 .await;
             this.update_in(cx, |this, window, cx| {
-                this.busy = false;
-                if let Err(err) = result {
-                    window.push_notification(Notification::error(err.to_string()), cx);
+                match result {
+                    Ok(None) => {}
+                    Ok(Some(warning)) => {
+                        window.push_notification(Notification::warning(warning), cx)
+                    }
+                    Err(err) => {
+                        window.push_notification(Notification::error(err.to_string()), cx);
+                        // Put back what is saved, such as a host ID that was refused.
+                        this.shown_host_id = None;
+                    }
                 }
-                this.detail = None;
+                this.settling = true;
                 this.reload(cx);
             })
             .ok();
@@ -222,7 +294,7 @@ impl Rosamta {
 
     pub fn add_tag(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let tag = self.tag.read(cx).value().trim().to_string();
-        if tag.is_empty() {
+        if tag.is_empty() || self.busy {
             return;
         }
         self.tag
