@@ -5,6 +5,7 @@
 //! changed while the repo stayed is written back to the repo (links always,
 //! copies by the adopt policy); both changed is a conflict nobody overwrites.
 
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 use serde::Serialize;
@@ -156,9 +157,20 @@ fn wait(path: &Path, action: Action, local: String, repo: String) -> Planned {
 /// Work out what deploying would do, without writing anything.
 pub fn plan(ctx: &Context) -> Result<Vec<Planned>> {
     let repo = ctx.paths.repo();
-    let manifest = super::load(&repo)?;
+    let (manifest, broken) = super::usable(&repo)?;
     let host = host::load(&ctx.paths.host_config())?;
-    let selected = super::select(&manifest, &HostFacts::current(&host));
+    let facts = HostFacts::current(&host);
+    let selected = super::select(&manifest, &facts);
+    // A path with a broken declaration for this host is neither deployed
+    // nor released: fixing the declaration picks up where it was.
+    let mut failed: BTreeMap<PathBuf, String> = BTreeMap::new();
+    for (entry, problem) in broken
+        .into_iter()
+        .filter(|(entry, _)| entry.when.matches(&facts))
+    {
+        let path = super::clean(&entry.path).unwrap_or_else(|| PathBuf::from(&entry.path));
+        failed.entry(path).or_insert(problem);
+    }
     let env = Env {
         ctx,
         repo,
@@ -166,7 +178,18 @@ pub fn plan(ctx: &Context) -> Result<Vec<Planned>> {
         deployed: state::load(ctx.paths.state())?,
     };
     let mut out = Vec::new();
-    for (path, choice) in &selected {
+    for (path, problem) in &failed {
+        out.push(step(
+            path,
+            Action::Failed,
+            Some(problem.clone()),
+            Work::Nothing,
+        ));
+    }
+    for (path, choice) in selected
+        .iter()
+        .filter(|(path, _)| !failed.contains_key(*path))
+    {
         let planned = match choice {
             Choice::Duplicate(count) => step(
                 path,
@@ -181,7 +204,7 @@ pub fn plan(ctx: &Context) -> Result<Vec<Planned>> {
         out.push(planned);
     }
     for (path, record) in &env.deployed.entries {
-        if !selected.contains_key(path) {
+        if !selected.contains_key(path) && !failed.contains_key(path) {
             out.push(plan_release(&env, path, record));
         }
     }

@@ -7,7 +7,7 @@
 ## ADDED Requirements
 
 ### Requirement: Explicit declarations
-每個 dotfile SHALL 在 repo 的 `dotfiles.toml` 中以一筆 `[[dotfile]]` 宣告，包含 `path`（相對於家目錄）與可選的 `source`（相對於 repo，預設 `home/<path>`）、`deploy`（`link`、`copy`、`template`，預設 `link`）、`permissions`（八進位字串）、`encrypted` 與 `when`。沒有宣告的檔案 SHALL 不被部署。`rsmt validate` SHALL 回報格式錯誤、不存在的來源、互相包含的路徑，以及搭配 `link` 的 `encrypted`。
+每個 dotfile SHALL 在 repo 的 `dotfiles.toml` 中以一筆 `[[dotfile]]` 宣告，包含 `path`（相對於家目錄）與可選的 `source`（相對於 repo，預設 `home/<path>`）、`deploy`（`link`、`copy`、`template`，預設 `link`）、`permissions`（八進位字串）、`encrypted` 與 `when`。沒有宣告的檔案 SHALL 不被部署。`rsmt validate` SHALL 回報格式錯誤、不存在的來源、互相包含的路徑、shell 的啟動檔（例如 `.zshrc`，shell 設定由 module 負責），以及搭配 `link` 的 `encrypted`。有問題的宣告 SHALL 只讓該路徑不部署，也不釋放它先前部署的內容；其他 dotfile 照常部署。
 
 #### Scenario: Undeclared file
 - **WHEN** repo 的 `home/` 中有 `.config/foo`，但 `dotfiles.toml` 沒有它的宣告
@@ -71,7 +71,7 @@
 - **THEN** 部署出去的檔案權限為 0600
 
 ### Requirement: Add and forget
-`rsmt add <path>...` SHALL 把家目錄中的檔案或目錄移進 repo 的 `home/`、寫入宣告並部署；`--copy` 以 copy 部署，`--encrypt` 加密並以 copy 部署。沒有群組與其他人權限的檔案 SHALL 自動記錄 `permissions`。內容看起來像秘密、又沒有 `--encrypt` 時 SHALL 拒絕。`rsmt forget <path>` SHALL 移除該路徑的宣告與 repo 中的內容，並把 symlink 換成內容相同的一般檔案。兩者各建立一個 commit 並依推送偏好推送。
+`rsmt add <path>...` SHALL 把家目錄中的檔案或目錄移進 repo 的 `home/`、寫入宣告並部署；`--copy` 以 copy 部署，`--encrypt` 加密並以 copy 部署。沒有群組與其他人權限的檔案 SHALL 自動記錄 `permissions`。內容看起來像秘密、又沒有 `--encrypt` 時 SHALL 拒絕；空目錄 SHALL 被拒絕，因為 git 不保存空目錄。`rsmt forget <path>` SHALL 移除該路徑的宣告與 repo 中的內容，並把 symlink 換成內容相同的一般檔案。兩者各建立一個 commit 並依推送偏好推送。
 
 #### Scenario: Add a directory
 - **WHEN** 使用者執行 `rsmt add ~/.config/ghostty`
@@ -94,3 +94,14 @@
 #### Scenario: Template before support
 - **WHEN** `dotfiles.toml` 有一筆 `deploy = "template"` 的宣告，使用者執行 `rsmt apply`
 - **THEN** 輸出指出該路徑尚不支援 template 部署，其他 dotfile 照常部署
+
+### Requirement: Shell startup files are not dotfiles
+`rsmt add` SHALL 拒絕 shell 的啟動檔，以及包含啟動檔的目錄（例如 `~/.config/fish`），並說明 shell 設定應放在 module 中。
+
+#### Scenario: Add .zshrc
+- **WHEN** 使用者執行 `rsmt add ~/.zshrc`
+- **THEN** 指令說明 `.zshrc` 是 shell 的啟動檔並以 2 結束，repo 不變
+
+#### Scenario: One broken declaration
+- **WHEN** 另一台 host 加入的 dotfile 來源在本機不存在，使用者執行 `rsmt apply`
+- **THEN** 該路徑回報錯誤，其他 dotfile 照常部署，指令以 1 結束
