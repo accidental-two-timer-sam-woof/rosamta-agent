@@ -3,6 +3,7 @@
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Component, Path, PathBuf};
 
+use super::state::Deployed;
 use super::tree::{self, Content};
 use super::{MANIFEST, crypt, deploy, review, state};
 use crate::apply::Context;
@@ -232,4 +233,46 @@ pub fn forget(ctx: &Context, path: &Path) -> Result<PathBuf> {
     sync::commit_scanned(ctx, &changed, Some(&format!("forget(home): {name}")))?;
     deploy::deploy(ctx)?;
     Ok(rel)
+}
+
+/// Deployed targets that are rosamta's links: each target with the repo
+/// source it shows.
+fn our_links(ctx: &Context, deployed: &Deployed) -> Vec<(PathBuf, PathBuf)> {
+    let repo = ctx.paths.repo();
+    deployed
+        .entries
+        .iter()
+        .filter(|(_, record)| record.deploy == Deploy::Link)
+        .filter_map(|(rel, record)| {
+            let target = ctx.home.join(rel);
+            let source = repo.join(&record.source);
+            (tree::link_of(&target)? == source).then_some((target, source))
+        })
+        .collect()
+}
+
+/// Stop tracking what was deployed, and drop its review items.
+fn forget_deployed(ctx: &Context) -> Result<()> {
+    state::save(ctx.paths.state(), &Deployed::default())?;
+    review::sync_queue(ctx, Vec::new())
+}
+
+/// `rsmt eject`: each link becomes a regular copy of what it shows, so the
+/// home works without the repo. Returns the targets that were links.
+pub fn eject(ctx: &Context) -> Result<Vec<PathBuf>> {
+    let links = our_links(ctx, &state::load(ctx.paths.state())?);
+    for (target, source) in &links {
+        tree::put(Content::Tree(source), target)?;
+    }
+    forget_deployed(ctx)?;
+    Ok(links.into_iter().map(|(target, _)| target).collect())
+}
+
+/// Before `rsmt restore --original`: remove rosamta's links, so putting the
+/// original files back never writes through them into the repo.
+pub fn unlink(ctx: &Context) -> Result<()> {
+    for (target, _) in our_links(ctx, &state::load(ctx.paths.state())?) {
+        tree::remove(&target)?;
+    }
+    forget_deployed(ctx)
 }

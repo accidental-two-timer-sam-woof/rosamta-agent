@@ -33,7 +33,7 @@
 
 ## 6. 停止使用
 
-- [ ] 6.1 `rsmt eject` 把 link 換成一般檔案並清除部署紀錄；`rsmt restore --original` 還原 dotfile 目標（含目錄），確認還原後與部署前相同
+- [x] 6.1 `rsmt eject` 把 link 換成一般檔案並清除部署紀錄；`rsmt restore --original` 還原 dotfile 目標（含目錄），確認還原後與部署前相同
 
 ## 7. 背景服務
 

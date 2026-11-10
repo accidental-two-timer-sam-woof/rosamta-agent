@@ -211,9 +211,10 @@ pub fn eject(json: bool, yes: bool) -> Result<ExitCode> {
     if !confirm(json, yes, &changes)? {
         return Ok(ExitCode::SUCCESS);
     }
-    apply::eject(&ctx, &changes)?;
+    let released = apply::eject(&ctx, &changes)?;
     let disabled = service::disable(&ctx.paths)?;
-    let paths: Vec<_> = changes.into_iter().map(|change| change.path).collect();
+    let mut paths: Vec<_> = changes.into_iter().map(|change| change.path).collect();
+    paths.extend(released);
     report_paths(json, "Ejected", &paths);
     if disabled && !json {
         println!("The background service is disabled");

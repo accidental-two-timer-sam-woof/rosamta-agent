@@ -309,6 +309,57 @@ fn restore_original_removes_new_links() {
     );
 }
 
+#[test]
+fn eject_leaves_regular_files() {
+    let home = Home::new("ask");
+    home.repo_write("home/.config/nvim/init.lua", "vim.o.number = true\n");
+    home.repo_write("home/.npmrc", "save-exact = true\n");
+    home.repo_write(
+        "dotfiles.toml",
+        "[[dotfile]]\npath = \".config/nvim\"\n\n[[dotfile]]\npath = \".npmrc\"\ndeploy = \"copy\"\n",
+    );
+    home.deploy();
+    let nvim = home.at(".config/nvim");
+    assert!(nvim.symlink_metadata().unwrap().is_symlink());
+
+    let released = dotfiles::manage::eject(&home.ctx).unwrap();
+
+    assert_eq!(released, std::slice::from_ref(&nvim));
+    assert!(nvim.symlink_metadata().unwrap().is_dir());
+    assert_eq!(read(&nvim.join("init.lua")), "vim.o.number = true\n");
+    assert_eq!(read(&home.at(".npmrc")), "save-exact = true\n");
+    let deployed = dotfiles::state::load(home.ctx.paths.state()).unwrap();
+    assert!(deployed.entries.is_empty());
+}
+
+#[test]
+fn restore_original_puts_targets_back_without_touching_the_repo() {
+    let home = Home::new("ask");
+    home.repo_write("home/.config/nvim/init.lua", "repo\n");
+    home.repo_write("home/.vimrc", "repo\n");
+    home.repo_write(
+        "dotfiles.toml",
+        "[[dotfile]]\npath = \".config/nvim\"\n\n[[dotfile]]\npath = \".vimrc\"\n",
+    );
+    // Identical, so deploying takes it over without a conflict.
+    write(&home.at(".vimrc"), "repo\n");
+    home.deploy();
+    assert!(home.at(".vimrc").symlink_metadata().unwrap().is_symlink());
+
+    rosamta_core::apply::restore_original(&home.ctx).unwrap();
+
+    // `.config/nvim` did not exist; `.vimrc` was a regular file.
+    assert!(home.at(".config/nvim").symlink_metadata().is_err());
+    let vimrc = home.at(".vimrc");
+    assert!(!vimrc.symlink_metadata().unwrap().is_symlink());
+    assert_eq!(read(&vimrc), "repo\n");
+    assert_eq!(
+        read(&home.repo().join("home/.config/nvim/init.lua")),
+        "repo\n"
+    );
+    assert_eq!(read(&home.repo().join("home/.vimrc")), "repo\n");
+}
+
 mod review {
     use super::*;
     use rosamta_core::adopt::{self, Scope};
