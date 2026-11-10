@@ -9,3 +9,5 @@ repository.workspace = true
 # Pinned exactly: upgrades are separate changes (ADR 0005).
 gpui-kit = "=0.9.1"
 rosamta-core.workspace = true
+toml = "1.2.1"
+toml_edit = "0.25.19"
