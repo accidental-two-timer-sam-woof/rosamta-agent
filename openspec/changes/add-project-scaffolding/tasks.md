@@ -16,14 +16,15 @@
 - [x] 3.1 新增 `ci.yml`（fmt、clippy、test、cargo-deny；Ubuntu 與 macOS 都在每個 PR 上執行），確認在一個測試 PR 上全部通過
 - [x] 3.2 新增各發行版的 Dockerfile 與 `tests/docker/run.sh`，確認每個映像都能印出 sh、bash、zsh、fish 的版本（Rocky 8 只有 sh 與 bash），本機 OrbStack 與 CI 都要通過
 - [x] 3.3 把 Docker 矩陣加進 `ci.yml`，確認 musl 靜態執行檔掛載進容器後能執行
-- [ ] 3.4 新增 `.github/dependabot.yml`（排除 `gpui-kit`、`gpui-component` 與 `gpui-pre*`），推上 GitHub 後確認 repo 的 Dependabot 設定頁沒有錯誤，且第一次排程有開出 PR 或回報已是最新
+- [x] 3.4 新增 `.github/dependabot.yml`（排除 `gpui-kit`、`gpui-component` 與 `gpui-pre*`），推上 GitHub 後確認 repo 的 Dependabot 設定頁沒有錯誤，且第一次排程有開出 PR 或回報已是最新
 
 ## 4. Release
 
-- [ ] 4.1 新增 `release.yml` 的建置與打包步驟（macOS universal、Linux x86_64／aarch64、deb、rpm、tarball），確認 `workflow_dispatch` dry-run 產出全部檔案
-- [ ] 4.2 確認 deb 與 rpm 在對應的 Docker 映像中安裝後，`rosamta` 與 `rsmt` 都能執行
+- [x] 4.1 新增 `release.yml` 的建置與打包步驟（macOS universal、Linux x86_64／aarch64、deb、rpm、tarball），確認 `workflow_dispatch` dry-run 產出全部檔案
+- [x] 4.2 確認 deb 與 rpm 在對應的 Docker 映像中安裝後，`rosamta` 與 `rsmt` 都能執行
 - [ ] 4.3 加入 macOS 簽章、notarization 與 staple 步驟，在使用者設定好 secrets 後以測試 tag 驗證 `spctl --assess` 通過
 - [ ] 4.4 加入 Homebrew tap PR 與 AUR 推送步驟，對測試用的 tap repo 驗證會產生正確的 cask PR
+- [ ] 4.5 AUR 開放註冊後建立帳號、設定 `AUR_SSH_PRIVATE_KEY`、`AUR_USERNAME` 與 `AUR_EMAIL`，以測試 tag 驗證 `rosamta-bin` 推送成功；在那之前 AUR job 會跳過
 
 ## 5. 安裝程式 fixture
 

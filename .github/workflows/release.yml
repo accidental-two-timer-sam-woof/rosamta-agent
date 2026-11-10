@@ -79,8 +79,12 @@ jobs:
           dmg="dist/rosamta-${VERSION}-macos-universal.dmg"
           codesign --force --timestamp --sign "${SIGN_IDENTITY}" "${dmg}"
           printf '%s' "${NOTARY_KEY}" | base64 --decode > "${RUNNER_TEMP}/notary.p8"
-          xcrun notarytool submit "${dmg}" --key "${RUNNER_TEMP}/notary.p8" \
-            --key-id "${NOTARY_KEY_ID}" --issuer "${NOTARY_ISSUER}" --wait
+          auth=(--key "${RUNNER_TEMP}/notary.p8" --key-id "${NOTARY_KEY_ID}" --issuer "${NOTARY_ISSUER}")
+          result=$(xcrun notarytool submit "${dmg}" "${auth[@]}" --wait --output-format json)
+          if [ "$(jq -r .status <<<"${result}")" != Accepted ]; then
+            xcrun notarytool log "$(jq -r .id <<<"${result}")" "${auth[@]}"
+            exit 1
+          fi
           xcrun stapler staple "${dmg}"
           spctl --assess --type open --context context:primary-signature -v "${dmg}"
 
@@ -108,16 +112,18 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends gcc g++ pkg-config libfontconfig-dev libwayland-dev libxkbcommon-x11-dev libx11-xcb-dev libzstd-dev
-      - run: pip install --break-system-packages ziglang
+      # Tool versions are pinned to the ones the last dry run used.
+      - run: pip install --break-system-packages ziglang==0.17.1
       - run: rustup toolchain install
-      - run: cargo install --locked cargo-zigbuild cargo-deb cargo-generate-rpm
+      - run: cargo install --locked cargo-zigbuild@0.24.1 cargo-deb@3.8.0 cargo-generate-rpm@0.21.1
       # Link against glibc 2.28 so the packages install on every distro in tests/docker.
       - run: cargo zigbuild --release --locked --workspace --target "${TARGET}.2.28"
         env:
           # The runner's shared libraries reference newer glibc; the target system supplies its own copies.
           RUSTFLAGS: -C link-arg=-Wl,--allow-shlib-undefined
       - run: cargo deb --no-build -p rosamta --target "${TARGET}" -o dist/
-      - run: cargo generate-rpm -p crates/rosamta --target "${TARGET}" -o dist/
+      # rpm versions cannot contain "-"; "~" sorts a prerelease before its release.
+      - run: cargo generate-rpm -p crates/rosamta --target "${TARGET}" -o dist/ -s "version = \"$(printf '%s' "${VERSION}" | tr - '~')\""
       - name: Tarball
         run: |
           dir="rosamta-${VERSION}-linux-${{ matrix.arch }}"
@@ -143,7 +149,13 @@ jobs:
         with:
           path: dist
           merge-multiple: true
-      - run: gh release create "${GITHUB_REF_NAME}" dist/* --repo "${GITHUB_REPOSITORY}" --generate-notes
+      - name: Create the release
+        env:
+          VERSION: ${{ needs.version.outputs.version }}
+        run: |
+          flags=()
+          case "${VERSION}" in *-*) flags+=(--prerelease) ;; esac
+          gh release create "${GITHUB_REF_NAME}" dist/* --repo "${GITHUB_REPOSITORY}" --generate-notes "${flags[@]}"
 
   homebrew:
     needs: [version, publish]
@@ -175,6 +187,8 @@ jobs:
 
   aur:
     needs: [version, publish]
+    # Skipped for prereleases, and until an AUR account exists (the placeholder variable holds a single space).
+    if: vars.AUR_USERNAME != '' && vars.AUR_USERNAME != ' ' && !contains(needs.version.outputs.version, '-')
     runs-on: ubuntu-24.04
     env:
       VERSION: ${{ needs.version.outputs.version }}
@@ -190,7 +204,7 @@ jobs:
             -e "s/@SHA256_X86_64@/$(sha256sum "rosamta-${VERSION}-linux-x86_64.tar.gz" | cut -d ' ' -f 1)/" \
             -e "s/@SHA256_AARCH64@/$(sha256sum "rosamta-${VERSION}-linux-aarch64.tar.gz" | cut -d ' ' -f 1)/" \
             packaging/aur/PKGBUILD.in > PKGBUILD
-      - uses: KSXGitHub/github-actions-deploy-aur@v4
+      - uses: KSXGitHub/github-actions-deploy-aur@v4.2.0
         with:
           pkgname: rosamta-bin
           pkgbuild: ./PKGBUILD
