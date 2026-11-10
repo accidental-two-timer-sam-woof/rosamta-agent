@@ -24,11 +24,15 @@
 - **THEN** 使用者只收到一則通知，說明有三個待處理項目
 
 ### Requirement: Problem notifications
-推送受阻（簽章失敗或偵測到秘密）、拉取衝突、拉取後套用失敗，以及遠端 repo 需要較新版本的 rosamta 時，背景服務 SHALL 各發出一則通知；同一個問題在解決之前 SHALL 不重複通知。
+推送或拉取受阻（簽章失敗、偵測到秘密或遠端拒絕存取）、推送或拉取失敗、拉取衝突、拉取後套用失敗，以及遠端 repo 需要較新版本的 rosamta 時，背景服務 SHALL 各發出一則通知，並說明是推送還是拉取出了問題；同一個問題在解決之前 SHALL 不重複通知。
 
 #### Scenario: Signing blocked
 - **WHEN** 推送因 GPG 簽章失敗而受阻
 - **THEN** 使用者收到一則說明推送受阻與原因的通知，之後的同步不再重複通知同一個原因
+
+#### Scenario: Access refused on pull
+- **WHEN** 拉取時遠端拒絕存取
+- **THEN** 通知說明拉取受阻與原因，而不是推送受阻
 
 ### Requirement: Fallback without notifications
 系統沒有通知服務、或使用者拒絕通知權限時，背景服務 SHALL 不發出通知，只依靠待處理清單與開 shell 時的提醒。

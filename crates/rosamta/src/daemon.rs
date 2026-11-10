@@ -14,40 +14,34 @@ use rosamta_core::{Result, adopt, sync, time};
 use crate::print_json;
 
 pub fn run() -> Result<ExitCode> {
-    let paths = Paths::from_env()?;
-    let _instance = Instance::acquire(paths.state())?;
-    // Before any thread starts: the environment is changed in place.
+    // Before any thread starts: the environment is changed in place. Paths
+    // come after it, since the login shell may set `XDG_STATE_HOME`.
     let environment_error = daemon::adopt_login_environment();
     let ctx = Context::from_env()?;
-    let previous = instance::load(paths.state())
-        .ok()
-        .flatten()
-        .unwrap_or_default();
+    let state = ctx.paths.state().to_path_buf();
+    let _instance = Instance::acquire(&state)?;
+    let previous = instance::load(&state).ok().flatten().unwrap_or_default();
     instance::save(
-        paths.state(),
+        &state,
         &DaemonState {
             pid: std::process::id(),
             started_at: time::now(),
             version: env!("CARGO_PKG_VERSION").into(),
             environment_error,
-            notified: previous.notified,
+            ..previous
         },
     )?;
     let (events, receiver) = mpsc::channel();
     let lang = Lang::system();
     #[cfg(target_os = "macos")]
     if notify::in_app_bundle() {
-        let notifier =
-            notify::UserNotifications::set_up(lang, events.clone(), paths.state().to_path_buf());
+        let notifier = notify::UserNotifications::set_up(lang, events.clone(), state);
         // Notification clicks arrive on the main thread's AppKit loop.
         std::thread::spawn(move || finish(daemon::run(ctx, Box::new(notifier), events, receiver)));
         notify::run_app();
     }
     #[cfg(target_os = "linux")]
-    let notifier: Box<dyn Notifier> = match notify::Desktop::connect(lang, events.clone()) {
-        Some(desktop) => Box::new(desktop),
-        None => Box::new(notify::Silent),
-    };
+    let notifier: Box<dyn Notifier> = Box::new(notify::Desktop::new(lang, events.clone()));
     #[cfg(not(target_os = "linux"))]
     let notifier: Box<dyn Notifier> = {
         let _ = lang;
