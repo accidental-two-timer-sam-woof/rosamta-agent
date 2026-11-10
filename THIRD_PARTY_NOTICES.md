@@ -518,6 +518,7 @@ OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 ## Apache License 2.0
 
 - codespan-reporting 0.13.1
+- minijinja 3.1.0
 - self_cell 0.10.3
 - self_cell 1.3.0
 - unicode-linebreak 0.1.5
@@ -730,6 +731,7 @@ OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 ## Apache License 2.0
 
 - gethostname 1.1.0
+- minijinja 3.1.0
 - ring 0.17.14
 - similar 2.7.0
 - similar 3.2.1
