@@ -20,12 +20,20 @@
 - **WHEN** 推送偏好為「手動」，使用者接受一個接管項目
 - **THEN** repo 多一個 commit，但遠端沒有變化
 
+#### Scenario: Automatic push leaves hand edits alone
+- **WHEN** 推送偏好為「自動」，使用者正在編輯 `modules/zoxide.toml` 且尚未儲存成 commit 時接受一個接管項目
+- **THEN** 遠端收到接管的 commit，`modules/zoxide.toml` 的修改仍未 commit
+
 ### Requirement: Pull
 `rsmt pull` SHALL 取得遠端的變更並以 rebase 合併本機尚未推送的 commit，成功後依 `apply` 的流程套用到本機。
 
 #### Scenario: Another host added a module
 - **WHEN** 另一台 host 推送了一個套用到所有主機的 module，使用者在本機執行 `rsmt pull`
 - **THEN** 本機 repo 包含該 module，新開的 shell 已載入它
+
+#### Scenario: Host that has never applied
+- **WHEN** 使用者以 `rsmt init <url>` 加入 repo 後尚未執行 `rsmt apply`，接著執行 `rsmt pull`
+- **THEN** repo 包含遠端的變更，rc 檔沒有被修改
 
 ### Requirement: Conflicts keep the local state
 拉取時發生 rebase 衝突，rosamta SHALL 中止這次合併，讓 repo、generated script 與 rc 檔維持拉取前的狀態，並回報衝突的檔案。
