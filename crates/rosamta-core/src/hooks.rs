@@ -13,6 +13,7 @@ use std::time::Duration;
 use crate::config::Shell;
 use crate::error::{Error, Result};
 use crate::process::output_with_timeout;
+use crate::render;
 use crate::snapshot::Snapshots;
 
 pub const BEGIN: &str = "# >>> rosamta >>>";
@@ -22,15 +23,13 @@ pub const END: &str = "# <<< rosamta <<<";
 /// still reads `~/.profile`. It is rosamta's, so adoption leaves it alone.
 pub const BASH_PROFILE_SEED: &str = "[ -r \"$HOME/.profile\" ] && . \"$HOME/.profile\"\n";
 
-/// Where the generated scripts live, as each shell computes it at startup.
-/// `ROSAMTA_CURRENT` lets apply's smoke test point a shell at a candidate.
-const POSIX_DIR: &str =
-    "${ROSAMTA_CURRENT:-${XDG_DATA_HOME:-$HOME/.local/share}/rosamta/generated/current}";
-
-/// Facts about this host that decide hook locations.
+/// Facts about this host that decide hook locations and contents.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct HookEnv {
     pub home: PathBuf,
+    /// The `current` link of the generated scripts, written into hooks as is:
+    /// shells may not see the `XDG_DATA_HOME` rsmt saw.
+    pub current: PathBuf,
     /// Where zsh reads `.zshenv`: `$ZDOTDIR` after the global zshenv, or HOME.
     pub zshenv_dir: PathBuf,
     /// Where zsh reads `.zshrc` and `.zprofile`, after `.zshenv` ran.
@@ -40,7 +39,7 @@ pub struct HookEnv {
 
 impl HookEnv {
     /// Ask zsh and fish themselves; fall back to their defaults.
-    pub fn detect(home: &Path, zsh: Option<&Path>, fish: Option<&Path>) -> Self {
+    pub fn detect(home: &Path, current: &Path, zsh: Option<&Path>, fish: Option<&Path>) -> Self {
         let query = |exe: &Path, args: &[&str], zdotdir: Option<&Path>| {
             let mut cmd = std::process::Command::new(exe);
             cmd.args(args)
@@ -81,6 +80,7 @@ impl HookEnv {
             .unwrap_or_else(|| config_home.join("fish"));
         Self {
             home: home.to_path_buf(),
+            current: current.to_path_buf(),
             zshenv_dir,
             zdotdir,
             fish_config,
@@ -124,18 +124,51 @@ fn read(path: &Path) -> Result<Option<String>> {
     }
 }
 
-fn posix_block(shell: Shell, body: &str) -> String {
-    format!("{BEGIN}\n_rosamta=\"{POSIX_DIR}/{shell}\"\n{body}unset _rosamta\n{END}\n")
+/// `current` under HOME as `$HOME/...`, so a block stays right when the rc
+/// file moves to a host with another home directory.
+fn home_relative(env: &HookEnv) -> Option<&Path> {
+    env.current.strip_prefix(&env.home).ok()
+}
+
+/// One stage's block. `ROSAMTA_CURRENT` lets apply's smoke test point a
+/// shell at a candidate; `_rosamta_version`, set by the env loader, keeps
+/// later stages on the version the env stage loaded. The last stage drops it.
+fn posix_block(env: &HookEnv, shell: Shell, body: &str, last: bool) -> String {
+    let (mut dir, rest) = match home_relative(env) {
+        Some(rel) => ("$HOME/".to_string(), rel),
+        None => (String::new(), env.current.as_path()),
+    };
+    for c in rest.display().to_string().chars() {
+        if matches!(c, '"' | '\\' | '`' | '$') {
+            dir.push('\\');
+        }
+        dir.push(c);
+    }
+    let unset = if last {
+        "_rosamta _rosamta_version"
+    } else {
+        "_rosamta"
+    };
+    format!(
+        "{BEGIN}\n_rosamta=\"${{ROSAMTA_CURRENT:-${{_rosamta_version:-{dir}}}}}/{shell}\"\n{body}unset {unset}\n{END}\n"
+    )
 }
 
 fn source_line(file: &str) -> String {
     format!("[ -r \"$_rosamta/{file}\" ] && . \"$_rosamta/{file}\"\n")
 }
 
-fn fish_file() -> String {
+fn fish_file(env: &HookEnv) -> String {
+    let dir = match home_relative(env) {
+        Some(rel) => format!(
+            "\"$HOME\"{}",
+            render::fish_quote(&format!("/{}", rel.display()))
+        ),
+        None => render::fish_quote(&env.current.display().to_string()),
+    };
     format!(
         "{BEGIN}\nset -l __rosamta_dir $ROSAMTA_CURRENT\n\
-         test -n \"$__rosamta_dir\"; or set __rosamta_dir (test -n \"$XDG_DATA_HOME\"; and echo $XDG_DATA_HOME; or echo $HOME/.local/share)/rosamta/generated/current\n\
+         test -n \"$__rosamta_dir\"; or set __rosamta_dir {dir}\n\
          test -r $__rosamta_dir/fish/env.fish; and source $__rosamta_dir/fish/env.fish\n\
          status is-interactive; and test -r $__rosamta_dir/fish/rc.fish; and source $__rosamta_dir/fish/rc.fish\n{END}\n"
     )
@@ -198,7 +231,7 @@ pub fn plan_install(shell: Shell, env: &HookEnv) -> Result<Vec<FileChange>> {
     match shell {
         Shell::Sh => upsert(
             env.home.join(".profile"),
-            posix_block(shell, &source_line("env.sh")),
+            posix_block(env, shell, &source_line("env.sh"), true),
             None,
         )?,
         Shell::Bash => {
@@ -217,30 +250,34 @@ pub fn plan_install(shell: Shell, env: &HookEnv) -> Result<Vec<FileChange>> {
                     "case $- in *i*) [ -r \"$HOME/.bashrc\" ] && . \"$HOME/.bashrc\" ;; esac\n",
                 );
             }
-            upsert(path, posix_block(shell, &body), seed)?;
+            upsert(path, posix_block(env, shell, &body, false), seed)?;
             let rc = format!(
                 "{}case $- in *i*) {};; esac\n",
                 source_line("env.bash"),
                 source_line("rc.bash").trim_end()
             );
-            upsert(env.home.join(".bashrc"), posix_block(shell, &rc), None)?;
+            upsert(
+                env.home.join(".bashrc"),
+                posix_block(env, shell, &rc, true),
+                None,
+            )?;
         }
         Shell::Zsh => {
             upsert(
                 env.zshenv_dir.join(".zshenv"),
-                posix_block(shell, &source_line("env.zsh")),
+                posix_block(env, shell, &source_line("env.zsh"), false),
                 None,
             )?;
             upsert(
                 env.zdotdir.join(".zshrc"),
-                posix_block(shell, &source_line("rc.zsh")),
+                posix_block(env, shell, &source_line("rc.zsh"), true),
                 None,
             )?;
             // The global zprofile may reorder PATH (macOS path_helper) or reset
             // it (Alpine's /etc/profile) after .zshenv ran.
             upsert(
                 env.zdotdir.join(".zprofile"),
-                posix_block(shell, &source_line("profile.zsh")),
+                posix_block(env, shell, &source_line("profile.zsh"), false),
                 None,
             )?;
         }
@@ -248,7 +285,7 @@ pub fn plan_install(shell: Shell, env: &HookEnv) -> Result<Vec<FileChange>> {
             let path = env.fish_config.join("conf.d/rosamta.fish");
             changes.push(FileChange {
                 before: read(&path)?,
-                after: Some(fish_file()),
+                after: Some(fish_file(env)),
                 path,
             });
         }

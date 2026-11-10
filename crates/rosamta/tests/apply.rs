@@ -401,6 +401,99 @@ fn login_zsh_puts_module_path_before_system_path() {
 }
 
 #[test]
+fn hooks_find_the_scripts_without_xdg_data_home() {
+    let home = Home::new();
+    let data = home.root.join("xdata");
+    let rsmt = |args: &[&str]| {
+        let mut cmd = home.cmd("rsmt");
+        cmd.args(args).env("XDG_DATA_HOME", &data);
+        cmd
+    };
+    rsmt(&["init"]).assert().success();
+    let modules = data.join("rosamta/repo/modules");
+    fs::create_dir_all(&modules).unwrap();
+    fs::write(modules.join("basics.toml"), MODULE).unwrap();
+    // A block written before hooks named the directory themselves.
+    let old = format!(
+        "{BEGIN}\n_rosamta=\"${{ROSAMTA_CURRENT:-${{XDG_DATA_HOME:-$HOME/.local/share}}/rosamta/generated/current}}/sh\"\n[ -r \"$_rosamta/env.sh\" ] && . \"$_rosamta/env.sh\"\nunset _rosamta\n# <<< rosamta <<<\n"
+    );
+    fs::write(home.root.join(".profile"), old).unwrap();
+    rsmt(&["apply"]).assert().success();
+    let profile = read(&home, ".profile");
+    assert_eq!(profile.matches(BEGIN).count(), 1, "{profile}");
+    assert!(!profile.contains("XDG_DATA_HOME"), "{profile}");
+
+    let expected = format!("it's {}\n", home.root.display());
+    for argv in sessions("echo \"$ROSAMTA_TEST\"", "echo $ROSAMTA_TEST") {
+        let out = home.shell(&argv);
+        assert_eq!(String::from_utf8_lossy(&out.stdout), expected, "{argv:?}");
+    }
+    // A relative XDG_DATA_HOME is not a place rsmt writes to.
+    let mut argv: Vec<String> = ["env", "XDG_DATA_HOME=xdata", "sh", "-l", "-c"]
+        .map(String::from)
+        .to_vec();
+    argv.push("echo \"$ROSAMTA_TEST\"".into());
+    assert_eq!(String::from_utf8_lossy(&home.shell(&argv).stdout), expected);
+}
+
+/// An apply between `.zshenv` and `.zshrc` (or `.bash_profile` and
+/// `.bashrc`) must not mix two versions in one shell.
+#[test]
+fn every_stage_of_one_shell_loads_the_same_version() {
+    let home = Home::new();
+    home.cmd("rsmt").arg("init").assert().success();
+    let version = |n: &str| {
+        home.write(
+            "modules/v.toml",
+            &format!("[env]\nV = \"{n}\"\n[aliases]\nv = \"echo {n}\"\n"),
+        );
+        apply(&home);
+        fs::read_link(current(&home)).unwrap()
+    };
+    let first = version("1");
+    let second = version("2");
+    let reset = || {
+        fs::remove_file(current(&home)).unwrap();
+        std::os::unix::fs::symlink(&first, current(&home)).unwrap();
+    };
+    let switch = format!(
+        "ln -sfn '{}' '{}'\n",
+        second.display(),
+        current(&home).display()
+    );
+    if has("zsh") {
+        let zshenv = home.root.join(".zshenv");
+        let text = fs::read_to_string(&zshenv).unwrap();
+        fs::write(&zshenv, format!("{text}{switch}")).unwrap();
+        reset();
+        let out = home.shell(&[
+            "zsh".into(),
+            "-i".into(),
+            "-c".into(),
+            "echo $V; alias v".into(),
+        ]);
+        assert_eq!(String::from_utf8_lossy(&out.stdout), "1\nv='echo 1'\n");
+    }
+    if has("bash") {
+        let bashrc = home.root.join(".bashrc");
+        let text = fs::read_to_string(&bashrc).unwrap();
+        fs::write(&bashrc, format!("{switch}{text}")).unwrap();
+        reset();
+        let out = home.shell(&[
+            "bash".into(),
+            "-l".into(),
+            "-i".into(),
+            "-c".into(),
+            "echo $V; alias v".into(),
+        ]);
+        assert_eq!(
+            String::from_utf8_lossy(&out.stdout),
+            "1\nalias v='echo 1'\n"
+        );
+    }
+}
+
+#[test]
 fn shells_start_cleanly_without_the_generated_dir() {
     let home = set_up();
     let baseline: Vec<_> = sessions("exit", "exit")
