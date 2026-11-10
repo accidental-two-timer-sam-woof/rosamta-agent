@@ -4,6 +4,7 @@
 mod common;
 
 use std::fs;
+use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 
 use common::{Home, git_env, has, sessions};
@@ -463,7 +464,221 @@ fn secrets_stay_on_this_host() {
     ]);
     assert_eq!(String::from_utf8_lossy(&out.stdout).trim(), secret);
     assert!(!repo_git(&home, &["log", "-p", "--all"]).contains(secret));
-    assert!(read(&home, ".config/rosamta/local/modules/openai-api-key.toml").contains(secret));
+    let local = ".config/rosamta/local/modules/openai-api-key.toml";
+    assert!(read(&home, local).contains(secret));
+    let mode = fs::metadata(home.root.join(local))
+        .unwrap()
+        .permissions()
+        .mode();
+    assert_eq!(mode & 0o777, 0o600);
+}
+
+/// Shell startup that appends to `.zshrc` once, the way another process
+/// could edit it between rosamta reading the file and writing it.
+const EDITS_ZSHRC: &str = "[ -e \"$HOME/edit-me\" ] && { rm \"$HOME/edit-me\"; echo 'export LATER=1' >> \"$HOME/.zshrc\"; }\n";
+
+#[test]
+fn an_rc_file_edited_after_reading_is_not_overwritten() {
+    if !has("zsh") {
+        return;
+    }
+    let home = hooked(&[(".zshrc", &format!("{EDITS_ZSHRC}{BUN}"))]);
+    // The shells apply starts first, before writing, run the edit.
+    write(&home, "edit-me", "");
+    home.cmd("rsmt")
+        .args(["adopt", "--yes"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("changed"));
+    let zshrc = read(&home, ".zshrc");
+    assert!(
+        zshrc.contains("export LATER=1") && zshrc.contains("BUN_INSTALL"),
+        "{zshrc}"
+    );
+    assert!(adopted(&home).is_empty());
+
+    let out = run(&home, &["adopt", "--yes"]);
+    let bun = out
+        .lines()
+        .find(|line| line.contains("bun.toml"))
+        .and_then(|line| line.strip_prefix("Adopted "))
+        .and_then(|line| line.split(':').next())
+        .unwrap()
+        .to_string();
+    // Now the adopted snippet does the edit.
+    write(&home, "edit-me", "");
+    home.cmd("rsmt")
+        .args(["restore", &bun, "--yes"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("changed"));
+    let zshrc = read(&home, ".zshrc");
+    assert!(
+        zshrc.contains("export LATER=1") && !zshrc.contains("BUN_INSTALL"),
+        "{zshrc}"
+    );
+    assert!(home.repo().join("modules/adopted/bun.toml").exists());
+}
+
+/// The same line in two files: adopting the zsh one leaves `.profile`'s,
+/// since a zsh snippet does nothing for sh.
+#[test]
+fn a_snippet_replaces_only_lines_in_its_own_shells() {
+    if !has("zsh") || !has("sh") {
+        return;
+    }
+    let line = ". \"$HOME/.cargo/env\"\n";
+    let home = hooked(&[(".profile", line), (".zshrc", line), (".cargo/env", "")]);
+    let items = review(&home);
+    let zsh = items
+        .iter()
+        .find(|item| item["file"].as_str().unwrap().ends_with(".zshrc"))
+        .unwrap()["id"]
+        .to_string();
+    run(&home, &["review", "accept", &zsh]);
+    let items = review(&home);
+    assert_eq!(items.len(), 1, "{items:?}");
+    assert!(read(&home, ".profile").contains(line));
+}
+
+/// A module for another host, or one turned off, does not stand in for
+/// this host's lines.
+#[test]
+fn modules_that_do_not_load_here_replace_nothing() {
+    if !has("zsh") {
+        return;
+    }
+    let home = hooked(&[(".zshrc", "export FOO=1\n\nexport BAR=1\n")]);
+    home.write(
+        "modules/adopted/foo.toml",
+        "[when]\nhosts = [\"other\"]\n\n[env]\nFOO = \"1\"\n",
+    );
+    home.write(
+        "modules/adopted/bar.toml",
+        "enabled = false\n\n[env]\nBAR = \"1\"\n",
+    );
+    assert_eq!(review(&home).len(), 2);
+    let zshrc = read(&home, ".zshrc");
+    assert!(zshrc.contains("FOO") && zshrc.contains("BAR"), "{zshrc}");
+}
+
+fn zsh_prints(home: &Home, expr: &str) -> String {
+    let out = home.shell(&[
+        "zsh".into(),
+        "-i".into(),
+        "-c".into(),
+        format!("print -r -- {expr}"),
+    ]);
+    String::from_utf8_lossy(&out.stdout).into_owned()
+}
+
+/// In a late file, an assignment after a snippet still runs after it.
+#[test]
+fn env_after_a_snippet_keeps_its_place() {
+    if !has("zsh") {
+        return;
+    }
+    let zshrc = "eval \"$(echo export FOO=early)\"\n\nexport FOO=late\n";
+    let home = hooked(&[(".zshrc", zshrc)]);
+    assert_eq!(zsh_prints(&home, "$FOO"), "late\n");
+    run(&home, &["adopt", "--yes"]);
+    assert_eq!(zsh_prints(&home, "$FOO"), "late\n");
+}
+
+/// An ignored snippet stays in the file and still changes PATH there, so
+/// a PATH change after it keeps its place too.
+#[test]
+fn an_ignored_snippet_keeps_path_order() {
+    if !has("zsh") {
+        return;
+    }
+    let zshrc =
+        "eval \"$(echo 'export PATH=/opt/a/bin:$PATH')\"\n\nexport PATH=\"/opt/b/bin:$PATH\"\n";
+    let home = hooked(&[(".zshrc", zshrc)]);
+    let items = review(&home);
+    let eval = items
+        .iter()
+        .find(|item| item["text"].as_str().unwrap().starts_with("eval"))
+        .unwrap()["id"]
+        .to_string();
+    run(&home, &["review", "ignore", &eval]);
+    // Only the two entries, after the review notice line.
+    let order = || {
+        let out = zsh_prints(&home, "${(M)path:#/opt/[ab]/bin}");
+        out.lines().last().unwrap_or_default().to_string()
+    };
+    assert_eq!(order(), "/opt/b/bin /opt/a/bin");
+    run(&home, &["adopt", "--yes"]);
+    assert_eq!(order(), "/opt/b/bin /opt/a/bin");
+}
+
+/// A file that is not UTF-8 is left exactly as it is.
+#[test]
+fn files_that_are_not_utf8_are_left_alone() {
+    if !has("zsh") {
+        return;
+    }
+    let home = hooked(&[]);
+    let zlogin = b"export A=1\n# caf\xe9\n".to_vec();
+    fs::write(home.root.join(".zlogin"), &zlogin).unwrap();
+    assert!(review(&home).is_empty());
+    run(&home, &["adopt", "--yes"]);
+    assert_eq!(fs::read(home.root.join(".zlogin")).unwrap(), zlogin);
+    assert!(adopted(&home).is_empty());
+}
+
+fn adoptions_json(home: &Home) -> String {
+    read(home, ".local/state/rosamta/adoptions.json")
+}
+
+/// A commit that fails for a reason other than signing (here a stale
+/// `index.lock`) still leaves the adoption recorded and the warning shown.
+#[test]
+fn a_failed_commit_keeps_the_adoption_record() {
+    if !has("zsh") {
+        return;
+    }
+    let home = hooked(&[(".zshrc", BUN)]);
+    let lock = home.repo().join(".git/index.lock");
+    fs::write(&lock, "").unwrap();
+    home.cmd("rsmt")
+        .args(["adopt", "--yes"])
+        .assert()
+        .success()
+        .stderr(predicate::str::contains("warning: commit failed"));
+    assert!(!read(&home, ".zshrc").contains("BUN_INSTALL"));
+    assert!(adoptions_json(&home).contains("bun.toml"));
+    fs::remove_file(&lock).unwrap();
+    // Re-added content is recognized from the record.
+    let zshrc = read(&home, ".zshrc");
+    fs::write(home.root.join(".zshrc"), format!("{zshrc}{BUN}")).unwrap();
+    assert!(review(&home).is_empty());
+    assert_eq!(read(&home, ".zshrc"), zshrc);
+}
+
+#[test]
+fn a_failed_commit_on_restore_keeps_the_lines() {
+    if !has("zsh") {
+        return;
+    }
+    let home = hooked(&[(".zshrc", BUN)]);
+    let out = run(&home, &["adopt", "--yes"]);
+    let id = out
+        .lines()
+        .find_map(|line| line.strip_prefix("Adopted "))
+        .and_then(|line| line.split(':').next())
+        .unwrap()
+        .to_string();
+    fs::write(home.repo().join(".git/index.lock"), "").unwrap();
+    home.cmd("rsmt")
+        .args(["restore", &id, "--yes"])
+        .assert()
+        .success()
+        .stderr(predicate::str::contains("warning: commit failed"));
+    assert!(!adoptions_json(&home).contains("bun.toml"));
+    // The next review must not take the restored lines out again.
+    run(&home, &["review"]);
+    assert!(read(&home, ".zshrc").contains("BUN_INSTALL"));
 }
 
 #[test]

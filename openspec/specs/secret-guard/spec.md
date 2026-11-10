@@ -17,7 +17,7 @@
 - **THEN** 該段不因變數名稱被標記，因為值不是字面字串
 
 ### Requirement: Secrets stay local
-被標記為疑似秘密的段落 SHALL 存成只在本機生效的 module，位於 rosamta 設定目錄下的 `local/`，不在 repo 內；它 SHALL 照常被 render 並生效，且 SHALL 不出現在任何 commit 中。
+被標記為疑似秘密的段落 SHALL 存成只在本機生效的 module，位於 rosamta 設定目錄下的 `local/`，不在 repo 內，檔案權限為 0600；它 SHALL 照常被 render 並生效，且 SHALL 不出現在任何 commit 中。
 
 #### Scenario: Adopt a secret
 - **WHEN** 使用者接管含有 API key 的段落
