@@ -85,7 +85,7 @@ _Avoid_: target
 把 watched file 裡、hook 以外的新內容轉成 repo 裡的 module，並從 rc 檔移除原行。首次匯入既有 rc 檔也是 Adopt。
 _Avoid_: capture, import, re-add, 收錄
 
-**Adopt policy**（接管策略）:
+**Adopt policy**（接管偏好）:
 偵測到可接管的內容時的處理方式：自動接管、先詢問使用者，或關閉。
 _Avoid_: capture policy, auto-sync
 
@@ -101,7 +101,7 @@ _Avoid_: backup
 把 repo 的變更 commit 並 push 到遠端。
 _Avoid_: upload
 
-**Publish policy**（推送策略）:
+**Publish policy**（推送偏好）:
 Adopt 或編輯之後，要自動 Publish 還是等使用者手動執行。
 
 **Pull**（拉取）:
