@@ -47,11 +47,15 @@ rosamta SHALL 把連續的非空白行切成一段，並把緊接在上方的註
 - **THEN** 產生的片段 module 只套用到 zsh
 
 ### Requirement: Phase from source file
-接管產生的片段 module SHALL 依來源檔決定載入階段：`.profile`、`.bash_profile`、`.bash_login`、`.zshenv`、`.zprofile` 的內容放在 env 階段，其他檔案的內容放在 late 階段，並保留原本在檔案中的先後順序。
+接管產生的片段 module SHALL 依來源檔決定載入階段：`.profile`、`.bash_profile`、`.bash_login`、`.zshenv` 的內容放在 env 階段，`.zprofile` 的內容放在 login 階段，其他檔案的內容放在 late 階段，並保留原本在檔案中的先後順序。
 
 #### Scenario: Two snippets from zshrc
 - **WHEN** 從 `~/.zshrc` 先後接管兩段片段
 - **THEN** 兩者都在 late 階段，且載入順序與原本在檔案中的順序相同
+
+#### Scenario: Homebrew in zprofile on macOS
+- **WHEN** 接管 `~/.zprofile` 中的 `eval "$(/opt/homebrew/bin/brew shellenv)"`
+- **THEN** 新開的 login zsh 中，`/opt/homebrew/bin` 仍排在 `/usr/bin` 之前，與接管前相同
 
 ### Requirement: Path normalization
 接管時 rosamta SHALL 把位於使用者家目錄下的絕對路徑改寫成 `$HOME` 開頭。

@@ -400,6 +400,46 @@ fn restore_puts_one_adoption_back() {
     assert_eq!(read(&home, ".zprofile"), hooked_text);
 }
 
+/// `.zprofile` snippets load where they did: in login zsh, after the
+/// system zprofile (macOS path_helper), so their PATH stays in front.
+#[test]
+fn zprofile_snippets_keep_their_place_in_login_zsh() {
+    if !has("zsh") {
+        return;
+    }
+    let zprofile = "eval \"$(echo 'export PATH=/opt/fakebrew/bin:$PATH')\"\ntypeset -g LOGIN_ONLY=1; export LOGIN_ONLY\n";
+    let home = hooked(&[(".zprofile", zprofile)]);
+    let probe = |login: bool| {
+        let mut argv: Vec<String> = vec!["zsh".into()];
+        if login {
+            argv.push("-l".into());
+        }
+        argv.extend(["-c".into(), "print -r -- \"$LOGIN_ONLY|$PATH\"".into()]);
+        String::from_utf8_lossy(&home.shell(&argv).stdout).into_owned()
+    };
+    let (login, plain) = (probe(true), probe(false));
+    run(&home, &["adopt", "--yes"]);
+    assert!(
+        read(
+            &home,
+            ".local/share/rosamta/repo/modules/adopted/zprofile.toml"
+        )
+        .contains("phase = \"login\"")
+    );
+    assert_eq!(probe(true), login);
+    assert_eq!(probe(false), plain);
+    let path = login.trim().split_once('|').unwrap().1;
+    let entries: Vec<&str> = path.split(':').collect();
+    let at = |entry: &str| entries.iter().position(|seen| *seen == entry);
+    if let Some(system) = at("/usr/bin") {
+        assert!(at("/opt/fakebrew/bin").unwrap() < system, "{path}");
+    }
+    // Eject writes the snippet back into .zprofile.
+    run(&home, &["eject", "--yes"]);
+    fs::remove_dir_all(home.root.join(".local/share/rosamta/generated")).unwrap();
+    assert_eq!(probe(true), login);
+}
+
 #[test]
 fn secrets_stay_on_this_host() {
     if !has("zsh") {

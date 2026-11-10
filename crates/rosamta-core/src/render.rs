@@ -39,6 +39,16 @@ pub fn check(module: &Module) -> Vec<String> {
     if entries.into_iter().any(|entry| entry.trim().is_empty()) {
         problems.push("PATH entries cannot be empty".into());
     }
+    let only_zsh_raw = module.env.is_empty()
+        && module.path.prepend.is_empty()
+        && module.path.append.is_empty()
+        && module.aliases.is_empty()
+        && module.raw.sh.is_none()
+        && module.raw.bash.is_none()
+        && module.raw.fish.is_none();
+    if module.phase == Some(Phase::Login) && !only_zsh_raw {
+        problems.push("phase `login` is only for modules with nothing but `raw.zsh`".into());
+    }
     problems
 }
 
@@ -303,7 +313,10 @@ pub fn render(
                 frag.body.clone(),
             );
         }
-        let (env, rc): (Vec<_>, Vec<_>) = frags.iter().partition(|frag| frag.phase == Phase::Env);
+        let (login, frags): (Vec<_>, Vec<_>) =
+            frags.iter().partition(|frag| frag.phase == Phase::Login);
+        let (env, rc): (Vec<_>, Vec<_>) =
+            frags.into_iter().partition(|frag| frag.phase == Phase::Env);
         files.insert(
             Path::new(shell.name()).join(format!("env.{}", shell.ext())),
             loader(shell, Stage::Env, &env, &dir, layout),
@@ -313,7 +326,10 @@ pub fn render(
             loader(shell, Stage::Rc, &rc, &dir, layout),
         );
         if shell == Shell::Zsh {
-            files.insert(PathBuf::from("zsh/profile.zsh"), zsh_path_order(modules));
+            files.insert(
+                PathBuf::from("zsh/profile.zsh"),
+                zsh_profile(modules, &login, &dir),
+            );
         }
     }
     files
@@ -427,12 +443,17 @@ fn stage_name(stage: Stage) -> &'static str {
     }
 }
 
-/// Put declared PATH entries back after the global zprofile ran after
-/// `.zshenv`: macOS `path_helper` pushes them behind system paths, Alpine's
+/// What `.zprofile` loads in login zsh, after the global zprofile ran after
+/// `.zshenv`: login snippets, then declared PATH entries put back in place.
+/// macOS `path_helper` pushes them behind system paths, Alpine's
 /// `/etc/profile` replaces PATH, and others add entries after them. Prepended
 /// entries move to the front and appended ones to the end, as declared.
-fn zsh_path_order(modules: &[(String, Module)]) -> String {
+fn zsh_profile(modules: &[(String, Module)], login: &[&Fragment], dir: &Path) -> String {
     let mut out = String::from(HEADER);
+    for frag in login {
+        let file = dir.join(frag.file_name(Shell::Zsh)).display().to_string();
+        writeln!(out, ". {}", posix_quote(&file)).unwrap();
+    }
     let zsh: Vec<&Module> = modules
         .iter()
         .map(|(_, module)| module)
@@ -548,6 +569,33 @@ mod tests {
         let modules = vec![("x".into(), module("shells = [\"fish\"]\n[env]\nA = \"1\""))];
         assert!(fragments(&modules, Shell::Bash).is_empty());
         assert_eq!(fragments(&modules, Shell::Fish)[0].body, "set -gx A '1'\n");
+    }
+
+    #[test]
+    fn login_snippets_load_from_zprofile_before_path_order() {
+        let modules = vec![
+            (
+                "brew".to_string(),
+                module("phase = \"login\"\n[raw]\nzsh = \"eval x\""),
+            ),
+            ("bin".to_string(), module("[path]\nprepend = [\"/b\"]")),
+        ];
+        let layout = Layout {
+            version_dir: PathBuf::from("/g/v-1"),
+            version_id: "v-1".into(),
+            profile_log: PathBuf::from("/s/profile.log"),
+            notice: PathBuf::from("/s/notice"),
+        };
+        let files = render(&modules, &[Shell::Zsh], &layout);
+        let profile = &files[Path::new("zsh/profile.zsh")];
+        let snippet = profile.find("brew-raw.zsh").expect("login snippet sourced");
+        assert!(snippet < profile.find("path=(").unwrap(), "{profile}");
+        for loader in ["zsh/env.zsh", "zsh/rc.zsh"] {
+            assert!(!files[Path::new(loader)].contains("brew"), "{loader}");
+        }
+        assert!(check(&modules[0].1).is_empty());
+        let mixed = module("phase = \"login\"\n[env]\nA = \"1\"\n[raw]\nzsh = \"x\"");
+        assert_eq!(check(&mixed).len(), 1);
     }
 
     #[test]

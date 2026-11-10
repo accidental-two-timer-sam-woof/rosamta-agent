@@ -69,7 +69,11 @@
 
 每個接管的 module 的 `order` 是「來源檔的啟動順序 × 1000 ＋ 序號」，讓同一階段內維持原本跨檔案、檔案內的先後順序。
 
-`.zprofile` 的內容改在 env 階段載入後，比系統的 zprofile 更早執行，而系統 zprofile 可能在後面加入其他項目（例如 `~/bin`）。因此 `profile.zsh` 對 append 的項目改為「移到最後」，與 prepend 的「移到最前面」對稱；`add-shell-render` 原本是「不存在時才加到最後」。
+### `.zprofile` 的片段放在 login 階段
+
+login zsh 的順序是 `.zshenv` → 系統的 zprofile → `.zprofile`。若把 `.zprofile` 的片段放在 env 階段，它會在系統 zprofile 之前執行：macOS 上 `eval "$(brew shellenv)"` 會被 `path_helper` 排到 `/usr/bin` 之後。因此新增只供 zsh 片段使用的 login 階段，由 `.zprofile` 的 hook 載入 `profile.zsh`，在系統 zprofile 之後、只在 login zsh 中執行，與接管前相同。`profile.zsh` 先載入 login 片段，再把 module 宣告的 PATH 放回原位，與接管前「使用者內容在前、hook 在檔尾」的順序一致。`Login` 放在 `Phase` 的最後，其他階段在檔名中的編號不變。
+
+結構化的內容仍在 env 階段，並由 `profile.zsh` 移到最前面，所以 login 檔案中只要有任何片段，其中改動 PATH 的段落都保存為片段，避免和片段之間的先後順序改變。系統 zprofile 可能在後面加入其他項目（例如 `~/bin`），因此 `profile.zsh` 對 append 的項目改為「移到最後」，與 prepend 的「移到最前面」對稱；`add-shell-render` 原本是「不存在時才加到最後」。
 
 ### 套用失敗時全部復原
 

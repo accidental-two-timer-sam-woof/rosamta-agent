@@ -609,9 +609,24 @@ pub fn plan_eject(ctx: &Context) -> Result<Vec<FileChange>> {
                 ),
                 (Shell::Zsh, ".zshrc") => inline("rc")?,
                 (Shell::Zsh, ".zprofile") => {
+                    // Login snippets inline; the PATH lines stay as they are.
                     let text = std::fs::read_to_string(version.join("zsh/profile.zsh"))
                         .unwrap_or_default();
-                    without_header(&text).to_string()
+                    let mut out = String::new();
+                    for line in without_header(&text).lines() {
+                        match sourced(line) {
+                            Some(path) => {
+                                let text =
+                                    std::fs::read_to_string(&path).map_err(Error::read(&path))?;
+                                out.push_str(without_header(&text));
+                            }
+                            None => {
+                                out.push_str(line);
+                                out.push('\n');
+                            }
+                        }
+                    }
+                    out
                 }
                 (Shell::Bash, ".bashrc") => format!(
                     "{}if [[ $- == *i* ]]; then\n{}fi\n",
@@ -656,23 +671,24 @@ fn inline(version: &Path, shell: Shell, stage: &str) -> Result<String> {
         .join(format!("{stage}.{}", shell.ext()));
     let loader = std::fs::read_to_string(&loader_path).map_err(Error::read(&loader_path))?;
     let mut out = String::new();
-    // The plain branch lists each fragment as `. '<path>'` (fish: `source '<path>'`).
-    for line in loader.lines() {
-        let quoted = line
-            .trim()
-            .strip_prefix(". ")
-            .or_else(|| line.trim().strip_prefix("source "));
-        let Some(path) = quoted
-            .and_then(|q| q.strip_prefix('\''))
-            .and_then(|q| q.strip_suffix('\''))
-        else {
-            continue;
-        };
-        let path = PathBuf::from(path.replace(r"'\''", "'").replace(r"\'", "'"));
+    for path in loader.lines().filter_map(sourced) {
         let text = std::fs::read_to_string(&path).map_err(Error::read(&path))?;
         out.push_str(without_header(&text));
     }
     Ok(out)
+}
+
+/// The fragment a loader line sources: loaders write `. '<path>'`
+/// (fish: `source '<path>'`).
+fn sourced(line: &str) -> Option<PathBuf> {
+    let line = line.trim();
+    let quoted = line
+        .strip_prefix(". ")
+        .or_else(|| line.strip_prefix("source "))?;
+    let path = quoted.strip_prefix('\'')?.strip_suffix('\'')?;
+    Some(PathBuf::from(
+        path.replace(r"'\''", "'").replace(r"\'", "'"),
+    ))
 }
 
 /// Ejected code is the user's to edit, so the "generated" notice goes.
