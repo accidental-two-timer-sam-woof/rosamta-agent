@@ -45,8 +45,13 @@ pub struct Note {
     pub items: Vec<u32>,
 }
 
-/// `review:3,4` carries the queue IDs through the notification system.
+/// `review:3,4` carries the queue IDs through the notification system. A
+/// problem is named by its text: two shown at once must not replace each
+/// other, while the same one shown again does.
 fn identifier(note: &Note) -> String {
+    if note.items.is_empty() {
+        return format!("problem:{}", note.body);
+    }
     let ids: Vec<String> = note.items.iter().map(u32::to_string).collect();
     format!("review:{}", ids.join(","))
 }
@@ -74,34 +79,59 @@ pub use linux::Desktop;
 
 #[cfg(target_os = "linux")]
 mod linux {
+    use std::sync::{Mutex, OnceLock};
+
+    use notify_rust::{ActionResponse, NotificationHandle};
+
     use super::*;
 
     pub struct Desktop {
         lang: Lang,
-        actions: bool,
         events: Sender<Event>,
+        /// Asked on first use: the notification service may start after
+        /// the daemon does.
+        actions: OnceLock<bool>,
+        /// The review notification still waiting for a click. A newer one
+        /// closes it, so one thread at most waits.
+        waiting: Mutex<Option<NotificationHandle>>,
     }
 
     impl Desktop {
-        /// `None` when no notification service answers on the session bus.
-        pub fn connect(lang: Lang, events: Sender<Event>) -> Option<Self> {
-            let capabilities = notify_rust::get_capabilities().ok()?;
-            Some(Self {
+        pub fn new(lang: Lang, events: Sender<Event>) -> Self {
+            Self {
                 lang,
-                actions: capabilities.iter().any(|cap| cap == "actions"),
                 events,
-            })
+                actions: OnceLock::new(),
+                waiting: Mutex::new(None),
+            }
+        }
+
+        /// Whether the server shows buttons; `None` while no notification
+        /// service answers on the session bus.
+        fn actions(&self) -> Option<bool> {
+            if let Some(actions) = self.actions.get() {
+                return Some(*actions);
+            }
+            let capabilities = notify_rust::get_capabilities().ok()?;
+            Some(
+                *self
+                    .actions
+                    .get_or_init(|| capabilities.iter().any(|cap| cap == "actions")),
+            )
         }
     }
 
     impl Notifier for Desktop {
         fn show(&self, note: &Note) {
+            let Some(actions) = self.actions() else {
+                return;
+            };
             let mut notification = notify_rust::Notification::new();
             notification
                 .appname("rosamta")
                 .summary("rosamta")
                 .body(&note.body);
-            let ask = self.actions && !note.items.is_empty();
+            let ask = actions && !note.items.is_empty();
             if ask {
                 for action in Action::ALL {
                     notification.action(action.id(), &action.label(self.lang));
@@ -110,17 +140,29 @@ mod linux {
             let Ok(handle) = notification.show() else {
                 return;
             };
-            if ask {
-                let ids = items(&identifier(note));
-                let events = self.events.clone();
-                // Blocks until the notification is acted on or closed.
-                std::thread::spawn(move || {
-                    handle.wait_for_action(|id| {
-                        if let Some(action) = Action::from_id(id) {
-                            let _ = events.send(Event::Action(action, ids));
-                        }
-                    })
+            if !ask {
+                return;
+            }
+            let id = handle.id();
+            let ids = items(&identifier(note));
+            let events = self.events.clone();
+            // Blocks until the notification is acted on or closed.
+            std::thread::spawn(move || {
+                let _ = notify_rust::handle_action(id, |response| {
+                    if let ActionResponse::Custom(name) = response
+                        && let Some(action) = Action::from_id(name)
+                    {
+                        let _ = events.send(Event::Action(action, ids));
+                    }
                 });
+            });
+            let previous = self
+                .waiting
+                .lock()
+                .ok()
+                .and_then(|mut waiting| waiting.replace(handle));
+            if let Some(previous) = previous {
+                previous.close();
             }
         }
     }
@@ -268,14 +310,11 @@ mod macos {
             let content = UNMutableNotificationContent::new();
             content.setTitle(&NSString::from_str("rosamta"));
             content.setBody(&NSString::from_str(&note.body));
-            let id = if note.items.is_empty() {
-                format!("problem:{}", crate::time::now())
-            } else {
+            if !note.items.is_empty() {
                 content.setCategoryIdentifier(&NSString::from_str(CATEGORY));
-                identifier(note)
-            };
+            }
             let request = UNNotificationRequest::requestWithIdentifier_content_trigger(
-                &NSString::from_str(&id),
+                &NSString::from_str(&identifier(note)),
                 &content,
                 None,
             );
@@ -322,6 +361,15 @@ mod tests {
         assert_eq!(identifier(&note), "review:3,14");
         assert_eq!(items("review:3,14"), [3, 14]);
         assert!(items("problem:1").is_empty());
+        // Two problems shown at once must not replace each other.
+        let problem = |body: &str| {
+            identifier(&Note {
+                body: body.into(),
+                items: Vec::new(),
+            })
+        };
+        assert_ne!(problem("Pulling failed"), problem("Publishing failed"));
+        assert!(items(&problem("Pulling failed")).is_empty());
         assert_eq!(Action::from_id("ignore"), Some(Action::Ignore));
         assert_eq!(Action::from_id("default"), None);
     }
