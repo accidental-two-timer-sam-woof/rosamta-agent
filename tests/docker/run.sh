@@ -5,6 +5,7 @@
 #   ROSAMTA_TEST_CMD  command to run instead of check.sh
 set -eu
 here=$(cd "$(dirname "$0")" && pwd)
+root=$(cd "${here}/../.." && pwd)
 # Same architecture as the CI runners, so one x86_64 musl build serves every image.
 # Set DOCKER_DEFAULT_PLATFORM=linux/arm64 to run natively on Apple Silicon.
 export DOCKER_DEFAULT_PLATFORM="${DOCKER_DEFAULT_PLATFORM:-linux/amd64}"
@@ -30,7 +31,8 @@ for name in "$@"; do
     continue
   fi
   # shellcheck disable=SC2086 # bin_mount is either empty or two words
-  docker run --rm -v "${here}:/opt/rosamta/tests:ro" ${bin_mount} "rosamta-test:${name}" \
+  # The repo sits at its host path too, for tests that read fixtures from the source tree.
+  docker run --rm -v "${here}:/opt/rosamta/tests:ro" -v "${root}:${root}:ro" ${bin_mount} "rosamta-test:${name}" \
     sh -c "${ROSAMTA_TEST_CMD:-sh /opt/rosamta/tests/check.sh}" || status=1
 done
 exit "${status}"

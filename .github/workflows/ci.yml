@@ -24,11 +24,11 @@ jobs:
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v7
-      - name: Install GPUI build dependencies
+      - name: Install GPUI build dependencies and shells
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update
-          sudo apt-get install -y --no-install-recommends gcc g++ pkg-config libfontconfig-dev libwayland-dev libxkbcommon-x11-dev libx11-xcb-dev libzstd-dev
+          sudo apt-get install -y --no-install-recommends gcc g++ pkg-config libfontconfig-dev libwayland-dev libxkbcommon-x11-dev libx11-xcb-dev libzstd-dev zsh fish
       - name: Install the Metal toolchain
         if: runner.os == 'macOS'
         run: xcrun -f metal || xcodebuild -downloadComponent MetalToolchain
@@ -37,6 +37,9 @@ jobs:
       - run: cargo fmt --all --check
       - run: cargo clippy --workspace --all-targets --locked -- -D warnings
       - run: cargo test --workspace --locked
+      - name: Measure shell startup overhead
+        if: runner.os == 'Linux'
+        run: cargo test --locked -p rosamta --test apply -- --ignored --nocapture
 
   deny:
     runs-on: ubuntu-24.04
@@ -52,12 +55,17 @@ jobs:
       - run: rustup toolchain install && rustup target add x86_64-unknown-linux-musl
       - uses: Swatinem/rust-cache@v2
       - run: cargo build --release --locked -p rosamta --target x86_64-unknown-linux-musl
+      - name: Collect the binaries and test executables
+        run: |
+          mkdir bin
+          cp target/x86_64-unknown-linux-musl/release/rosamta target/x86_64-unknown-linux-musl/release/rsmt bin/
+          cargo test --locked --no-run --target x86_64-unknown-linux-musl -p rosamta-core -p rosamta --message-format json \
+            | jq -r 'select(.profile.test == true and .executable != null) | .executable' \
+            | xargs -I{} cp {} bin/
       - uses: actions/upload-artifact@v7
         with:
           name: rosamta-linux-musl
-          path: |
-            target/x86_64-unknown-linux-musl/release/rosamta
-            target/x86_64-unknown-linux-musl/release/rsmt
+          path: bin/
 
   docker:
     needs: linux-binary
