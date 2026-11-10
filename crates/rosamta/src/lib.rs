@@ -1,5 +1,6 @@
 mod adopt;
 mod commands;
+mod github;
 mod sync;
 
 use std::path::Path;
@@ -32,6 +33,9 @@ enum Command {
     Init {
         /// Git URL of an existing repo to join
         url: Option<String>,
+        /// Create a private GitHub repo with this name, or join <owner>/<name>
+        #[arg(long, value_name = "NAME", conflicts_with = "url")]
+        github: Option<String>,
     },
     /// Check every file in the repo without changing any
     Validate,
@@ -80,6 +84,14 @@ enum Command {
     Pull,
     /// Pull, then publish
     Sync,
+    /// Connect an account that hosts the repo
+    Remote {
+        #[command(subcommand)]
+        remote: RemoteCommand,
+    },
+    /// Hand git the stored GitHub token (git credential helper)
+    #[command(name = "git-credential", hide = true)]
+    GitCredential { operation: String },
     /// Undo one adoption, or put startup files back the way they were before
     /// rosamta changed them
     Restore {
@@ -93,6 +105,23 @@ enum Command {
         #[arg(long)]
         yes: bool,
     },
+}
+
+#[derive(Subcommand)]
+enum RemoteCommand {
+    /// GitHub
+    Github {
+        #[command(subcommand)]
+        action: GithubAction,
+    },
+}
+
+#[derive(Subcommand)]
+enum GithubAction {
+    /// Sign in with a code entered on github.com
+    Login,
+    /// Delete the stored token and the credential helper rosamta set up
+    Logout,
 }
 
 #[derive(Subcommand)]
@@ -156,7 +185,11 @@ fn program_name() -> String {
 
 fn run(cli: &Cli) -> Result<ExitCode> {
     match &cli.command {
-        Command::Init { url } => init(cli.json, url.as_deref()),
+        Command::Init {
+            github: Some(target),
+            ..
+        } => github::init(cli.json, target),
+        Command::Init { url, .. } => init(cli.json, url.as_deref()),
         Command::Validate => run_validate(cli.json),
         Command::Schema { kind } => {
             let kind = match kind {
@@ -186,6 +219,13 @@ fn run(cli: &Cli) -> Result<ExitCode> {
         Command::Publish => sync::publish(cli.json),
         Command::Pull => sync::pull(cli.json),
         Command::Sync => sync::sync(cli.json),
+        Command::Remote {
+            remote: RemoteCommand::Github { action },
+        } => match action {
+            GithubAction::Login => github::login(cli.json),
+            GithubAction::Logout => github::logout(cli.json),
+        },
+        Command::GitCredential { operation } => github::credential(operation),
     }
 }
 
@@ -196,8 +236,19 @@ fn init(json: bool, url: Option<&str>) -> Result<ExitCode> {
         None => repo::init_new(&paths)?,
         Some(url) => repo::join(&paths, url)?,
     };
+    report_init(json, &outcome);
+    if outcome.cloned {
+        // Joining committed this host to the repo's host list.
+        let ctx = rosamta_core::apply::Context::from_env()?;
+        let lock = rosamta_core::adopt::lock(&ctx)?;
+        sync::after_commit(&ctx, &lock, started, json);
+    }
+    Ok(ExitCode::SUCCESS)
+}
+
+fn report_init(json: bool, outcome: &repo::InitOutcome) {
     if json {
-        print_json(&outcome);
+        print_json(outcome);
     } else {
         let verb = if outcome.cloned { "Cloned" } else { "Created" };
         println!("{verb} repo at {}", outcome.repo.display());
@@ -206,13 +257,6 @@ fn init(json: bool, url: Option<&str>) -> Result<ExitCode> {
         }
         println!("Host ID: {}", outcome.host_id);
     }
-    if outcome.cloned {
-        // Joining committed this host to the repo's host list.
-        let ctx = rosamta_core::apply::Context::from_env()?;
-        let lock = rosamta_core::adopt::lock(&ctx)?;
-        sync::after_commit(&ctx, &lock, started, json);
-    }
-    Ok(ExitCode::SUCCESS)
 }
 
 fn run_validate(json: bool) -> Result<ExitCode> {

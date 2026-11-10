@@ -25,6 +25,9 @@ pub enum Error {
     /// Publish or Pull stopped; `sync.json` records why.
     #[error("{0}")]
     Sync(String),
+    /// Signing in to GitHub or calling its API failed.
+    #[error("{0}")]
+    GitHub(String),
 }
 
 impl Error {

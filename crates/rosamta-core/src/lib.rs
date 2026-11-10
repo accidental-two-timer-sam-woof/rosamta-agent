@@ -7,6 +7,7 @@ pub mod edit;
 pub mod error;
 pub mod generated;
 mod git;
+pub mod github;
 pub mod hooks;
 pub mod host;
 pub mod paths;

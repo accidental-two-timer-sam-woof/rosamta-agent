@@ -16,10 +16,10 @@
 ## 3. GitHub 連結
 
 - [ ] 3.1 註冊 rosamta 的 GitHub OAuth App 並啟用 device flow，把 client ID 寫進設定
-- [ ] 3.2 實作 device flow 登入（含逾時、拒絕、`slow_down`），以 mock server 測試各種回應
-- [ ] 3.3 實作 token 儲存（keychain，無 keychain 時 0600 檔案並警告）與 `rsmt remote github logout`，確認登出後 token 消失
+- [x] 3.2 實作 device flow 登入（含逾時、拒絕、`slow_down`），以 mock server 測試各種回應
+- [x] 3.3 實作 token 儲存（keychain，無 keychain 時 0600 檔案並警告）與 `rsmt remote github logout`，確認登出後 token 消失
 - [ ] 3.4 實作 `rsmt init --github <name>` 與 `<owner>/<name>`，以測試帳號確認建立的是 private repo
-- [ ] 3.5 實作 SSH 測試與 HTTPS credential helper（`rosamta git-credential`），確認 `~/.gitconfig` 未被修改
+- [x] 3.5 實作 SSH 測試與 HTTPS credential helper（`rosamta git-credential`），確認 `~/.gitconfig` 未被修改
 
 ## 4. 文件
 

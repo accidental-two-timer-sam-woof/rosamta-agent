@@ -126,7 +126,7 @@ pub struct InitOutcome {
     pub migrated: Option<(u32, u32)>,
 }
 
-fn refuse_existing(repo_dir: &Path) -> Result<()> {
+pub(crate) fn refuse_existing(repo_dir: &Path) -> Result<()> {
     let occupied = std::fs::read_dir(repo_dir).is_ok_and(|mut entries| entries.next().is_some());
     if occupied {
         return Err(Error::Usage(format!(
@@ -177,12 +177,18 @@ pub fn init_new(paths: &Paths) -> Result<InitOutcome> {
 /// `rsmt init <url>`: clone an existing repo and register this host.
 /// Touches no rc file or dotfile until the user applies.
 pub fn join(paths: &Paths, url: &str) -> Result<InitOutcome> {
-    join_with(paths, url, CURRENT_FORMAT, MIGRATIONS)
+    join_with(paths, url, &[], CURRENT_FORMAT, MIGRATIONS)
+}
+
+/// [`join`] with `git -c` settings for the clone, such as a credential helper.
+pub(crate) fn join_with_config(paths: &Paths, url: &str, config: &[&str]) -> Result<InitOutcome> {
+    join_with(paths, url, config, CURRENT_FORMAT, MIGRATIONS)
 }
 
 pub(crate) fn join_with(
     paths: &Paths,
     url: &str,
+    config: &[&str],
     target: u32,
     migrations: &[Migration],
 ) -> Result<InitOutcome> {
@@ -191,7 +197,7 @@ pub(crate) fn join_with(
     if let Some(parent) = repo_dir.parent() {
         std::fs::create_dir_all(parent).map_err(Error::write(parent))?;
     }
-    git::clone(url, &repo_dir, &[])?;
+    git::clone(url, &repo_dir, config)?;
     or_remove(
         &repo_dir,
         (|| {
