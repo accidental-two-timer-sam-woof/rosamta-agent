@@ -18,8 +18,10 @@ pub struct Hit {
     pub rule: &'static str,
 }
 
-/// Plain patches with zero context, whatever the user's diff settings.
-const PATCH: [&str; 7] = [
+/// Plain patches with zero context, whatever the user's diff settings;
+/// files git would call binary included.
+const PATCH: [&str; 8] = [
+    "--text",
     "--unified=0",
     "--no-color",
     "--no-ext-diff",
@@ -40,6 +42,8 @@ pub(crate) fn scan(repo: &Path, range: &[&str]) -> Result<Vec<Hit>> {
         "--reverse",
         "--format=commit %H",
         "--no-show-signature",
+        // A merge can add lines of its own.
+        "--diff-merges=first-parent",
     ];
     args.extend(PATCH);
     args.extend_from_slice(range);
@@ -182,6 +186,49 @@ deleted file mode 100644
                 (4, "+++ not a header".into()),
                 (5, "ll = \"ls -lh\"".into())
             ]
+        );
+    }
+
+    /// Files git calls binary and lines a merge adds are scanned too.
+    #[test]
+    fn binary_files_and_merges_are_scanned() {
+        git::tests::isolate();
+        let dir = tempfile::tempdir().unwrap();
+        let repo = dir.path();
+        let token = "GH = \"ghp_0123456789abcdefghijABCDEFGHIJ012345\"\n";
+        let commit = |message: &str| {
+            git::run(repo, &["add", "--all"]).unwrap();
+            git::run(repo, &["commit", "--quiet", "--message", message]).unwrap();
+        };
+        git::run(repo, &["init", "--quiet", "--initial-branch", "main"]).unwrap();
+        std::fs::write(repo.join(".gitattributes"), "*.bin -diff\n").unwrap();
+        commit("base");
+        std::fs::write(repo.join("marked.bin"), token).unwrap();
+        std::fs::write(repo.join("nul.toml"), format!("a\0b\n{token}")).unwrap();
+        let files =
+            |hits: Vec<Hit>| -> Vec<String> { hits.into_iter().map(|hit| hit.file).collect() };
+        git::run(repo, &["add", "--all"]).unwrap();
+        assert_eq!(files(staged(repo).unwrap()), ["marked.bin", "nul.toml"]);
+        commit("binary");
+        assert_eq!(
+            files(scan(repo, &["HEAD~1..HEAD"]).unwrap()),
+            ["marked.bin", "nul.toml"]
+        );
+
+        git::run(repo, &["checkout", "--quiet", "-b", "side"]).unwrap();
+        std::fs::write(repo.join("side.toml"), "x = 1\n").unwrap();
+        commit("side");
+        git::run(repo, &["checkout", "--quiet", "main"]).unwrap();
+        git::run(
+            repo,
+            &["merge", "--quiet", "--no-ff", "--no-commit", "side"],
+        )
+        .unwrap();
+        std::fs::write(repo.join("merge.toml"), token).unwrap();
+        commit("merge");
+        assert_eq!(
+            files(scan(repo, &["HEAD~1..HEAD"]).unwrap()),
+            ["merge.toml"]
         );
     }
 
