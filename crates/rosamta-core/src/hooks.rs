@@ -41,31 +41,43 @@ pub struct HookEnv {
 impl HookEnv {
     /// Ask zsh and fish themselves; fall back to their defaults.
     pub fn detect(home: &Path, zsh: Option<&Path>, fish: Option<&Path>) -> Self {
-        let query = |exe: &Path, args: &[&str]| {
+        let query = |exe: &Path, args: &[&str], zdotdir: Option<&Path>| {
             let mut cmd = std::process::Command::new(exe);
             cmd.args(args)
                 .env("HOME", home)
                 .env("ROSAMTA_CURRENT", "/nonexistent");
+            match zdotdir {
+                Some(dir) => cmd.env("ZDOTDIR", dir),
+                None => cmd.env_remove("ZDOTDIR"),
+            };
             let output = output_with_timeout(&mut cmd, Duration::from_secs(5)).ok()??;
             let text = String::from_utf8_lossy(&output.stdout).trim().to_string();
             (output.status.success() && text.starts_with('/')).then(|| PathBuf::from(text))
         };
         let zdotdir_script = "printf %s \"${ZDOTDIR:-$HOME}\"";
+        let fresh = zsh.and_then(|zsh| query(zsh, &["-c", zdotdir_script], None));
+        // rsmt inherits a ZDOTDIR from the session, which every zsh sees, or
+        // from a zsh whose ~/.zshenv set it, which a new zsh sees only after
+        // reading ~/.zshenv. Only the first kind moves .zshenv.
+        let session = std::env::var_os("ZDOTDIR")
+            .map(PathBuf::from)
+            .filter(|dir| fresh.as_ref() != Some(dir));
         // -f still runs the global zshenv, which may set ZDOTDIR (Alpine does
         // when HOME has no zsh startup files), but not the user's .zshenv.
         let zshenv_dir = zsh
-            .and_then(|zsh| query(zsh, &["-f", "-c", zdotdir_script]))
-            .or_else(|| std::env::var_os("ZDOTDIR").map(PathBuf::from))
+            .and_then(|zsh| query(zsh, &["-f", "-c", zdotdir_script], session.as_deref()))
             .unwrap_or_else(|| home.to_path_buf());
-        let zdotdir = zsh
-            .and_then(|zsh| query(zsh, &["-c", zdotdir_script]))
-            .unwrap_or_else(|| zshenv_dir.clone());
+        let zdotdir = match &session {
+            Some(dir) => zsh.and_then(|zsh| query(zsh, &["-c", zdotdir_script], Some(dir))),
+            None => fresh,
+        }
+        .unwrap_or_else(|| zshenv_dir.clone());
         let config_home = std::env::var_os("XDG_CONFIG_HOME")
             .map(PathBuf::from)
             .filter(|dir| dir.is_absolute())
             .unwrap_or_else(|| home.join(".config"));
         let fish_config = fish
-            .and_then(|fish| query(fish, &["-c", "printf %s $__fish_config_dir"]))
+            .and_then(|fish| query(fish, &["-c", "printf %s $__fish_config_dir"], None))
             .unwrap_or_else(|| config_home.join("fish"));
         Self {
             home: home.to_path_buf(),
@@ -92,7 +104,18 @@ impl FileChange {
 
 fn read(path: &Path) -> Result<Option<String>> {
     match std::fs::read_to_string(path) {
-        Ok(text) => Ok(Some(text)),
+        Ok(text) => {
+            // An unpaired start line would make the next write pair it with
+            // a later end line and drop the user's lines in between.
+            let starts = text.lines().filter(|line| line.trim_end() == BEGIN).count();
+            if starts > usize::from(find_block(&text).is_some()) {
+                return Err(Error::Usage(format!(
+                    "{}: the `{BEGIN}` and `{END}` lines do not pair up; keep one of each around rosamta's block and try again",
+                    path.display()
+                )));
+            }
+            Ok(Some(text))
+        }
         Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(None),
         Err(err) => Err(Error::Read {
             path: path.to_path_buf(),
@@ -321,5 +344,22 @@ mod tests {
     fn unterminated_block_is_left_alone() {
         let text = format!("{BEGIN}\nhalf\n");
         assert_eq!(find_block(&text), None);
+    }
+
+    #[test]
+    fn unpaired_markers_are_refused() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join(".zshrc");
+        let block = format!("{BEGIN}\nx\n{END}\n");
+        for text in [
+            format!("a\n{BEGIN}\nb\n"),
+            format!("{BEGIN}\nmine\n{block}"),
+            format!("{block}{block}"),
+        ] {
+            std::fs::write(&path, &text).unwrap();
+            assert!(read(&path).is_err(), "{text}");
+        }
+        std::fs::write(&path, format!("a\n{block}b\n")).unwrap();
+        assert!(read(&path).unwrap().is_some());
     }
 }
