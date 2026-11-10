@@ -124,6 +124,33 @@ fn unreadable_repo_exits_1() {
 }
 
 #[test]
+fn apply_refuses_duplicate_module_names() {
+    let local = ".config/rosamta/local/modules/bun.toml";
+    for (first, second) in [
+        (".local/share/rosamta/repo/modules/bun.toml", local),
+        (
+            ".local/share/rosamta/repo/modules/adopted/bun.toml",
+            ".local/share/rosamta/repo/modules/bun.toml",
+        ),
+    ] {
+        let home = Home::new();
+        home.write("rosamta.toml", "format = 1\n");
+        home.write_host("mbp");
+        for rel in [first, second] {
+            let path = home.root.join(rel);
+            fs::create_dir_all(path.parent().unwrap()).unwrap();
+            fs::write(path, "").unwrap();
+        }
+        home.cmd("rsmt").arg("apply").assert().code(2).stderr(
+            predicate::str::contains(home.root.join(first).display().to_string()).and(
+                predicate::str::contains(home.root.join(second).display().to_string()),
+            ),
+        );
+        assert!(!home.root.join(".local/share/rosamta/generated").exists());
+    }
+}
+
+#[test]
 fn newer_format_is_refused() {
     let home = Home::new();
     home.write("rosamta.toml", "format = 99\n");
