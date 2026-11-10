@@ -13,7 +13,7 @@
 
 ## 3. CI
 
-- [ ] 3.1 新增 `ci.yml`（fmt、clippy、test、cargo-deny；macOS job 只在 `main` 執行），確認在一個測試 PR 上全部通過
+- [ ] 3.1 新增 `ci.yml`（fmt、clippy、test、cargo-deny；Ubuntu 與 macOS 都在每個 PR 上執行），確認在一個測試 PR 上全部通過
 - [ ] 3.2 新增各發行版的 Dockerfile 與 `tests/docker/run.sh`，確認每個映像都能印出 sh、bash、zsh、fish 的版本（Rocky 8 只有 sh 與 bash），本機 OrbStack 與 CI 都要通過
 - [ ] 3.3 把 Docker 矩陣加進 `ci.yml`，確認 musl 靜態執行檔掛載進容器後能執行
 - [ ] 3.4 新增 `.github/dependabot.yml`（排除 `gpui-component` 與 `gpui-pre`），推上 GitHub 後確認 repo 的 Dependabot 設定頁沒有錯誤，且第一次排程有開出 PR 或回報已是最新

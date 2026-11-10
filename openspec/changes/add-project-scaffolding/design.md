@@ -33,7 +33,7 @@ repo 目前只有規劃文件。相關的既定決策：GPUI 透過 `gpui-compon
 
 ### CI
 
-- `ci.yml` 在 `ubuntu-24.04` 與 `macos-latest` 執行 fmt、`clippy -D warnings`、`cargo test`，在 Ubuntu 執行 `cargo deny check`。
+- `ci.yml` 在每個 PR 與 push 上，於 `ubuntu-24.04` 與 `macos-latest` 執行 fmt、`clippy -D warnings`、`cargo test`，在 Ubuntu 執行 `cargo deny check`。repo 為 public，Actions 分鐘數不受限，macOS job 不需要只在 `main` 上執行。
 - Docker 矩陣：在 CI 先建出 Linux x86_64 的 musl 靜態執行檔與整合測試執行檔，再掛載到各發行版容器中執行。容器內不安裝 Rust，映像保持精簡，也能直接用 GHA cache。
 - 本機開發用 OrbStack 執行同一支 `tests/docker/run.sh`。
 
@@ -54,6 +54,5 @@ repo 目前只有規劃文件。相關的既定決策：GPUI 透過 `gpui-compon
 
 ## Risks / Trade-offs
 
-- [repo 是 private，GitHub Actions 的 macOS 分鐘數以 10 倍計費，免費額度很快用完] → macOS job 只在 `main` 與 release 執行，PR 只跑 Linux；必要時改用自架 runner（例如開發者自己的 Mac），或在公開 repo 後恢復每個 PR 都跑。
 - [`gpui-pre` 是第三方發布的 snapshot，可能突然無法建置] → 版本鎖定，並在 CI 快取依賴；GUI crate 建置失敗不影響 CLI 的 release。
 - [安裝程式的行為會隨版本改變，fixture 過時] → 擷取腳本可重跑，fixture 註明擷取日期與版本。
