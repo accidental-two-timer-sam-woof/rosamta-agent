@@ -104,7 +104,6 @@ pub fn apply(json: bool, dry_run: bool) -> Result<ExitCode> {
 /// host alone), or later from `rsmt review`.
 fn settle_conflicts(ctx: &Context, steps: &[Step]) -> Result<()> {
     let started = rosamta_core::time::now();
-    let lock = adopt::lock(ctx)?;
     let mut kept = false;
     for step in steps.iter().filter(|step| step.action == Action::Conflict) {
         let item = adopt::queue(ctx)?.into_iter().find(|item| {
@@ -120,6 +119,8 @@ fn settle_conflicts(ctx: &Context, steps: &[Step]) -> Result<()> {
         let answer = ask(&format!(
             "Keep which version of {path}? [r]epo, [l]ocal, [s]kip: "
         ))?;
+        // Taken per answer: the daemon is not held up while the user reads.
+        let _lock = adopt::lock(ctx)?;
         match answer.as_str() {
             "r" | "repo" => {
                 dotfiles::review::discard(ctx, id)?;
@@ -134,6 +135,7 @@ fn settle_conflicts(ctx: &Context, steps: &[Step]) -> Result<()> {
         }
     }
     if kept {
+        let lock = adopt::lock(ctx)?;
         crate::sync::after_commit(ctx, &lock, started, false);
     }
     Ok(())
@@ -223,6 +225,8 @@ pub fn eject(json: bool, yes: bool) -> Result<ExitCode> {
 }
 
 pub fn restore(json: bool, yes: bool) -> Result<ExitCode> {
+    // Before anything else: on macOS this may start again from rosamta.app.
+    crate::daemon::from_app()?;
     let ctx = Context::from_env()?;
     let _lock = adopt::lock(&ctx)?;
     let changes = apply::plan_restore(&ctx)?;
@@ -238,7 +242,12 @@ pub fn restore(json: bool, yes: bool) -> Result<ExitCode> {
         return Ok(ExitCode::SUCCESS);
     }
     let restored = apply::restore_original(&ctx)?;
+    // Back to before rosamta: the daemon would hook the shells again.
+    let disabled = service::disable(&ctx.paths)?;
     report_paths(json, "Restored", &restored);
+    if disabled && !json {
+        println!("The background service is disabled");
+    }
     Ok(ExitCode::SUCCESS)
 }
 

@@ -20,7 +20,7 @@ snapshot SHALL 存在本機的狀態目錄，不在 repo 內，也 SHALL 不被�
 - **THEN** 遠端 repo 中沒有任何 snapshot 的內容
 
 ### Requirement: Restore the original files
-`rsmt restore --original` SHALL 把每個被 rosamta 修改過的 rc 檔還原成第一次修改前的內容。執行前 SHALL 顯示差異並要求確認，`--yes` 可略過確認。
+`rsmt restore --original` SHALL 把每個被 rosamta 修改過的 rc 檔還原成第一次修改前的內容，並停用 rosamta 的背景服務，以免它再掛載 shell。執行前 SHALL 顯示差異並要求確認，`--yes` 可略過確認。
 
 #### Scenario: Restore original zshrc
 - **WHEN** 使用者執行 `rsmt restore --original` 並確認

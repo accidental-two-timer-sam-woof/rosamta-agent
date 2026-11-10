@@ -771,9 +771,11 @@ fn without_header(text: &str) -> &str {
 /// background service, which on macOS needs the app bundle.
 /// Returns the dotfiles that were links and are now regular files.
 pub fn eject(ctx: &Context, changes: &[FileChange]) -> Result<Vec<PathBuf>> {
+    // Links first, so nothing below writes through one into the repo.
+    let released = crate::dotfiles::manage::eject(ctx)?;
     hooks::commit(changes, &ctx.snapshots(), "eject")?;
     ctx.set_unhooked(&Shell::ALL)?;
-    crate::dotfiles::manage::eject(ctx)
+    Ok(released)
 }
 
 /// What `rsmt restore --original` would write.
