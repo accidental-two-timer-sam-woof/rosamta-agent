@@ -16,6 +16,7 @@ docker run --rm \
   -v "${root}:${root}:ro" -w "${root}" -v "${out}:/out" \
   -v "rosamta-musl-home-${arch}:/root" -v "rosamta-musl-target-${arch}:/target" \
   alpine:latest sh -euc '
+set -o pipefail
 apk add --no-cache -q curl gcc musl-dev >/dev/null
 export CARGO_TARGET_DIR=/target PATH="/root/.cargo/bin:${PATH}"
 [ -x /root/.cargo/bin/rustup ] || curl -sSf https://sh.rustup.rs | sh -s -- -y -q --profile minimal --default-toolchain none
@@ -23,8 +24,11 @@ rustup toolchain install >/dev/null 2>&1
 t="$(uname -m)-unknown-linux-musl"
 rustup target add "${t}" >/dev/null 2>&1
 rm -rf /out/*
-cargo test --locked --no-run --target "${t}" -p rosamta-core -p rosamta --message-format json 2>/dev/null \
+# The target volume outlives a failed build; never copy its old binaries.
+rm -f "/target/${t}/debug/rosamta" "/target/${t}/debug/rsmt"
+cargo test --quiet --locked --no-run --target "${t}" -p rosamta-core -p rosamta --message-format json \
   | grep -o "\"executable\":\"[^\"]*\"" | cut -d\" -f4 | while read -r exe; do cp "${exe}" /out/; done
+[ -n "$(ls /out)" ] || { echo "no test executables were built" >&2; exit 1; }
 cargo build --locked --target "${t}" -p rosamta 2>&1 | tail -n 1
 cp "/target/${t}/debug/rosamta" "/target/${t}/debug/rsmt" /out/
 ls /out
