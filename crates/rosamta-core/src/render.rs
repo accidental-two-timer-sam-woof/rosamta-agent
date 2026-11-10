@@ -330,8 +330,9 @@ fn loader(shell: Shell, stage: Stage, frags: &[&Fragment], dir: &Path, layout: &
     // code, and shells name the failing file, which carries the module name.
     let file = |frag: &Fragment| dir.join(frag.file_name(shell)).display().to_string();
     let log = layout.profile_log.display().to_string();
-    let id = &layout.version_id;
     let name = shell.name();
+    // Per shell: login bash sources ~/.profile (sh's env) before its own.
+    let id = format!("{}:{name}", layout.version_id);
     let stage_label = stage_name(stage);
     let mut out = String::from(HEADER);
     if shell == Shell::Fish {
