@@ -466,6 +466,53 @@ fn secrets_stay_on_this_host() {
     assert!(read(&home, ".config/rosamta/local/modules/openai-api-key.toml").contains(secret));
 }
 
+/// Shell startup that appends to `.zshrc` once, the way another process
+/// could edit it between rosamta reading the file and writing it.
+const EDITS_ZSHRC: &str = "[ -e \"$HOME/edit-me\" ] && { rm \"$HOME/edit-me\"; echo 'export LATER=1' >> \"$HOME/.zshrc\"; }\n";
+
+#[test]
+fn an_rc_file_edited_after_reading_is_not_overwritten() {
+    if !has("zsh") {
+        return;
+    }
+    let home = hooked(&[(".zshrc", &format!("{EDITS_ZSHRC}{BUN}"))]);
+    // The shells apply starts first, before writing, run the edit.
+    write(&home, "edit-me", "");
+    home.cmd("rsmt")
+        .args(["adopt", "--yes"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("changed"));
+    let zshrc = read(&home, ".zshrc");
+    assert!(
+        zshrc.contains("export LATER=1") && zshrc.contains("BUN_INSTALL"),
+        "{zshrc}"
+    );
+    assert!(adopted(&home).is_empty());
+
+    let out = run(&home, &["adopt", "--yes"]);
+    let bun = out
+        .lines()
+        .find(|line| line.contains("bun.toml"))
+        .and_then(|line| line.strip_prefix("Adopted "))
+        .and_then(|line| line.split(':').next())
+        .unwrap()
+        .to_string();
+    // Now the adopted snippet does the edit.
+    write(&home, "edit-me", "");
+    home.cmd("rsmt")
+        .args(["restore", &bun, "--yes"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("changed"));
+    let zshrc = read(&home, ".zshrc");
+    assert!(
+        zshrc.contains("export LATER=1") && !zshrc.contains("BUN_INSTALL"),
+        "{zshrc}"
+    );
+    assert!(home.repo().join("modules/adopted/bun.toml").exists());
+}
+
 #[test]
 fn interactive_shells_print_the_review_notice() {
     if !has("zsh") {
