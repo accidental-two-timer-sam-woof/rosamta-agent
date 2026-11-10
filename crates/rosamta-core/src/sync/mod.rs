@@ -76,6 +76,14 @@ pub(crate) fn signing_blocked(ctx: &Context, message: &str) -> Result<()> {
     record_publish(ctx, Attempt::new(Outcome::Blocked, Some(signing(message))))
 }
 
+/// Record a commit that failed for any other reason, such as a rebase in progress.
+pub(crate) fn commit_blocked(ctx: &Context, err: &Error) -> Result<()> {
+    record_publish(
+        ctx,
+        Attempt::new(Outcome::Blocked, Some(format!("commit failed: {err}"))),
+    )
+}
+
 fn signing(message: &str) -> String {
     format!("commit signing failed: {message}")
 }

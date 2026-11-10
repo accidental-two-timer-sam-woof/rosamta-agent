@@ -513,6 +513,60 @@ fn an_rc_file_edited_after_reading_is_not_overwritten() {
     assert!(home.repo().join("modules/adopted/bun.toml").exists());
 }
 
+fn adoptions_json(home: &Home) -> String {
+    read(home, ".local/state/rosamta/adoptions.json")
+}
+
+/// A commit that fails for a reason other than signing (here a stale
+/// `index.lock`) still leaves the adoption recorded and the warning shown.
+#[test]
+fn a_failed_commit_keeps_the_adoption_record() {
+    if !has("zsh") {
+        return;
+    }
+    let home = hooked(&[(".zshrc", BUN)]);
+    let lock = home.repo().join(".git/index.lock");
+    fs::write(&lock, "").unwrap();
+    home.cmd("rsmt")
+        .args(["adopt", "--yes"])
+        .assert()
+        .success()
+        .stderr(predicate::str::contains("warning: commit failed"));
+    assert!(!read(&home, ".zshrc").contains("BUN_INSTALL"));
+    assert!(adoptions_json(&home).contains("bun.toml"));
+    fs::remove_file(&lock).unwrap();
+    // Re-added content is recognized from the record.
+    let zshrc = read(&home, ".zshrc");
+    fs::write(home.root.join(".zshrc"), format!("{zshrc}{BUN}")).unwrap();
+    assert!(review(&home).is_empty());
+    assert_eq!(read(&home, ".zshrc"), zshrc);
+}
+
+#[test]
+fn a_failed_commit_on_restore_keeps_the_lines() {
+    if !has("zsh") {
+        return;
+    }
+    let home = hooked(&[(".zshrc", BUN)]);
+    let out = run(&home, &["adopt", "--yes"]);
+    let id = out
+        .lines()
+        .find_map(|line| line.strip_prefix("Adopted "))
+        .and_then(|line| line.split(':').next())
+        .unwrap()
+        .to_string();
+    fs::write(home.repo().join(".git/index.lock"), "").unwrap();
+    home.cmd("rsmt")
+        .args(["restore", &id, "--yes"])
+        .assert()
+        .success()
+        .stderr(predicate::str::contains("warning: commit failed"));
+    assert!(!adoptions_json(&home).contains("bun.toml"));
+    // The next review must not take the restored lines out again.
+    run(&home, &["review"]);
+    assert!(read(&home, ".zshrc").contains("BUN_INSTALL"));
+}
+
 #[test]
 fn interactive_shells_print_the_review_notice() {
     if !has("zsh") {
