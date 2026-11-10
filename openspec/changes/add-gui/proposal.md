@@ -45,3 +45,4 @@
 
 - `crates/rosamta-gui` 由空殼擴充為完整 app；macOS 的 `.app` 同時包含 helper app（`add-daemon`）。
 - 依賴 `add-adopt`、`add-git-sync`、`add-daemon`、`add-providers-and-doctor`、`add-packages`、`add-dotfile-deploy` 提供的 core 操作；各頁面可在對應的 core 完成後逐步加入。
+- 本 change 實作 core 已支援的頁面；診斷、應用程式頁面、模組的側邊面板與設定精靈的掃描和遷移步驟，由 `add-providers-and-doctor`、`add-packages`、`add-chezmoi-import` 各自加入 GUI。

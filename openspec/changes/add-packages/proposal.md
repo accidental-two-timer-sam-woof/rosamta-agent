@@ -26,6 +26,7 @@
 ### Modified Capabilities
 
 （無）
+- GUI：在 `add-gui` 建立的 app 中加入本 change 對應的頁面或步驟。
 
 ## Impact
 
