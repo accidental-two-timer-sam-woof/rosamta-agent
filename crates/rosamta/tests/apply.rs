@@ -208,6 +208,36 @@ fn bash_hooks_the_profile_file_login_bash_reads() {
     assert!(!home.root.join(".bash_profile").exists());
 }
 
+/// Debian and Ubuntu ship a `~/.profile` that sources `~/.bashrc` in bash.
+const DEBIAN_PROFILE: &str = "if [ -n \"$BASH_VERSION\" ]; then\n    if [ -f \"$HOME/.bashrc\" ]; then\n\t. \"$HOME/.bashrc\"\n    fi\nfi\n";
+
+#[test]
+fn login_bash_loads_each_stage_once() {
+    if !has("bash") {
+        return;
+    }
+    let home = set_up();
+    fs::write(home.root.join(".profile"), DEBIAN_PROFILE).unwrap();
+    fs::write(
+        home.root.join(".bashrc"),
+        "case $- in *i*) ;; *) return;; esac\n",
+    )
+    .unwrap();
+    home.write(
+        "modules/count.toml",
+        "[env]\nCNT = \"x$CNT\"\n[raw]\nbash = \"RC_RUNS=$((${RC_RUNS:-0}+1))\"\n",
+    );
+    apply(&home);
+    let out = home.shell(&[
+        "bash".into(),
+        "-l".into(),
+        "-i".into(),
+        "-c".into(),
+        "echo \"$RC_RUNS $CNT\"".into(),
+    ]);
+    assert_eq!(String::from_utf8_lossy(&out.stdout), "1 x\n");
+}
+
 #[test]
 fn unhook_removes_one_shell_until_hooked_again() {
     if !has("bash") {
@@ -397,6 +427,59 @@ fn login_zsh_puts_module_path_before_system_path() {
     );
     if let Some(system) = position("/usr/bin") {
         assert!(position(&mine).unwrap() < system, "{path}");
+    }
+}
+
+/// tmux, editors and `bash -l` start login shells that inherit the
+/// environment, after `/etc/profile` reordered (macOS) or reset (Debian) PATH.
+#[test]
+fn nested_login_shells_keep_module_path_first() {
+    let home = set_up();
+    apply(&home);
+    let mine = home.root.join("mybin").display().to_string();
+    for shell in ["sh", "bash", "zsh"].into_iter().filter(|shell| has(shell)) {
+        let inner = format!("exec {shell} -l -c 'echo \"$PATH\"'");
+        let out = home.shell(&[shell.into(), "-l".into(), "-c".into(), inner]);
+        let path = String::from_utf8(out.stdout).unwrap();
+        let entries: Vec<&str> = path.trim().split(':').collect();
+        let position = |entry: &str| entries.iter().position(|seen| *seen == entry);
+        assert!(position(&mine).is_some(), "{shell}: {path}");
+        if let Some(system) = position("/usr/bin") {
+            assert!(position(&mine).unwrap() < system, "{shell}: {path}");
+        }
+    }
+}
+
+#[test]
+fn every_shell_puts_module_path_in_the_same_order() {
+    let home = Home::new();
+    home.cmd("rsmt").arg("init").assert().success();
+    home.write(
+        "modules/a.toml",
+        "order = 10\n[path]\nprepend = [\"~/a1\", \"~/a2\"]\nappend = [\"/usr/bin\"]\n",
+    );
+    home.write(
+        "modules/b.toml",
+        "order = 20\n[path]\nprepend = [\"~/b1\"]\n",
+    );
+    apply(&home);
+    let usr_bin_last = std::env::var("PATH")
+        .unwrap_or_default()
+        .ends_with("/usr/bin");
+    for argv in sessions("echo \"$PATH\"", "string join : $PATH") {
+        let path = String::from_utf8(home.shell(&argv).stdout).unwrap();
+        let entries: Vec<&str> = path.trim().split(':').collect();
+        let position = |rel: &str| {
+            let dir = home.root.join(rel).display().to_string();
+            entries.iter().position(|seen| *seen == dir)
+        };
+        let order = [position("b1"), position("a1"), position("a2")];
+        assert!(order.iter().all(Option::is_some), "{argv:?}: {path}");
+        assert!(order.is_sorted(), "{argv:?}: {path}");
+        // Appending a directory PATH already has leaves it where it is.
+        if !usr_bin_last {
+            assert_ne!(entries.last(), Some(&"/usr/bin"), "{argv:?}: {path}");
+        }
     }
 }
 

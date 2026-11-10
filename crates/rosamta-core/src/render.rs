@@ -1,8 +1,9 @@
 //! Turn modules into per-shell scripts that shells source at startup (ADR 0003).
 //!
 //! Each shell directory holds the module fragments plus small loaders:
-//! `env.<ext>` (every shell mode), `rc.<ext>` (interactive phases) and, for
-//! zsh, `profile.zsh` (puts PATH back in order after the global zprofile).
+//! `env.<ext>` (every shell mode), `rc.<ext>` (interactive phases) and, but
+//! for fish, `profile.<ext>` (login shells: puts PATH back in order after the
+//! system profile).
 //! Loaders list fragments explicitly, so load order never depends on globbing.
 
 use std::collections::BTreeMap;
@@ -166,34 +167,26 @@ fn env_body(shell: Shell, module: &Module) -> String {
         }
         for dir in module.path.prepend.iter().rev() {
             let dir = fish_value(dir);
-            writeln!(out, "contains -- {dir} $PATH; or set -gx PATH {dir} $PATH").unwrap();
+            writeln!(
+                out,
+                "test -n {dir}; and not contains -- {dir} $PATH; and set -gx PATH {dir} $PATH"
+            )
+            .unwrap();
         }
         for dir in &module.path.append {
             let dir = fish_value(dir);
-            writeln!(out, "contains -- {dir} $PATH; or set -gx PATH $PATH {dir}").unwrap();
+            writeln!(
+                out,
+                "test -n {dir}; and not contains -- {dir} $PATH; and set -gx PATH $PATH {dir}"
+            )
+            .unwrap();
         }
         return out;
     }
     for (name, value) in &module.env {
         writeln!(out, "export {name}={}", posix_value(value)).unwrap();
     }
-    // Prepending in reverse keeps the declared order; existing entries stay put.
-    for dir in module.path.prepend.iter().rev() {
-        let dir = posix_value(dir);
-        writeln!(
-            out,
-            "case \":${{PATH}}:\" in *:{dir}:*) ;; *) PATH={dir}\":${{PATH}}\" ;; esac"
-        )
-        .unwrap();
-    }
-    for dir in &module.path.append {
-        let dir = posix_value(dir);
-        writeln!(
-            out,
-            "case \":${{PATH}}:\" in *:{dir}:*) ;; *) PATH=\"${{PATH}}:\"{dir} ;; esac"
-        )
-        .unwrap();
-    }
+    out.push_str(&posix_path(module, false));
     if !module.path.prepend.is_empty() || !module.path.append.is_empty() {
         out.push_str("export PATH\n");
     }
@@ -325,10 +318,10 @@ pub fn render(
             Path::new(shell.name()).join(format!("rc.{}", shell.ext())),
             loader(shell, Stage::Rc, &rc, &dir, layout),
         );
-        if shell == Shell::Zsh {
+        if shell != Shell::Fish {
             files.insert(
-                PathBuf::from("zsh/profile.zsh"),
-                zsh_profile(modules, &login, &dir),
+                Path::new(shell.name()).join(format!("profile.{}", shell.ext())),
+                profile(shell, modules, &login, &dir),
             );
         }
     }
@@ -350,17 +343,12 @@ fn loader(shell: Shell, stage: Stage, frags: &[&Fragment], dir: &Path, layout: &
     let file = |frag: &Fragment| dir.join(frag.file_name(shell)).display().to_string();
     let log = layout.profile_log.display().to_string();
     let name = shell.name();
-    // Per shell: login bash sources ~/.profile (sh's env) before its own.
-    let id = format!("{}:{name}", layout.version_id);
+    let (guard, end_guard) = env_guard(shell, &layout.version_id);
     let stage_label = stage_name(stage);
     let mut out = String::from(HEADER);
     if shell == Shell::Fish {
         if stage == Stage::Env {
-            writeln!(
-                out,
-                "if test \"$ROSAMTA_ENV\" != {id}\nset -gx ROSAMTA_ENV {id}"
-            )
-            .unwrap();
+            out.push_str(&guard);
         }
         // Some perl installs lack Time::HiRes (EL8); then there is no total.
         let now = "perl -MTime::HiRes=time -e 'printf \"%d\", time*1000' 2>/dev/null";
@@ -379,7 +367,7 @@ fn loader(shell: Shell, stage: Stage, frags: &[&Fragment], dir: &Path, layout: &
         )
         .unwrap();
         if stage == Stage::Env {
-            out.push_str("end\n");
+            out.push_str(end_guard);
         } else {
             let notice = fish_quote(&layout.notice.display().to_string());
             writeln!(
@@ -399,12 +387,7 @@ fn loader(shell: Shell, stage: Stage, frags: &[&Fragment], dir: &Path, layout: &
             posix_quote(&layout.version_dir.display().to_string())
         )
         .unwrap();
-        // An exported marker keeps env from running twice in one process tree.
-        writeln!(
-            out,
-            "if [ \"${{ROSAMTA_ENV-}}\" != {id} ]; then\nROSAMTA_ENV={id}\nexport ROSAMTA_ENV"
-        )
-        .unwrap();
+        out.push_str(&guard);
     }
     let log = posix_quote(&log);
     writeln!(out, "if [ \"${{ROSAMTA_PROFILE-}}\" = 1 ]; then").unwrap();
@@ -430,7 +413,7 @@ fn loader(shell: Shell, stage: Stage, frags: &[&Fragment], dir: &Path, layout: &
     }
     out.push_str("  :\nfi\n");
     if stage == Stage::Env {
-        out.push_str("fi\n");
+        out.push_str(end_guard);
     } else {
         // A builtin read, so the reminder costs no process start.
         let notice = posix_quote(&layout.notice.display().to_string());
@@ -450,30 +433,98 @@ fn stage_name(stage: Stage) -> &'static str {
     }
 }
 
-/// What `.zprofile` loads in login zsh, after the global zprofile ran after
-/// `.zshenv`: login snippets, then declared PATH entries put back in place.
-/// macOS `path_helper` pushes them behind system paths, Alpine's
-/// `/etc/profile` replaces PATH, and others add entries after them. Prepended
-/// entries move to the front and appended ones to the end, as declared.
-fn zsh_profile(modules: &[(String, Module)], login: &[&Fragment], dir: &Path) -> String {
+/// The lines around the env stage that run it once per process tree, and
+/// the line that closes them. The marker is per shell: a bash started from
+/// sh still needs its own env.
+pub(crate) fn env_guard(shell: Shell, version_id: &str) -> (String, &'static str) {
+    let id = format!("{version_id}:{}", shell.name());
+    match shell {
+        Shell::Fish => (
+            format!("if test \"$ROSAMTA_ENV\" != {id}\nset -gx ROSAMTA_ENV {id}\n"),
+            "end\n",
+        ),
+        Shell::Sh => (
+            format!(
+                "if [ \"${{ROSAMTA_ENV-}}\" != {id} ] && {NOT_BASH}; then\nROSAMTA_ENV={id}\nexport ROSAMTA_ENV\n"
+            ),
+            "fi\n",
+        ),
+        _ => (
+            format!(
+                "if [ \"${{ROSAMTA_ENV-}}\" != {id} ]; then\nROSAMTA_ENV={id}\nexport ROSAMTA_ENV\n"
+            ),
+            "fi\n",
+        ),
+    }
+}
+
+/// True unless sh's loaders run in bash: login bash reads `~/.profile` too,
+/// but loads its own scripts. Started as sh, bash has nothing else; `$BASH`
+/// names it sh then, as posix mode starts only after the startup files.
+const NOT_BASH: &str =
+    "case ${BASH-}:${SHELLOPTS-} in *bash:*posix*) true ;; *bash:*) false ;; *) true ;; esac";
+
+/// Moves `$1` to the front of PATH, removing it elsewhere; other entries,
+/// empty ones too, keep their order.
+const FRONT: &str = r#"_rosamta_front() { _rosamta_p=":${PATH}:"; while :; do case $_rosamta_p in *":$1:"*) _rosamta_p=${_rosamta_p%%":$1:"*}:${_rosamta_p#*":$1:"} ;; *) break ;; esac; done; _rosamta_p=${_rosamta_p#:}; _rosamta_p=${_rosamta_p%:}; PATH=$1${_rosamta_p:+:$_rosamta_p}; }
+"#;
+
+/// One module's PATH entries. Prepending in reverse keeps the declared order,
+/// and a later module's entries go before an earlier one's. Entries PATH
+/// already has stay put, unless `front` moves prepended ones to the front.
+/// An entry that expands to nothing is skipped: it would mean the current
+/// directory.
+fn posix_path(module: &Module, front: bool) -> String {
+    let mut out = String::new();
+    for dir in module.path.prepend.iter().rev() {
+        let dir = posix_value(dir);
+        if front {
+            writeln!(out, "[ -n {dir} ] && _rosamta_front {dir}").unwrap();
+        } else {
+            writeln!(
+                out,
+                "[ -n {dir} ] && case \":${{PATH}}:\" in *:{dir}:*) ;; *) PATH={dir}\":${{PATH}}\" ;; esac"
+            )
+            .unwrap();
+        }
+    }
+    for dir in &module.path.append {
+        let dir = posix_value(dir);
+        writeln!(
+            out,
+            "[ -n {dir} ] && case \":${{PATH}}:\" in *:{dir}:*) ;; *) PATH=\"${{PATH}}:\"{dir} ;; esac"
+        )
+        .unwrap();
+    }
+    out
+}
+
+/// What login shells load after the system profile ran: `/etc/profile`
+/// before `~/.profile` and bash's profile file, the global zprofile after
+/// `.zshenv`. Login snippets first, then every module's PATH entries put
+/// back in place: macOS `path_helper` pushes them behind system paths,
+/// Debian and Alpine replace PATH, and a nested login shell (tmux, `bash -l`)
+/// does not run env again to add them.
+fn profile(shell: Shell, modules: &[(String, Module)], login: &[&Fragment], dir: &Path) -> String {
     let mut out = String::from(HEADER);
     for frag in login {
-        let file = dir.join(frag.file_name(Shell::Zsh)).display().to_string();
+        let file = dir.join(frag.file_name(shell)).display().to_string();
         writeln!(out, ". {}", posix_quote(&file)).unwrap();
     }
-    let zsh: Vec<&Module> = modules
+    let path: String = modules
         .iter()
         .map(|(_, module)| module)
-        .filter(|module| module.shells.is_empty() || module.shells.contains(&Shell::Zsh))
+        .filter(|module| module.shells.is_empty() || module.shells.contains(&shell))
+        .map(|module| posix_path(module, true))
         .collect();
-    let prepend: Vec<&String> = zsh.iter().flat_map(|module| &module.path.prepend).collect();
-    for dir in prepend.into_iter().rev() {
-        let dir = posix_value(dir);
-        writeln!(out, "path=({dir} ${{path:#{dir}}})").unwrap();
+    if path.is_empty() {
+        return out;
     }
-    for dir in zsh.iter().flat_map(|module| &module.path.append) {
-        let dir = posix_value(dir);
-        writeln!(out, "path=(${{path:#{dir}}} {dir})").unwrap();
+    let path = format!("{FRONT}{path}unset -f _rosamta_front; unset _rosamta_p\n");
+    if shell == Shell::Sh {
+        writeln!(out, "if {NOT_BASH}; then\n{path}fi").unwrap();
+    } else {
+        out.push_str(&path);
     }
     out
 }
@@ -596,7 +647,10 @@ mod tests {
         let files = render(&modules, &[Shell::Zsh], &layout);
         let profile = &files[Path::new("zsh/profile.zsh")];
         let snippet = profile.find("brew-raw.zsh").expect("login snippet sourced");
-        assert!(snippet < profile.find("path=(").unwrap(), "{profile}");
+        assert!(
+            snippet < profile.find("_rosamta_front").unwrap(),
+            "{profile}"
+        );
         for loader in ["zsh/env.zsh", "zsh/rc.zsh"] {
             assert!(!files[Path::new(loader)].contains("brew"), "{loader}");
         }

@@ -2,8 +2,8 @@
 //!
 //! | Shell | File | Loads |
 //! |---|---|---|
-//! | sh | `~/.profile` | env |
-//! | bash | the profile file login bash reads, and `~/.bashrc` | env, then `~/.bashrc` when interactive; env and rc |
+//! | sh | `~/.profile` | env, PATH order |
+//! | bash | the profile file login bash reads, and `~/.bashrc` | env, PATH order, then `~/.bashrc` when interactive; env and rc |
 //! | zsh | `.zshenv`; `$ZDOTDIR/.zshrc`; `$ZDOTDIR/.zprofile` | env; rc; PATH order |
 //! | fish | `conf.d/rosamta.fish` (a file of its own) | env, and rc when interactive |
 
@@ -229,22 +229,28 @@ pub fn plan_install(shell: Shell, env: &HookEnv) -> Result<Vec<FileChange>> {
         Ok(())
     };
     match shell {
-        Shell::Sh => upsert(
-            env.home.join(".profile"),
-            posix_block(env, shell, &source_line("env.sh"), true),
-            None,
-        )?,
+        Shell::Sh => {
+            let body = format!("{}{}", source_line("env.sh"), source_line("profile.sh"));
+            upsert(
+                env.home.join(".profile"),
+                posix_block(env, shell, &body, true),
+                None,
+            )?;
+        }
         Shell::Bash => {
             let profile = bash_profile(&env.home).filter(|path| !path.ends_with(".profile"));
             let path = profile
                 .clone()
                 .unwrap_or_else(|| env.home.join(".bash_profile"));
             // Login bash reads only this file, so a new one must keep ~/.profile
-            // working, and every one must reach ~/.bashrc in interactive shells.
+            // working, and every one must reach ~/.bashrc in interactive shells,
+            // once: Debian's ~/.profile sources it already.
             let seed = profile.is_none().then(|| BASH_PROFILE_SEED.to_string());
-            let existing = read(&path)?.unwrap_or_default();
-            let reaches_bashrc = strip_block(&existing).contains(".bashrc");
-            let mut body = source_line("env.bash");
+            let text = strip_block(&read(&path)?.or_else(|| seed.clone()).unwrap_or_default());
+            let dot_profile = read(&env.home.join(".profile"))?.unwrap_or_default();
+            let reaches_bashrc = text.contains(".bashrc")
+                || (text.contains(".profile") && strip_block(&dot_profile).contains(".bashrc"));
+            let mut body = format!("{}{}", source_line("env.bash"), source_line("profile.bash"));
             if !reaches_bashrc {
                 body.push_str(
                     "case $- in *i*) [ -r \"$HOME/.bashrc\" ] && . \"$HOME/.bashrc\" ;; esac\n",
