@@ -212,6 +212,16 @@ pub fn segments(text: &str, complete: &dyn Fn(&str) -> bool) -> Vec<Segment> {
                 _ => flush(&mut current, &mut out),
             }
         } else {
+            // A line right after a finished block (an installer appending
+            // without a blank line) starts its own segment.
+            let after_block = current.as_ref().is_some_and(|segment| {
+                let last = segment.lines.last().map_or("", |line| line.trim());
+                let last = last.trim_end_matches(';').trim();
+                ["fi", "done", "esac", "}", "end"].contains(&last) && complete(&segment.text())
+            });
+            if after_block {
+                flush(&mut current, &mut out);
+            }
             let segment = current.get_or_insert_with(|| Segment {
                 start: index + 1,
                 end: index + 1,
@@ -378,6 +388,51 @@ mod tests {
             [(1, 5), (7, 7)]
         );
         assert_eq!(found[0].text(), "if x; then\n  a\n\n  b\nfi\n");
+    }
+
+    /// Each installer's addition to each file is the expected number of
+    /// segments, and none of them reaches into the file's earlier content.
+    #[test]
+    fn installer_additions_segment_as_expected() {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/fixtures/installers");
+        let expected: &[(&str, &str, usize)] = &[
+            ("bun", ".bashrc", 1),
+            ("conda", ".bashrc", 1),
+            ("conda", ".zshrc", 1),
+            ("conda", ".config/fish/config.fish", 1),
+            ("gcloud", ".bashrc", 2),
+            ("homebrew", ".bashrc", 1),
+            ("jetbrains-toolbox", ".zprofile", 1),
+            ("nvm", ".bashrc", 1),
+            ("orbstack", ".zprofile", 1),
+            ("rustup", ".bashrc", 1),
+            ("rustup", ".profile", 1),
+            ("rustup", ".zshenv", 1),
+            ("uv", ".bashrc", 1),
+            ("uv", ".profile", 1),
+            ("uv", ".zshrc", 1),
+        ];
+        for (fixture, file, count) in expected {
+            let after =
+                std::fs::read_to_string(root.join(fixture).join("after").join(file)).unwrap();
+            let before = std::fs::read_to_string(root.join(fixture).join("before").join(file))
+                .unwrap_or_default();
+            assert!(
+                after.starts_with(&before),
+                "{fixture} {file}: installers append"
+            );
+            let first_new = before.lines().count() + 1;
+            let found = segments(&after, &|_| true);
+            let new: Vec<&Segment> = found.iter().filter(|s| s.end >= first_new).collect();
+            assert_eq!(new.len(), *count, "{fixture} {file}: {new:?}");
+            assert!(new.iter().all(|s| s.start >= first_new), "{fixture} {file}");
+        }
+    }
+
+    #[test]
+    fn a_line_after_a_finished_block_starts_a_segment() {
+        assert_eq!(spans("if a; then\n  b\nfi\n. x\n"), [(1, 3), (4, 4)]);
+        assert_eq!(spans("f() {\n  a\n}\nalias x=y\n"), [(1, 3), (4, 4)]);
     }
 
     #[test]
