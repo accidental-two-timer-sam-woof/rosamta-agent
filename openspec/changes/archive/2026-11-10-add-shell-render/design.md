@@ -97,7 +97,7 @@ login zsh 在 `.zshenv` 之後才執行全域的 zprofile：macOS 的 `/etc/zpro
 
 ### Eject
 
-依載入階段把 generated script 串接後寫進各 rc 檔原本 hook 的位置，並在開頭加一行註解標明 eject 的日期，接著移除 hook 與 fish 的 `conf.d/rosamta.fish`。寫入前存 snapshot。
+依載入階段把 generated script 串接後寫進各 rc 檔原本 hook 的位置，並在開頭加一行註解標明 eject 的日期，接著移除 hook 與 fish 的 `conf.d/rosamta.fish`。寫入前存 snapshot。env 階段保留與 loader 相同的防重條件；login 的 PATH 排序照原樣寫進 profile 檔。片段原本各自是一個被 source 的檔案，`return` 只結束該片段，所以含有 `return` 的片段包在一個呼叫後就刪除的函式中；其他片段不包，因為函式中的 `typeset`、`declare` 會變成區域變數。沒有互動階段的內容時不寫空的條件區塊。目前版本中已沒有腳本的 shell（例如已解除安裝）只移除它的 hook。
 
 ## Risks / Trade-offs
 

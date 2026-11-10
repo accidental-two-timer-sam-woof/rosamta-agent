@@ -671,6 +671,82 @@ fn eject_keeps_every_shell_the_same_without_rosamta() {
     }
 }
 
+fn eject(home: &Home) {
+    home.cmd("rsmt").args(["eject", "--yes"]).assert().success();
+}
+
+#[test]
+fn ejected_bashrc_parses_without_interactive_code() {
+    if !has("bash") {
+        return;
+    }
+    let home = Home::new();
+    home.cmd("rsmt").arg("init").assert().success();
+    home.write("modules/e.toml", "[env]\nEDITOR = \"nvim\"\n");
+    apply(&home);
+    eject(&home);
+    for rel in [".bashrc", ".bash_profile"] {
+        let path = home.root.join(rel).display().to_string();
+        let out = home.shell(&["bash".into(), "-n".into(), path]);
+        assert!(
+            out.status.success(),
+            "{rel}: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+    }
+}
+
+#[test]
+fn ejected_code_keeps_return_local_and_env_once() {
+    let home = Home::new();
+    home.cmd("rsmt").arg("init").assert().success();
+    let early = "command -v rosamta_absent >/dev/null || return\nEARLY=1";
+    home.write(
+        "modules/early.toml",
+        &format!(
+            "phase = \"tools\"\n[env]\nCNT = \"x$CNT\"\n[raw]\nbash = '''\n{early}\n'''\nzsh = '''\n{early}\n'''\n"
+        ),
+    );
+    home.write("modules/late.toml", "[aliases]\ngs = \"git status\"\n");
+    apply(&home);
+    for rel in [".bashrc", ".zshrc"] {
+        if home.root.join(rel).exists() {
+            let text = read(&home, rel);
+            fs::write(home.root.join(rel), format!("{text}AFTER=1\n")).unwrap();
+        }
+    }
+    let probes: Vec<Vec<String>> = [("bash", "alias"), ("zsh", "alias")]
+        .into_iter()
+        .filter(|(shell, _)| has(shell))
+        .map(|(shell, alias)| {
+            let script = format!(
+                "{alias} gs >/dev/null && echo gs; echo \"$AFTER $CNT\"; {shell} -i -c 'echo \"nested $CNT\"'"
+            );
+            [shell, "-i", "-c", &script].map(String::from).to_vec()
+        })
+        .collect();
+    let expected = "gs\n1 x\nnested x\n";
+    for argv in &probes {
+        let out = home.shell(argv);
+        assert_eq!(String::from_utf8_lossy(&out.stdout), expected, "{argv:?}");
+    }
+    eject(&home);
+    for argv in &probes {
+        let out = home.shell(argv);
+        assert_eq!(String::from_utf8_lossy(&out.stdout), expected, "{argv:?}");
+    }
+}
+
+#[test]
+fn eject_drops_the_hook_of_a_shell_without_scripts() {
+    let home = set_up();
+    apply(&home);
+    // As when a shell was uninstalled after it was hooked.
+    fs::remove_dir_all(current(&home).join("sh")).unwrap();
+    eject(&home);
+    assert!(!read(&home, ".profile").contains(BEGIN));
+}
+
 #[test]
 fn a_start_marker_without_its_end_stops_apply() {
     let home = set_up();

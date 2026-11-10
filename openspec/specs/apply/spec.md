@@ -40,3 +40,7 @@
 #### Scenario: Uninstall after eject
 - **WHEN** 使用者執行 `rsmt eject` 後移除 rosamta 程式
 - **THEN** 新開的 shell 中 PATH、環境變數與 alias 與 eject 之前相同
+
+#### Scenario: Snippet that returns early
+- **WHEN** 片段在工具不存在時執行 `return`，使用者執行 `rsmt eject`
+- **THEN** rc 檔中其後的設定照常載入，與 eject 之前相同

@@ -622,7 +622,26 @@ pub fn plan_eject(ctx: &Context) -> Result<Vec<FileChange>> {
     let stamp = format!("# Ejected from rosamta on {}.\n", today());
     let mut changes = Vec::new();
     for shell in Shell::ALL {
+        if !version.join(shell.name()).is_dir() {
+            // Hooked once, but no scripts now (uninstalled): the hook just goes.
+            changes.extend(hooks::plan_remove(shell, &env)?);
+            continue;
+        }
         let inline = |stage: &str| inline(&version, shell, stage);
+        // Once per process tree, as with the hooks.
+        let env_once = || -> Result<String> {
+            let text = inline("env")?;
+            if text.is_empty() {
+                return Ok(text);
+            }
+            let (guard, end_guard) = render::env_guard(shell, &id);
+            Ok(format!("{guard}{text}{end_guard}"))
+        };
+        let interactive = |text: String| match shell {
+            _ if text.is_empty() => text,
+            Shell::Fish => format!("if status is-interactive\n{text}end\n"),
+            _ => format!("if [[ $- == *i* ]]; then\n{text}fi\n"),
+        };
         for path in hooks::hooked_files(shell, &env)? {
             let before = std::fs::read_to_string(&path).map_err(Error::read(&path))?;
             let name = path
@@ -630,37 +649,11 @@ pub fn plan_eject(ctx: &Context) -> Result<Vec<FileChange>> {
                 .and_then(|name| name.to_str())
                 .unwrap_or_default();
             let body = match (shell, name) {
-                (Shell::Fish, _) => format!(
-                    "{}if status is-interactive\n{}end\n",
-                    inline("env")?,
-                    inline("rc")?
-                ),
-                (Shell::Zsh, ".zshrc") => inline("rc")?,
-                (Shell::Zsh, ".zprofile") => {
-                    // Login snippets inline; the PATH lines stay as they are.
-                    let text = std::fs::read_to_string(version.join("zsh/profile.zsh"))
-                        .unwrap_or_default();
-                    let mut out = String::new();
-                    for line in without_header(&text).lines() {
-                        match sourced(line) {
-                            Some(path) => {
-                                let text =
-                                    std::fs::read_to_string(&path).map_err(Error::read(&path))?;
-                                out.push_str(without_header(&text));
-                            }
-                            None => {
-                                out.push_str(line);
-                                out.push('\n');
-                            }
-                        }
-                    }
-                    out
+                (Shell::Fish, _) | (Shell::Bash, ".bashrc") => {
+                    format!("{}{}", env_once()?, interactive(inline("rc")?))
                 }
-                (Shell::Bash, ".bashrc") => format!(
-                    "{}if [[ $- == *i* ]]; then\n{}fi\n",
-                    inline("env")?,
-                    inline("rc")?
-                ),
+                (Shell::Zsh, ".zshrc") => inline("rc")?,
+                (Shell::Zsh, ".zprofile") => login(&version, shell)?,
                 (Shell::Bash, _) => {
                     let block = hooks::find_block(&before)
                         .map(|(start, end)| &before[start..end])
@@ -670,9 +663,10 @@ pub fn plan_eject(ctx: &Context) -> Result<Vec<FileChange>> {
                         .filter(|line| line.contains(".bashrc"))
                         .map(|line| format!("{line}\n"))
                         .collect::<String>();
-                    format!("{}{keep}", inline("env")?)
+                    format!("{}{}{keep}", env_once()?, login(&version, shell)?)
                 }
-                _ => inline("env")?,
+                (Shell::Sh, _) => format!("{}{}", env_once()?, login(&version, shell)?),
+                _ => env_once()?,
             };
             let content = format!("{stamp}{body}");
             let after = match (shell, hooks::find_block(&before)) {
@@ -700,10 +694,47 @@ fn inline(version: &Path, shell: Shell, stage: &str) -> Result<String> {
     let loader = std::fs::read_to_string(&loader_path).map_err(Error::read(&loader_path))?;
     let mut out = String::new();
     for path in loader.lines().filter_map(sourced) {
-        let text = std::fs::read_to_string(&path).map_err(Error::read(&path))?;
-        out.push_str(without_header(&text));
+        out.push_str(&pasted(shell, &path)?);
     }
     Ok(out)
+}
+
+/// The login loader with its login snippets inline; the PATH lines stay as
+/// they are.
+fn login(version: &Path, shell: Shell) -> Result<String> {
+    let path = version
+        .join(shell.name())
+        .join(format!("profile.{}", shell.ext()));
+    let text = std::fs::read_to_string(path).unwrap_or_default();
+    let mut out = String::new();
+    for line in without_header(&text).lines() {
+        match sourced(line) {
+            Some(path) => out.push_str(&pasted(shell, &path)?),
+            None => {
+                out.push_str(line);
+                out.push('\n');
+            }
+        }
+    }
+    Ok(out)
+}
+
+/// A fragment as pasted into an rc file. One that may `return` goes in a
+/// function, so `return` ends the fragment and not the whole rc file; the
+/// rest stay as they are, as `typeset` in a function makes locals.
+fn pasted(shell: Shell, path: &Path) -> Result<String> {
+    let text = std::fs::read_to_string(path).map_err(Error::read(path))?;
+    let text = without_header(&text);
+    let returns = text
+        .lines()
+        .filter(|line| !line.trim_start().starts_with('#'))
+        .flat_map(|line| line.split(|c: char| !(c.is_ascii_alphanumeric() || c == '_')))
+        .any(|word| word == "return");
+    Ok(if shell == Shell::Fish || !returns {
+        text.to_string()
+    } else {
+        format!("_rosamta_fragment() {{\n{text}}}\n_rosamta_fragment\nunset -f _rosamta_fragment\n")
+    })
 }
 
 /// The fragment a loader line sources: loaders write `. '<path>'`
@@ -724,9 +755,10 @@ fn without_header(text: &str) -> &str {
     text.strip_prefix(render::HEADER).unwrap_or(text)
 }
 
+/// Write the plan and stop hooking every shell. The caller disables the
+/// background service, which on macOS needs the app bundle.
 pub fn eject(ctx: &Context, changes: &[FileChange]) -> Result<()> {
     hooks::commit(changes, &ctx.snapshots(), "eject")?;
-    // The background service does not exist yet; add-daemon stops it here.
     ctx.set_unhooked(&Shell::ALL)
 }
 
