@@ -308,10 +308,20 @@ fn rename_updates_repo_in_one_commit() {
     )
     .unwrap();
     fs::write(repo_dir.join("modules/c.toml"), "phase = \"env\"\n").unwrap();
+    fs::write(
+        repo_dir.join("dotfiles.toml"),
+        "[[dotfile]]\npath = \".vimrc\"\n\n[[dotfile]]\npath = \".gitconfig\"\nwhen = { hosts = [\"mbp\"] }\n",
+    )
+    .unwrap();
     git(&repo_dir, &["add", "--all"]);
     git(&repo_dir, &["commit", "--quiet", "--message", "modules"]);
 
     host::rename(&home.paths, "work-mbp").unwrap();
+
+    assert_eq!(
+        fs::read_to_string(repo_dir.join("dotfiles.toml")).unwrap(),
+        "[[dotfile]]\npath = \".vimrc\"\n\n[[dotfile]]\npath = \".gitconfig\"\nwhen = { hosts = [\"work-mbp\"] }\n"
+    );
 
     assert_eq!(manifest(&repo_dir).hosts, ["work-mbp"]);
     let a = fs::read_to_string(repo_dir.join("modules/a.toml")).unwrap();
@@ -335,7 +345,7 @@ fn rename_updates_repo_in_one_commit() {
         git(&repo_dir, &["show", "--name-only", "--format=", "HEAD"])
             .lines()
             .count(),
-        3
+        4
     );
     assert_eq!(
         host::load(&home.paths.host_config()).unwrap().id,
