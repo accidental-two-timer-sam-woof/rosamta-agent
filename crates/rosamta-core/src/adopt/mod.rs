@@ -624,10 +624,7 @@ fn edit_file(
                 .map(|range| format!("{}\n", range.concat()))
                 != Some(candidate.text.clone())
         {
-            return Err(Error::Usage(format!(
-                "{} changed while rosamta was reading it; try again",
-                candidate.file.display()
-            )));
+            return Err(changed(&candidate.file));
         }
         let comment = mode == OriginalLines::Comment
             && matches!(
@@ -713,6 +710,32 @@ fn edit_file(
     Ok((after, records))
 }
 
+fn changed(path: &Path) -> Error {
+    Error::Usage(format!(
+        "{} changed while rosamta was reading it; try again",
+        path.display()
+    ))
+}
+
+/// Fails when `path` no longer holds `before`, so an edit made since the
+/// plan is never overwritten.
+fn unchanged(path: &Path, before: Option<&str>) -> Result<()> {
+    let now = match std::fs::read(path) {
+        Ok(bytes) => Some(bytes),
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => None,
+        Err(err) => {
+            return Err(Error::Read {
+                path: path.to_path_buf(),
+                source: err,
+            });
+        }
+    };
+    if now.as_deref() != before.map(str::as_bytes) {
+        return Err(changed(path));
+    }
+    Ok(())
+}
+
 fn write_text(path: &Path, text: Option<&str>) -> Result<()> {
     match text {
         Some(text) => {
@@ -752,7 +775,12 @@ pub fn execute(ctx: &Context, plan: Plan) -> Result<Vec<Adoption>> {
         .map(|change| change.path.clone())
         .collect();
     snapshots.save(&changed, "adopt")?;
+    let mut written = false;
     let write = || -> Result<()> {
+        for change in &plan.files {
+            unchanged(&change.path, change.before.as_deref())?;
+        }
+        written = true;
         for (path, text) in &plan.modules {
             write_text(path, Some(text))?;
         }
@@ -762,11 +790,13 @@ pub fn execute(ctx: &Context, plan: Plan) -> Result<Vec<Adoption>> {
         Ok(())
     };
     if let Err(err) = apply::apply_after(ctx, write) {
-        for change in &plan.files {
-            let _ = write_text(&change.path, change.before.as_deref());
-        }
-        for (path, _) in &plan.modules {
-            let _ = std::fs::remove_file(path);
+        if written {
+            for change in &plan.files {
+                let _ = write_text(&change.path, change.before.as_deref());
+            }
+            for (path, _) in &plan.modules {
+                let _ = std::fs::remove_file(path);
+            }
         }
         return Err(err);
     }
@@ -1085,7 +1115,13 @@ pub fn undo(ctx: &Context, plan: Undo) -> Result<()> {
         std::slice::from_ref(&plan.file.path),
         &format!("restore adoption {}", plan.adoption.id),
     )?;
+    let mut written = false;
     let write = || -> Result<()> {
+        unchanged(&plan.file.path, plan.file.before.as_deref())?;
+        if let Some((path, text)) = &plan.module {
+            unchanged(path, Some(text))?;
+        }
+        written = true;
         write_text(&plan.file.path, plan.file.after.as_deref())?;
         if let Some((path, _)) = &plan.module {
             write_text(path, None)?;
@@ -1093,9 +1129,11 @@ pub fn undo(ctx: &Context, plan: Undo) -> Result<()> {
         Ok(())
     };
     if let Err(err) = apply::apply_after(ctx, write) {
-        let _ = write_text(&plan.file.path, plan.file.before.as_deref());
-        if let Some((path, text)) = &plan.module {
-            let _ = write_text(path, Some(text));
+        if written {
+            let _ = write_text(&plan.file.path, plan.file.before.as_deref());
+            if let Some((path, text)) = &plan.module {
+                let _ = write_text(path, Some(text));
+            }
         }
         return Err(err);
     }
