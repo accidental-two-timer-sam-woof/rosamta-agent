@@ -1043,6 +1043,13 @@ pub(crate) fn update_notice(store: &Store, host: &HostConfig, pending: usize) ->
     )))
 }
 
+/// Write the shell reminder again after the `shell_notice` setting changed.
+pub fn sync_notice(ctx: &Context) -> Result<()> {
+    let store = Store::new(ctx.paths.state());
+    let host = crate::host::load(&ctx.paths.host_config())?;
+    update_notice(&store, &host, store.queue()?.items.len())
+}
+
 pub(crate) fn take_item(ctx: &Context, id: u32) -> Result<(QueueItem, Queue)> {
     let store = Store::new(ctx.paths.state());
     let mut queue = store.queue()?;
