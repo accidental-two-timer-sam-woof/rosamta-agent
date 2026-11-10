@@ -158,6 +158,15 @@ mod linux {
             path: "the rosamta executable".into(),
             source: err,
         })?;
+        // From the app, the service is the CLI installed next to it.
+        let is_cli = exe
+            .file_name()
+            .is_some_and(|name| name == "rosamta" || name == "rsmt");
+        let exe = if is_cli {
+            exe
+        } else {
+            exe.with_file_name("rosamta")
+        };
         let file = unit_file(paths);
         let dir = file.parent().expect("the unit file has a parent");
         std::fs::create_dir_all(dir).map_err(Error::write(dir))?;
