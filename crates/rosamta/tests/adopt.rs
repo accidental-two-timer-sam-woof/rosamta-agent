@@ -513,6 +513,48 @@ fn an_rc_file_edited_after_reading_is_not_overwritten() {
     assert!(home.repo().join("modules/adopted/bun.toml").exists());
 }
 
+/// The same line in two files: adopting the zsh one leaves `.profile`'s,
+/// since a zsh snippet does nothing for sh.
+#[test]
+fn a_snippet_replaces_only_lines_in_its_own_shells() {
+    if !has("zsh") || !has("sh") {
+        return;
+    }
+    let line = ". \"$HOME/.cargo/env\"\n";
+    let home = hooked(&[(".profile", line), (".zshrc", line), (".cargo/env", "")]);
+    let items = review(&home);
+    let zsh = items
+        .iter()
+        .find(|item| item["file"].as_str().unwrap().ends_with(".zshrc"))
+        .unwrap()["id"]
+        .to_string();
+    run(&home, &["review", "accept", &zsh]);
+    let items = review(&home);
+    assert_eq!(items.len(), 1, "{items:?}");
+    assert!(read(&home, ".profile").contains(line));
+}
+
+/// A module for another host, or one turned off, does not stand in for
+/// this host's lines.
+#[test]
+fn modules_that_do_not_load_here_replace_nothing() {
+    if !has("zsh") {
+        return;
+    }
+    let home = hooked(&[(".zshrc", "export FOO=1\n\nexport BAR=1\n")]);
+    home.write(
+        "modules/adopted/foo.toml",
+        "[when]\nhosts = [\"other\"]\n\n[env]\nFOO = \"1\"\n",
+    );
+    home.write(
+        "modules/adopted/bar.toml",
+        "enabled = false\n\n[env]\nBAR = \"1\"\n",
+    );
+    assert_eq!(review(&home).len(), 2);
+    let zshrc = read(&home, ".zshrc");
+    assert!(zshrc.contains("FOO") && zshrc.contains("BAR"), "{zshrc}");
+}
+
 fn adoptions_json(home: &Home) -> String {
     read(home, ".local/state/rosamta/adoptions.json")
 }

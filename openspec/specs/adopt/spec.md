@@ -96,11 +96,19 @@ rosamta SHALL 依序以 marker 名稱、`Added by <名稱>` 註解、內容中�
 - **THEN** repo 新增一個 commit，訊息為 `adopt(zsh): add bun PATH from ~/.zshrc on mbp`
 
 ### Requirement: Re-added content
-安裝程式把已經接管過的內容再次寫回 rc 檔時，rosamta SHALL 認出它並直接依 host 設定移除，不產生新的 module，也不放進待處理清單。
+安裝程式把已經接管過的內容再次寫回 rc 檔時，rosamta SHALL 認出它並直接依 host 設定移除，不產生新的 module，也不放進待處理清單。寫回原本的檔案時一律如此；寫進其他檔案時，只有對應的 module 在本機載入（已啟用且 `when` 符合本機）並且會在讀取該檔案的每個 shell 中生效，才 SHALL 視為已接管，否則照一般內容處理。
 
 #### Scenario: Installer runs again
 - **WHEN** 已接管的 bun PATH 被 bun 的安裝程式再次寫進 `~/.zshrc`
 - **THEN** 下一次掃描直接移除這段，repo 中仍只有原本的 bun module
+
+#### Scenario: Same line in another shell's file
+- **WHEN** `~/.profile` 與 `~/.zshrc` 都有 `. "$HOME/.cargo/env"`，使用者只接管 `~/.zshrc` 的那一行
+- **THEN** `~/.profile` 的那一行留在原處，並列入待處理清單
+
+#### Scenario: Module for another host
+- **WHEN** repo 中有一個只套用到其他主機的 module 設定 `FOO=1`，本機的 `~/.zshrc` 也有 `export FOO=1`
+- **THEN** 本機的這一行不被視為已接管，列入待處理清單
 
 ### Requirement: Adopt everything at once
 `rsmt adopt` SHALL 掃描並接管所有 watched file 中 hook 以外的內容，執行前列出將產生的 module 與 rc 檔的差異並要求確認，`--yes` 可略過確認。
