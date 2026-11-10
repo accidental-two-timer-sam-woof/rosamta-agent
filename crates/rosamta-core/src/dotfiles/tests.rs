@@ -145,3 +145,14 @@ fn appended_declarations_stay_compact() {
         toml::from_str(&std::fs::read_to_string(&manifest).unwrap()).unwrap();
     assert_eq!(parsed.dotfile[1], entry);
 }
+
+#[test]
+fn encrypted_dotfiles_are_files() {
+    let repo = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(repo.path().join("home/.gnupg")).unwrap();
+    let parsed = manifest("[[dotfile]]\npath = \".gnupg\"\ndeploy = \"copy\"\nencrypted = true\n");
+    assert_eq!(
+        check(&parsed, repo.path()),
+        ["dotfile `.gnupg`: an encrypted dotfile must be a file"]
+    );
+}
