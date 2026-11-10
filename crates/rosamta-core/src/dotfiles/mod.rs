@@ -152,6 +152,24 @@ fn problems(manifest: &DotfileManifest, repo_dir: &Path) -> Vec<(usize, String)>
                 "dotfile `{name}`: an encrypted dotfile must be a file"
             ));
         }
+        if entry.deploy == Deploy::Template {
+            let path = repo_dir.join(&source);
+            if path.is_dir() {
+                problem(format!("dotfile `{name}`: a template must be a file"));
+            } else if !entry.encrypted
+                && let Ok(bytes) = std::fs::read(&path)
+            {
+                // Encrypted templates are checked when they are rendered.
+                match String::from_utf8(bytes) {
+                    Ok(text) => {
+                        if let Err(err) = crate::template::check(&source, &text) {
+                            problem(format!("dotfile `{name}`: {err}"));
+                        }
+                    }
+                    Err(_) => problem(format!("dotfile `{name}`: a template must be UTF-8 text")),
+                }
+            }
+        }
         if entry.encrypted && entry.deploy == Deploy::Link {
             problem(format!(
                 "dotfile `{name}`: an encrypted dotfile cannot be a link; set deploy = \"copy\""
@@ -212,6 +230,41 @@ pub fn select(manifest: &DotfileManifest, host: &HostFacts) -> BTreeMap<PathBuf,
             (path, choice)
         })
         .collect()
+}
+
+/// `vars.*` that this host's templates use and `host.toml` lacks, sorted.
+/// Templates still encrypted for want of the key, and broken ones, which
+/// `problems` reports, are left out.
+pub fn missing_vars(ctx: &crate::apply::Context) -> Result<Vec<String>> {
+    let host = crate::adopt::host_config(ctx)?;
+    let repo_dir = ctx.paths.repo();
+    let (manifest, _) = usable(&repo_dir)?;
+    let mut missing = std::collections::BTreeSet::new();
+    for (_, choice) in select(&manifest, &HostFacts::current(&host)) {
+        let Choice::Use(entry) = choice else {
+            continue;
+        };
+        if entry.deploy != Deploy::Template {
+            continue;
+        }
+        let source = entry.source();
+        let path = repo_dir.join(&source);
+        let bytes = std::fs::read(&path).map_err(|err| Error::Read { path, source: err })?;
+        let bytes = match entry.encrypted {
+            false => bytes,
+            true => match crypt::decrypt(ctx, &bytes)? {
+                Some(bytes) => bytes,
+                None => continue,
+            },
+        };
+        let Ok(text) = String::from_utf8(bytes) else {
+            continue;
+        };
+        if let Ok(names) = crate::template::missing_vars(&source, &text, &host.vars) {
+            missing.extend(names);
+        }
+    }
+    Ok(missing.into_iter().collect())
 }
 
 /// Whether an encrypted dotfile of this host waits for the passphrase.

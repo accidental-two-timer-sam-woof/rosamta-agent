@@ -22,6 +22,7 @@ pub mod schema;
 pub mod shells;
 pub mod snapshot;
 pub mod sync;
+pub mod template;
 pub mod time;
 pub mod validate;
 

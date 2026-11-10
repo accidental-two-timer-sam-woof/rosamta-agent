@@ -1,6 +1,8 @@
 //! Types for every file rosamta reads. Reading goes through serde; writing
 //! goes through `toml_edit` (see `edit`) so user comments survive.
 
+use std::collections::BTreeMap;
+
 use indexmap::IndexMap;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -319,6 +321,34 @@ pub struct HostConfig {
     /// Print a one-line reminder in interactive shells when items await review.
     #[serde(default = "yes")]
     pub shell_notice: bool,
+    /// Values for `vars.*` in templates, only on this host.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub vars: BTreeMap<String, String>,
+    #[serde(default, skip_serializing_if = "SecretSettings::is_default")]
+    pub secrets: SecretSettings,
+}
+
+/// `[secrets]` in `host.toml`.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct SecretSettings {
+    /// Bitwarden tools to try, in order; empty means rbw, bw, bws.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub bitwarden: Vec<BitwardenTool>,
+}
+
+impl SecretSettings {
+    fn is_default(&self) -> bool {
+        self == &Self::default()
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
+#[serde(rename_all = "lowercase")]
+pub enum BitwardenTool {
+    Rbw,
+    Bw,
+    Bws,
 }
 
 impl HostConfig {
@@ -332,6 +362,8 @@ impl HostConfig {
             pull: SyncPolicy::default(),
             pull_interval: default_pull_interval(),
             shell_notice: true,
+            vars: BTreeMap::new(),
+            secrets: SecretSettings::default(),
         }
     }
 }
