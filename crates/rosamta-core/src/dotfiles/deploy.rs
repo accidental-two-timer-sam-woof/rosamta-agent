@@ -7,6 +7,7 @@
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 use serde::Serialize;
 
@@ -18,10 +19,11 @@ use super::{Choice, crypt, history};
 /// Why an encrypted dotfile waits.
 pub(crate) const LOCKED: &str = "encrypted; the key is not unlocked on this host";
 use crate::apply::Context;
-use crate::config::{AdoptPolicy, Deploy, Dotfile, HostFacts};
+use crate::config::{AdoptPolicy, Deploy, Dotfile, HostConfig, HostFacts};
 use crate::error::{Error, Result};
-use crate::host;
+use crate::secrets::{self, Session, Waiting};
 use crate::snapshot::Snapshots;
+use crate::{host, template};
 
 /// What happened, or would happen, at one path.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -74,6 +76,8 @@ enum Work {
     Write(Dotfile, Desired),
     /// Write the host's content back to the repo, then deploy it again.
     Save(Dotfile),
+    /// Record a template's input, writing its output when there is one.
+    Template(Dotfile, String, Option<Vec<u8>>),
     /// Turn a link into a regular copy of what it showed.
     Unlink(Record),
     /// Stop tracking; nothing on disk changes.
@@ -113,11 +117,29 @@ impl Desired {
 struct Env<'a> {
     ctx: &'a Context,
     repo: PathBuf,
+    host: HostConfig,
     policy: AdoptPolicy,
     deployed: Deployed,
+    /// For templates; a broken `secrets.toml` fails them alone.
+    secrets: std::result::Result<Arc<Session>, String>,
 }
 
-impl Env<'_> {
+impl<'a> Env<'a> {
+    fn new(ctx: &'a Context) -> Result<Self> {
+        let host = host::load(&ctx.paths.host_config())?;
+        let secrets = Session::new(ctx, &host, ctx.interactive)
+            .map(Arc::new)
+            .map_err(|err| err.to_string());
+        Ok(Self {
+            ctx,
+            repo: ctx.paths.repo(),
+            policy: host.adopt,
+            host,
+            deployed: state::load(ctx.paths.state())?,
+            secrets,
+        })
+    }
+
     fn target(&self, path: &Path) -> PathBuf {
         self.ctx.home.join(path)
     }
@@ -156,10 +178,9 @@ fn wait(path: &Path, action: Action, local: String, repo: String) -> Planned {
 
 /// Work out what deploying would do, without writing anything.
 pub fn plan(ctx: &Context) -> Result<Vec<Planned>> {
-    let repo = ctx.paths.repo();
-    let (manifest, broken) = super::usable(&repo)?;
-    let host = host::load(&ctx.paths.host_config())?;
-    let facts = HostFacts::current(&host);
+    let env = Env::new(ctx)?;
+    let (manifest, broken) = super::usable(&env.repo)?;
+    let facts = HostFacts::current(&env.host);
     let selected = super::select(&manifest, &facts);
     // A path with a broken declaration for this host is neither deployed
     // nor released: fixing the declaration picks up where it was.
@@ -171,12 +192,6 @@ pub fn plan(ctx: &Context) -> Result<Vec<Planned>> {
         let path = super::clean(&entry.path).unwrap_or_else(|| PathBuf::from(&entry.path));
         failed.entry(path).or_insert(problem);
     }
-    let env = Env {
-        ctx,
-        repo,
-        policy: host.adopt,
-        deployed: state::load(ctx.paths.state())?,
-    };
     let mut out = Vec::new();
     for (path, problem) in &failed {
         out.push(step(
@@ -213,12 +228,7 @@ pub fn plan(ctx: &Context) -> Result<Vec<Planned>> {
 
 fn plan_entry(env: &Env, path: &Path, entry: &Dotfile) -> Result<Planned> {
     match entry.deploy {
-        Deploy::Template => Ok(step(
-            path,
-            Action::Skipped,
-            Some("template deploy is not supported yet".into()),
-            Work::Nothing,
-        )),
+        Deploy::Template => plan_template(env, path, entry),
         Deploy::Link => plan_link(env, path, entry),
         Deploy::Copy => plan_copy(env, path, entry),
     }
@@ -324,6 +334,172 @@ fn plan_copy(env: &Env, path: &Path, entry: &Dotfile) -> Result<Planned> {
     Ok(wait(path, Action::Conflict, local, repo_hash))
 }
 
+fn plan_template(env: &Env, path: &Path, entry: &Dotfile) -> Result<Planned> {
+    let target = env.target(path);
+    let Some(text) = template_text(env.ctx, entry)? else {
+        return Ok(step(
+            path,
+            Action::Skipped,
+            Some(LOCKED.into()),
+            Work::Nothing,
+        ));
+    };
+    let input = input_hash(env, entry, &text)?;
+    let local = tree::hash(&target)?;
+    let record = env
+        .deployed
+        .entries
+        .get(path)
+        .filter(|record| record.deploy == Deploy::Template);
+    let untouched = record.is_some_and(|record| Some(&record.target_hash) == local.as_ref());
+    let same_input = record.is_some_and(|record| record.source_hash == input);
+    let keep = || Work::Template(entry.clone(), input.clone(), None);
+    // Outside a terminal only a changed input renders again, so an
+    // unchanged template never asks a secret source.
+    if untouched && same_input && !env.ctx.interactive {
+        return Ok(step(path, Action::Unchanged, None, keep()));
+    }
+    // Output edited on this host cannot go back into the template.
+    if let (Some(local), Some(_), false) = (&local, record, untouched) {
+        if env.ignored(path, local, &input) {
+            return Ok(ignored(path));
+        }
+        return Ok(match (same_input, env.policy) {
+            (true, AdoptPolicy::Off) => step(
+                path,
+                Action::Skipped,
+                Some("changed on this host".into()),
+                Work::Nothing,
+            ),
+            (true, _) => wait(path, Action::Changed, local.clone(), input),
+            (false, _) => wait(path, Action::Conflict, local.clone(), input),
+        });
+    }
+    let (bytes, secret) = match render(env, entry, &text)? {
+        Rendered::Done { bytes, secret } => (bytes, secret),
+        Rendered::Waiting(reason) => {
+            return Ok(step(path, Action::Skipped, Some(reason), Work::Nothing));
+        }
+    };
+    let action = match &local {
+        None => Action::Copied,
+        Some(local) if *local == tree::hash_bytes(&bytes) => {
+            return Ok(step(path, Action::Unchanged, None, keep()));
+        }
+        Some(_) if untouched => Action::Updated,
+        Some(local) if env.ignored(path, local, &input) => return Ok(ignored(path)),
+        Some(local) => return Ok(wait(path, Action::Conflict, local.clone(), input)),
+    };
+    let mut planned = step(
+        path,
+        action,
+        None,
+        Work::Template(entry.clone(), input, None),
+    );
+    // A preview of output holding a secret would print the secret.
+    if !secret {
+        let before = local.and_then(|_| std::fs::read_to_string(&target).ok());
+        planned.preview = Some((before, String::from_utf8(bytes.clone()).ok()));
+    }
+    if let Work::Template(_, _, output) = &mut planned.work {
+        *output = Some(bytes);
+    }
+    Ok(planned)
+}
+
+/// A template's text, decrypted when encrypted; `None` while this host has
+/// no key.
+fn template_text(ctx: &Context, entry: &Dotfile) -> Result<Option<String>> {
+    let source = ctx.paths.repo().join(entry.source());
+    let bytes = std::fs::read(&source).map_err(Error::read(&source))?;
+    let bytes = match entry.encrypted {
+        false => bytes,
+        true => match crypt::decrypt(ctx, &bytes)? {
+            Some(bytes) => bytes,
+            None => return Ok(None),
+        },
+    };
+    String::from_utf8(bytes)
+        .map(Some)
+        .map_err(|_| Error::Usage(format!("template `{}` is not UTF-8 text", entry.source())))
+}
+
+/// What a template's output depends on, secrets aside: its text, this host,
+/// the vars it uses and, when it runs commands, their declarations.
+fn input_hash(env: &Env, entry: &Dotfile, text: &str) -> Result<String> {
+    let used = template::used_vars(&entry.source(), text).map_err(Error::Usage)?;
+    let vars: BTreeMap<&String, Option<&String>> = used
+        .iter()
+        .map(|name| (name, env.host.vars.get(name)))
+        .collect();
+    let commands = if text.contains("secret(") {
+        std::fs::read_to_string(env.repo.join(secrets::MANIFEST)).unwrap_or_default()
+    } else {
+        String::new()
+    };
+    let input = serde_json::json!({
+        "text": text,
+        "id": env.host.id,
+        "tags": env.host.tags,
+        "os": std::env::consts::OS,
+        "arch": std::env::consts::ARCH,
+        "home": env.ctx.home,
+        "vars": vars,
+        "commands": commands,
+    });
+    Ok(tree::hash_bytes(input.to_string().as_bytes()))
+}
+
+/// The input hash of the template `entry` as it is now; `None` while this
+/// host has no key.
+pub(crate) fn template_input(ctx: &Context, entry: &Dotfile) -> Result<Option<String>> {
+    let env = Env::new(ctx)?;
+    match template_text(ctx, entry)? {
+        Some(text) => input_hash(&env, entry, &text).map(Some),
+        None => Ok(None),
+    }
+}
+
+enum Rendered {
+    /// The output, and whether a secret went into it.
+    Done { bytes: Vec<u8>, secret: bool },
+    /// What it waits for, as a step's reason.
+    Waiting(String),
+}
+
+fn render(env: &Env, entry: &Dotfile, text: &str) -> Result<Rendered> {
+    let name = entry.source();
+    let missing = template::missing_vars(&name, text, &env.host.vars).map_err(Error::Usage)?;
+    if !missing.is_empty() {
+        let names: Vec<String> = missing.iter().map(|var| format!("vars.{var}")).collect();
+        return Ok(Rendered::Waiting(format!(
+            "waiting for {} in host.toml; run `rsmt apply` in a terminal",
+            names.join(", ")
+        )));
+    }
+    let session = env
+        .secrets
+        .as_ref()
+        .map_err(|err| Error::Usage(err.clone()))?;
+    let before = session.used();
+    match template::render(&name, text, &env.host, &env.ctx.home, session) {
+        Ok(output) => Ok(Rendered::Done {
+            bytes: output.into_bytes(),
+            secret: session.used() > before,
+        }),
+        Err(err) => match session.take_waiting().into_iter().next() {
+            Some(Waiting::Locked(tool)) => Ok(Rendered::Waiting(format!(
+                "waiting for {} to unlock; run `rsmt apply` in a terminal",
+                tool.name()
+            ))),
+            Some(Waiting::Command(command)) => Ok(Rendered::Waiting(format!(
+                "secret command `{command}` runs only in `rsmt apply` in a terminal"
+            ))),
+            None => Err(Error::Usage(err)),
+        },
+    }
+}
+
 /// What a copy should hold; `None` when it is encrypted and this host has
 /// no key yet.
 fn desired(ctx: &Context, entry: &Dotfile) -> Result<Option<Desired>> {
@@ -375,7 +551,11 @@ pub fn deploy(ctx: &Context) -> Result<Vec<Step>> {
     for item in &planned {
         if matches!(
             item.work,
-            Work::Link(_) | Work::Write(..) | Work::Save(_) | Work::Unlink(_)
+            Work::Link(_)
+                | Work::Write(..)
+                | Work::Save(_)
+                | Work::Unlink(_)
+                | Work::Template(_, _, Some(_))
         ) {
             keep.extend(tree::files(&ctx.home.join(&item.step.path))?);
         }
@@ -426,7 +606,13 @@ pub(crate) fn force(ctx: &Context, path: &Path, entry: &Dotfile) -> Result<()> {
             None => return Err(Error::Usage(LOCKED.into())),
         },
         Deploy::Template => {
-            return Err(Error::Usage("template deploy is not supported yet".into()));
+            let env = Env::new(ctx)?;
+            let text = template_text(ctx, entry)?.ok_or_else(|| Error::Usage(LOCKED.into()))?;
+            let input = input_hash(&env, entry, &text)?;
+            match render(&env, entry, &text)? {
+                Rendered::Done { bytes, .. } => Work::Template(entry.clone(), input, Some(bytes)),
+                Rendered::Waiting(reason) => return Err(Error::Usage(reason)),
+            }
         }
     };
     let target = ctx.home.join(path);
@@ -441,6 +627,7 @@ pub(crate) fn force(ctx: &Context, path: &Path, entry: &Dotfile) -> Result<()> {
 
 fn run(ctx: &Context, repo: &Path, deployed: &mut Deployed, path: &Path, work: Work) -> Result<()> {
     let target = ctx.home.join(path);
+    let mut input = None;
     let entry = match work {
         Work::Nothing => return Ok(()),
         Work::Drop => {
@@ -463,7 +650,23 @@ fn run(ctx: &Context, repo: &Path, deployed: &mut Deployed, path: &Path, work: W
             entry
         }
         Work::Write(entry, desired) => {
+            let previous = tree::mode_of(&target);
             tree::put(desired.content(), &target)?;
+            // Bytes land private; a file that was there keeps its mode.
+            if let (Desired::Bytes(_), None, Some(mode)) = (&desired, entry.mode(), previous) {
+                tree::set_mode(&target, mode)?;
+            }
+            entry
+        }
+        Work::Template(entry, hash, output) => {
+            if let Some(bytes) = output {
+                let previous = tree::mode_of(&target);
+                tree::put(Content::Bytes(&bytes), &target)?;
+                if let (None, Some(mode)) = (entry.mode(), previous) {
+                    tree::set_mode(&target, mode)?;
+                }
+            }
+            input = Some(hash);
             entry
         }
         Work::Save(entry) => {
@@ -484,7 +687,10 @@ fn run(ctx: &Context, repo: &Path, deployed: &mut Deployed, path: &Path, work: W
         };
         tree::set_mode(at, mode)?;
     }
-    let source_hash = tree::hash(&source)?.unwrap_or_default();
+    let source_hash = match input {
+        Some(input) => input,
+        None => tree::hash(&source)?.unwrap_or_default(),
+    };
     let target_hash = match entry.deploy {
         Deploy::Link => source_hash.clone(),
         _ => tree::hash(&target)?.unwrap_or_default(),

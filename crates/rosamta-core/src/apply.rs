@@ -22,6 +22,9 @@ pub struct Context {
     pub paths: Paths,
     pub home: PathBuf,
     pub path_var: String,
+    /// `rsmt apply` in a terminal: the only run that unlocks a secret
+    /// source or runs a secret command.
+    pub interactive: bool,
 }
 
 impl Context {
@@ -33,6 +36,7 @@ impl Context {
             paths: Paths::from_env()?,
             home,
             path_var: std::env::var("PATH").unwrap_or_default(),
+            interactive: false,
         })
     }
 

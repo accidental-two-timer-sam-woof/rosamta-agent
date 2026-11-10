@@ -21,6 +21,13 @@ fn environment() -> Environment<'static> {
     let mut env = Environment::new();
     env.set_undefined_behavior(UndefinedBehavior::Strict);
     env.set_fuel(Some(FUEL));
+    // A dotfile ends with a newline like any text file.
+    env.set_syntax(
+        minijinja::syntax::SyntaxConfig::builder()
+            .keep_trailing_newline(true)
+            .build()
+            .expect("the default delimiters are valid"),
+    );
     env
 }
 
@@ -32,27 +39,33 @@ pub fn check(name: &str, source: &str) -> Result<(), String> {
         .map_err(|err| describe(&err))
 }
 
-/// `vars.*` names the template uses that `vars` lacks, sorted. Static: a
-/// name inside an `if` counts even when that branch never runs.
+/// `vars.*` names the template uses, sorted. Static: a name inside an
+/// `if` counts even when that branch never runs.
+pub fn used_vars(name: &str, source: &str) -> Result<Vec<String>, String> {
+    let env = environment();
+    let template = env
+        .template_from_named_str(name, source)
+        .map_err(|err| describe(&err))?;
+    let mut used: Vec<String> = template
+        .undeclared_variables(true)
+        .iter()
+        .filter_map(|used| used.strip_prefix("vars.")?.split('.').next())
+        .map(str::to_string)
+        .collect();
+    used.sort();
+    used.dedup();
+    Ok(used)
+}
+
+/// The used `vars.*` names that `vars` lacks, sorted.
 pub fn missing_vars(
     name: &str,
     source: &str,
     vars: &BTreeMap<String, String>,
 ) -> Result<Vec<String>, String> {
-    let env = environment();
-    let template = env
-        .template_from_named_str(name, source)
-        .map_err(|err| describe(&err))?;
-    let mut missing: Vec<String> = template
-        .undeclared_variables(true)
-        .iter()
-        .filter_map(|used| used.strip_prefix("vars.")?.split('.').next())
-        .filter(|var| !vars.contains_key(*var))
-        .map(str::to_string)
-        .collect();
-    missing.sort();
-    missing.dedup();
-    Ok(missing)
+    let mut used = used_vars(name, source)?;
+    used.retain(|var| !vars.contains_key(var));
+    Ok(used)
 }
 
 /// A secret that is waiting fails the render too; `secrets.take_waiting()`

@@ -14,7 +14,7 @@ use rosamta_core::{Error, Result};
 use crate::print_json;
 
 pub fn apply(json: bool, dry_run: bool) -> Result<ExitCode> {
-    let ctx = Context::from_env()?;
+    let mut ctx = Context::from_env()?;
     if dry_run {
         let plan = apply::plan(&ctx)?;
         let dotfiles = dotfiles::plan(&ctx)?;
@@ -57,6 +57,9 @@ pub fn apply(json: bool, dry_run: bool) -> Result<ExitCode> {
     if interactive {
         crate::dotfiles::ask_vars(&ctx)?;
     }
+    // shortcut: a locked secret source asks for its password while the lock
+    // is held, so the daemon waits until it is typed.
+    ctx.interactive = interactive;
     let applied = {
         let _lock = adopt::lock(&ctx)?;
         apply::apply(&ctx)?
