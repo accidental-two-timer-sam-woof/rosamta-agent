@@ -14,7 +14,7 @@ use serde::Serialize;
 
 pub use recognize::{Dialect, Recognizer, Structured, recognize, recognizers};
 pub use secret::{looks_secret, secret_rule};
-pub use segment::{Source, Watched};
+pub use segment::{Source, Watched, watched_files};
 pub use store::{Adoption, QueueItem};
 
 use crate::apply::{self, Context};

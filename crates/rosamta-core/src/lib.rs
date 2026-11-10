@@ -3,6 +3,7 @@
 pub mod adopt;
 pub mod apply;
 pub mod config;
+pub mod daemon;
 pub mod edit;
 pub mod error;
 pub mod generated;
@@ -10,6 +11,7 @@ mod git;
 pub mod github;
 pub mod hooks;
 pub mod host;
+pub mod i18n;
 pub mod paths;
 mod process;
 pub mod render;

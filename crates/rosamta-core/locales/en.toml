@@ -1,0 +1,19 @@
+# Text shown by the background service; the GUI reads the same tables.
+# `{name}` is replaced with a value.
+
+[review]
+line = "{file}: 1 new line to review"
+lines = "{file}: {lines} new lines to review"
+many = "{count} changes to review"
+
+[action]
+adopt = "Adopt"
+ignore = "Ignore"
+review = "Show Diff"
+
+[problem]
+publish_blocked = "Publishing is blocked: {reason}"
+conflict = "Pull stopped: changed here and on another host: {files}"
+apply_failed = "New settings were not applied: {reason}"
+invalid = "The repo has an invalid file: {reason}"
+upgrade = "The repo needs a newer rosamta"

@@ -28,6 +28,9 @@ pub enum Error {
     /// Signing in to GitHub or calling its API failed.
     #[error("{0}")]
     GitHub(String),
+    /// The background service could not start or keep running.
+    #[error("{0}")]
+    Daemon(String),
 }
 
 impl Error {

@@ -9,6 +9,7 @@ repository.workspace = true
 indexmap = { version = "2.14.2", features = ["serde"] }
 keyring = "4.2.0"
 libc = "0.2.191"
+notify-debouncer-full = "0.7.0"
 regex = "1.13.1"
 schemars = { version = "1.2.3", features = ["indexmap2"] }
 serde = { version = "1.0.229", features = ["derive"] }
@@ -20,6 +21,17 @@ toml_edit = "0.25.19"
 # `rustls` minus its bundled webpki-roots (CDLA-Permissive-2.0): certificates
 # are checked against the OS trust store instead.
 ureq = { version = "3.5.1", default-features = false, features = ["_ring", "json", "platform-verifier", "rustls-no-provider"] }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+block2 = "0.6.2"
+objc2 = "0.6.5"
+objc2-app-kit = "0.3.2"
+objc2-foundation = "0.3.2"
+objc2-service-management = "0.3.2"
+objc2-user-notifications = "0.3.2"
+
+[target.'cfg(target_os = "linux")'.dependencies]
+notify-rust = "4.19.0"
 
 [build-dependencies]
 regex = "1.13.1"
