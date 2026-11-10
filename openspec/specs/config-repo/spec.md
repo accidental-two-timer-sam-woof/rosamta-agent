@@ -6,7 +6,7 @@
 ## Requirements
 
 ### Requirement: Repo layout
-repo SHALL 在根目錄包含 `rosamta.toml`，並可包含 `modules/`、`home/`、`dotfiles.toml`、`packages.toml`。`modules/` 底下（含子目錄）每個 `.toml` 檔是一個 module，檔名去掉副檔名即為 module 名稱。
+repo SHALL 在根目錄包含 `rosamta.toml`，並可包含 `modules/`、`home/`、`dotfiles.toml`、`packages.toml`。`modules/` 底下（含子目錄）每個 `.toml` 檔是一個 module，檔名去掉副檔名即為 module 名稱；名稱以 `.` 開頭的檔案與目錄（例如編輯器的鎖定檔）SHALL 略過。
 
 #### Scenario: Minimal repo
 - **WHEN** repo 只有 `rosamta.toml`
@@ -15,6 +15,10 @@ repo SHALL 在根目錄包含 `rosamta.toml`，並可包含 `modules/`、`home/`
 #### Scenario: Module in a subdirectory
 - **WHEN** repo 有 `modules/adopted/bun.toml`
 - **THEN** rosamta 把它載入為名稱 `bun` 的 module
+
+#### Scenario: Editor lock file
+- **WHEN** Emacs 在 `modules/` 留下鎖定檔 `.#bun.toml`
+- **THEN** rosamta 不把它當成 module，`rsmt validate` 與 `rsmt apply` 照常執行
 
 ### Requirement: Unique module names
 module 名稱 SHALL 在整個 repo 內唯一；`modules/` 的子目錄只用來整理檔案，不構成命名空間。

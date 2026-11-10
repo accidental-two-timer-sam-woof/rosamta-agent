@@ -11,14 +11,19 @@ use crate::{git, host, validate};
 pub const MANIFEST: &str = "rosamta.toml";
 pub const MODULES: &str = "modules";
 
-/// Every `*.toml` under `modules/`, subdirectories included, sorted.
+/// Every `*.toml` under `modules/`, subdirectories included, sorted. Hidden
+/// entries, such as an editor's lock file, are skipped.
 pub fn module_files(repo_dir: &Path) -> Result<Vec<PathBuf>> {
     fn walk(dir: &Path, out: &mut Vec<PathBuf>) -> Result<()> {
         for entry in std::fs::read_dir(dir).map_err(Error::read(dir))? {
-            let path = entry.map_err(Error::read(dir))?.path();
+            let entry = entry.map_err(Error::read(dir))?;
+            if entry.file_name().as_encoded_bytes().starts_with(b".") {
+                continue;
+            }
+            let path = entry.path();
             if path.is_dir() {
                 walk(&path, out)?;
-            } else if path.extension().is_some_and(|ext| ext == "toml") {
+            } else if path.is_file() && path.extension().is_some_and(|ext| ext == "toml") {
                 out.push(path);
             }
         }
