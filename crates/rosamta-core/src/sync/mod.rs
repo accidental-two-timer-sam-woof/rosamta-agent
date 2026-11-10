@@ -400,8 +400,13 @@ fn edit_message(status: &str) -> String {
         })
         .collect();
     let in_modules = |path: &str| path.starts_with(&format!("{}/", repo::MODULES));
+    let in_home = |path: &str| {
+        path.starts_with("home/") || path.starts_with("hosts/") || path == crate::dotfiles::MANIFEST
+    };
     let scope = if changes.iter().all(|(_, path)| in_modules(path)) {
         "modules"
+    } else if changes.iter().all(|(_, path)| in_home(path)) {
+        "home"
     } else {
         "repo"
     };
@@ -412,7 +417,7 @@ fn edit_message(status: &str) -> String {
         if in_modules(path) {
             repo::module_name(Path::new(path))
         } else {
-            path.to_string()
+            path.strip_prefix("home/").unwrap_or(path).to_string()
         }
     };
     let parts: Vec<String> = ["add", "update", "remove"]
@@ -661,6 +666,14 @@ mod tests {
             (
                 " M modules/a.toml\n M modules/b.toml\n M modules/c.toml\n M modules/d.toml\n",
                 "edit(modules): change 4 files",
+            ),
+            (
+                " M home/.config/nvim/lazy-lock.json\n",
+                "edit(home): update .config/nvim/lazy-lock.json",
+            ),
+            (
+                " M dotfiles.toml\n?? hosts/mbp/.gitconfig\n",
+                "edit(home): add hosts/mbp/.gitconfig, update dotfiles.toml",
             ),
         ];
         for (status, expected) in cases {

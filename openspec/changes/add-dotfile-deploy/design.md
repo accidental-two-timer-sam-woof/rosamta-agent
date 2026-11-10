@@ -70,7 +70,7 @@ when = { hosts = ["mbp"] }
 - **copy 的目標被改**：依接管偏好；「自動」時 repo 沒變就寫回 repo，「詢問」放進待處理清單，「關閉」不處理，之後的套用也不覆蓋它。
 - **衝突**：互動終端機中的 `rsmt apply` 逐一顯示 diff，讓使用者選採用 repo 版本、保留本機版本或稍後處理；非互動執行與背景服務一律放進待處理清單。
 
-寫回 repo 的內容和手動編輯 repo 一樣：由下一次推送或拉取 commit（先做秘密掃描）。`edit(...)` commit 訊息新增 `home` 範圍：變更都在 `home/` 或 `hosts/` 時寫成 `edit(home): update .config/nvim/lazy-lock.json`。
+寫回 repo 的內容和手動編輯 repo 一樣：由下一次推送或拉取 commit（先做秘密掃描）。`edit(...)` commit 訊息新增 `home` 範圍：變更都在 `home/`、`hosts/` 或 `dotfiles.toml` 時寫成 `edit(home): update .config/nvim/lazy-lock.json`。
 
 ### 待處理清單的 dotfile 項目
 
