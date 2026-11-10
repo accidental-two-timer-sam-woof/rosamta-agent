@@ -228,7 +228,7 @@ rsmt hook zsh
 rsmt eject
 ```
 
-把目前生效的設定直接寫進各 shell 的設定檔並移除區塊；之後即使移除 rosamta，shell 的 PATH、環境變數與 alias 都不變。
+把目前生效的設定直接寫進各 shell 的設定檔並移除區塊，也停用背景服務；之後即使移除 rosamta，shell 的 PATH、環境變數與 alias 都不變。
 
 ```sh
 rsmt restore --original
