@@ -8,10 +8,10 @@
 
 ## 2. 秘密來源
 
-- [ ] 2.1 實作 `bitwarden()`：rbw、bw、bws 的偵測、登入與鎖住判斷、取值，順序覆寫，以及同一次套用內的快取
-- [ ] 2.2 實作 `secrets.toml` 的型別、`rsmt schema secrets`、`rsmt validate` 檢查與 `secret()`；只在互動的 `rsmt apply` 執行
-- [ ] 2.3 實作 `rsmt secrets bws login|logout`，token 存進 keychain（測試用檔案），執行 bws 時以環境變數傳入
-- [ ] 2.4 實作 `bitwarden_ssh_socket()` 與獨立的安裝方式偵測
+- [x] 2.1 實作 `bitwarden()`：rbw、bw、bws 的偵測、登入與鎖住判斷、取值，順序覆寫，以及同一次套用內的快取
+- [x] 2.2 實作 `secrets.toml` 的型別、`rsmt schema secrets`、`rsmt validate` 檢查與 `secret()`；只在互動的 `rsmt apply` 執行
+- [x] 2.3 實作 `rsmt secrets bws login|logout`，token 存進 keychain（測試用檔案），執行 bws 時以環境變數傳入
+- [x] 2.4 實作 `bitwarden_ssh_socket()` 與獨立的安裝方式偵測
 
 ## 3. 部署
 
