@@ -179,6 +179,37 @@ SSH 金鑰能通過 GitHub 驗證時使用 SSH；否則以登入的 token 走 HT
 rsmt remote github logout
 ```
 
+## 背景服務
+
+```sh
+rsmt daemon enable
+```
+
+背景服務登入後自動啟動。rc 檔出現新內容時，依接管偏好接管或加入待處理清單；repo 有變動時立即套用；並依拉取偏好定時同步。
+
+- macOS：背景服務是 rosamta.app 中的登入項目。系統要求核准時，到「系統設定 › 一般 › 登入項目」允許 rosamta。出現待處理的內容時會發出通知，可以直接選「接管」、「忽略」或「查看差異」。
+- Linux：註冊為 systemd 使用者服務 `rosamta.service`。沒有 systemd 使用者服務的環境（例如容器），請在登入後的 session 中自行執行：
+
+```sh
+rsmt daemon run
+```
+
+查看狀態與停用：
+
+```sh
+rsmt daemon status
+rsmt daemon disable
+```
+
+背景服務啟動時會讀取一次 login shell 的環境變數，例如 `SSH_AUTH_SOCK`；修改後先停用再啟用，才會生效。沒有通知服務時不發通知，只更新待處理清單並在開 shell 時提醒。執行紀錄寫在 `~/.local/state/rosamta/daemon.log`。
+
+`~/.config/rosamta/host.toml` 中與背景服務有關的設定：
+
+| 設定 | 可用的值 |
+|---|---|
+| `pull` | `auto`：定時同步，電腦從睡眠喚醒後也會同步一次（預設）；`manual`：只在執行 `rsmt sync` 或 `rsmt pull` 時拉取 |
+| `pull_interval` | 定時同步的間隔，單位為分鐘（預設 15） |
+
 ## 移除 hook
 
 ```sh
