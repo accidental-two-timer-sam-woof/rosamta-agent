@@ -735,7 +735,13 @@ impl Daemon {
             problems.push(("locked", String::new()));
         }
         if let Ok(state) = sync::load_state(self.ctx.paths.state()) {
-            for (attempt, pull) in [(&state.publish, false), (&state.pull, true)] {
+            // Edits that could not be committed stop the pull with the
+            // publish attempt itself: one problem, notified as publishing.
+            let pull = state
+                .pull
+                .as_ref()
+                .filter(|pull| state.publish.as_ref() != Some(*pull));
+            for (attempt, pull) in [(state.publish.as_ref(), false), (pull, true)] {
                 let Some(attempt) = attempt else {
                     continue;
                 };

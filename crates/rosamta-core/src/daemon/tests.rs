@@ -175,6 +175,22 @@ fn problems_say_whether_publishing_or_pulling_failed() {
         daemon.report_problems();
         assert_eq!(shown.lock().unwrap().last().unwrap(), expected);
     }
+
+    // A pull stopped by edits that could not be published carries the
+    // publish attempt: notified once.
+    let blocked = attempt(Outcome::Blocked, "possible secret in .zshrc");
+    let shared = sync::SyncState {
+        publish: blocked.clone(),
+        pull: blocked,
+        ..Default::default()
+    };
+    Store::new(&state).save("sync.json", &shared).unwrap();
+    let before = shown.lock().unwrap().len();
+    daemon.report_problems();
+    assert_eq!(
+        shown.lock().unwrap()[before..],
+        ["Publishing is blocked: possible secret in .zshrc"]
+    );
 }
 
 #[test]
