@@ -46,6 +46,7 @@ impl Home {
             home: root,
             path_var: String::new(),
             interactive: false,
+            session: Default::default(),
         };
         let home = Self { _dir: dir, ctx };
         home.repo_write("rosamta.toml", "format = 1\nhosts = [\"mbp\"]\n");
@@ -332,6 +333,8 @@ fn restore_original_removes_new_links() {
     home.deploy();
     let snapshots = rosamta_core::snapshot::Snapshots::new(home.ctx.paths.state(), &home.ctx.home);
     let originals = snapshots.originals().unwrap();
+    // What files held stays readable by this user alone.
+    assert_eq!(mode(snapshots.dir()), 0o700);
     assert!(
         originals
             .iter()
@@ -991,4 +994,120 @@ mod templates {
         assert!(read(&home.at(".gitconfig")).contains("a@example.com"));
         assert!(adopt::queue(&home.ctx).unwrap().is_empty());
     }
+
+    #[test]
+    fn the_review_diff_shows_the_output() {
+        let (home, _) = edited();
+        let queue = adopt::queue(&home.ctx).unwrap();
+        let diff =
+            rosamta_core::dotfiles::review::diff(&home.ctx, queue[0].dotfile.as_ref().unwrap())
+                .unwrap();
+        assert!(diff.contains("+\temail = a@example.com"), "{diff}");
+        assert!(!diff.contains("{{"), "{diff}");
+    }
+
+    /// `.npmrc` rendered from a secret command that logs each run.
+    fn with_secret(home: &mut Home) -> PathBuf {
+        let log = home.ctx.home.join("runs");
+        let program = home.ctx.home.join("fetch");
+        write(
+            &program,
+            &format!("#!/bin/sh\necho run >> '{}'\necho \"$1\"\n", log.display()),
+        );
+        fs::set_permissions(&program, fs::Permissions::from_mode(0o755)).unwrap();
+        home.repo_write(
+            "secrets.toml",
+            &format!(
+                "[commands.fetch]\nrun = [\"{}\", \"{{arg}}\"]\n",
+                program.display()
+            ),
+        );
+        home.repo_write("home/.npmrc", "token={{ secret(\"fetch\", \"npm_1\") }}\n");
+        home.repo_write(
+            "dotfiles.toml",
+            "[[dotfile]]\npath = \".npmrc\"\ndeploy = \"template\"\n",
+        );
+        log
+    }
+
+    fn runs(log: &Path) -> usize {
+        fs::read_to_string(log).unwrap_or_default().lines().count()
+    }
+
+    #[test]
+    fn output_holding_secrets_is_not_kept_in_the_repo() {
+        let mut home = Home::new("ask");
+        let log = with_secret(&mut home);
+        home.ctx.interactive = true;
+        assert_eq!(home.deploy(), one(".npmrc", Action::Copied));
+        // One run serves every deploy of the same terminal session.
+        assert_eq!(home.deploy(), one(".npmrc", Action::Unchanged));
+        assert_eq!(runs(&log), 1);
+        home.ctx.interactive = false;
+        write(&home.at(".npmrc"), "token=npm_2\n");
+        assert_eq!(home.deploy(), one(".npmrc", Action::Changed));
+        let id = adopt::queue(&home.ctx).unwrap()[0].id;
+        let err = adopt::accept(&home.ctx, id, Scope::Host).unwrap_err();
+        assert!(err.to_string().contains("holds secrets"), "{err}");
+        assert!(!home.repo().join("hosts").exists());
+    }
+
+    #[test]
+    fn an_ignored_conflict_asks_no_secret_source() {
+        let mut home = Home::new("ask");
+        let log = with_secret(&mut home);
+        write(&home.at(".npmrc"), "token=mine\n");
+        home.ctx.interactive = true;
+        assert_eq!(home.deploy(), one(".npmrc", Action::Conflict));
+        let id = adopt::queue(&home.ctx).unwrap()[0].id;
+        adopt::ignore(&home.ctx, id).unwrap();
+        let steps = dotfiles::deploy(&home.ctx).unwrap();
+        assert_eq!(steps[0].reason.as_deref(), Some("ignored"));
+        home.ctx.interactive = false;
+        let steps = dotfiles::deploy(&home.ctx).unwrap();
+        assert_eq!(steps[0].reason.as_deref(), Some("ignored"));
+        assert_eq!(runs(&log), 1);
+        assert!(adopt::queue(&home.ctx).unwrap().is_empty());
+    }
+
+    #[test]
+    fn output_already_in_place_is_not_a_conflict() {
+        // A copy rosamta wrote becomes a template.
+        let home = with_template("[vars]\nemail = \"a@example.com\"\n");
+        home.repo_write("home/.gitconfig", "plain\n");
+        home.repo_write(
+            "dotfiles.toml",
+            "[[dotfile]]\npath = \".gitconfig\"\ndeploy = \"copy\"\n",
+        );
+        assert_eq!(home.deploy(), one(".gitconfig", Action::Copied));
+        home.repo_write("home/.gitconfig", TEMPLATE);
+        home.repo_write(
+            "dotfiles.toml",
+            "[[dotfile]]\npath = \".gitconfig\"\ndeploy = \"template\"\n",
+        );
+        assert_eq!(home.deploy(), one(".gitconfig", Action::Updated));
+
+        // The output landed but its record did not.
+        set_email(&home, "b@example.com");
+        write(
+            &home.at(".gitconfig"),
+            "[user]\n\tname = mbp\n\temail = b@example.com\n",
+        );
+        assert_eq!(home.deploy(), one(".gitconfig", Action::Unchanged));
+        assert_eq!(home.deploy(), one(".gitconfig", Action::Unchanged));
+    }
+}
+
+#[test]
+fn a_declaration_for_this_host_alone_wins() {
+    let home = Home::new("ask");
+    home.repo_write("home/.gitconfig", "shared\n");
+    home.repo_write("hosts/mbp/.gitconfig", "mine\n");
+    home.repo_write(
+        "dotfiles.toml",
+        "[[dotfile]]\npath = \".gitconfig\"\ndeploy = \"copy\"\nwhen = { hosts = [\"mbp\", \"work\"] }\n\n\
+         [[dotfile]]\npath = \".gitconfig\"\nsource = \"hosts/mbp/.gitconfig\"\ndeploy = \"copy\"\nwhen = { hosts = [\"mbp\"] }\n",
+    );
+    assert_eq!(home.deploy(), one(".gitconfig", Action::Copied));
+    assert_eq!(read(&home.at(".gitconfig")), "mine\n");
 }

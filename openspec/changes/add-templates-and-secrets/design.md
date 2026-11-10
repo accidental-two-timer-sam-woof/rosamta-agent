@@ -116,11 +116,15 @@ run = ["pass", "show", "{arg}"]
 
 目標與紀錄中的 render 結果不同，表示有人改了它。內容無法自動寫回 template，因此不論接管偏好是「自動」或「詢問」都放進待處理清單；偏好為「關閉」時不處理，之後的套用也不覆蓋它。
 
-- `accept`：把目前的內容存成本機專用的 copy（`hosts/<識別名稱>/<路徑>`，加上 `when.hosts = [本機]` 的宣告，沿用權限與加密）。內容看起來像秘密而 template 沒有加密時拒絕，與 `rsmt add` 相同。只接受 `--scope host`。
+- `accept`：把目前的內容存成本機專用的 copy（`hosts/<識別名稱>/<路徑>`，加上 `when.hosts = [本機]` 的宣告，沿用權限與加密）。template 使用秘密來源、或內容看起來像秘密，而 template 沒有加密時拒絕；前者以 template 的靜態分析判斷，不依賴內容的秘密規則。只接受 `--scope host`。
 - `discard`：重新 render 並覆蓋（先存 snapshot）。
 - `ignore`：與其他 dotfile 項目相同。
 
-輸入也改變時列為衝突，三種處理相同。
+輸入也改變時先 render：結果與目標相同就更新紀錄，不同才列為衝突，三種處理相同。被 ignore 的項目在 render 前就判斷，不會再詢問秘密來源。紀錄來自部署方式改變前（例如 copy 改成 template）且目標未被修改時，視為 rosamta 寫的內容，直接更新。
+
+待處理清單的差異顯示 render 結果；template 使用秘密來源時改顯示 template 本身，避免把秘密印出來。
+
+同一次終端機中的 `rsmt apply` 共用一個秘密來源的工作階段，處理衝突時的重新 render 不會再詢問密碼或再執行秘密指令。
 
 ### 待處理清單的「等待輸入」項目
 
@@ -136,4 +140,5 @@ dotfile 項目新增原因 `waiting`，並記錄在等什麼：哪個秘密來�
 - 背景服務不執行秘密指令，使用 `secret()` 的 template 只會在終端機套用時更新 → 等待項目與通知會提醒使用者。
 - rbw 在 `rbw unlocked` 與 `rbw get` 之間剛好自動鎖住時，`rbw get` 會自己叫出 pinentry；rbw 沒有關閉這個行為的選項 → 機率低，只記錄在此。bw 以 `BW_NOINTERACTION` 保證不詢問。
 - 鎖住的工具在終端機中解鎖時仍持有套用的鎖，背景服務要等密碼輸入完成。
+- 輸入雜湊包含整個 `secrets.toml`，修改任一秘密指令都會讓所有使用 `secret()` 的 template 重新 render；要只算用到的指令，需要知道 `secret()` 的參數，之後再改。
 - 秘密指令的 `run` 第一個元素只能是 PATH 中的名稱或絕對路徑，不能來自 `{arg}`，避免依執行目錄或 template 參數改變要執行的程式。

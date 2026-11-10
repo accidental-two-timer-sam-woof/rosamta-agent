@@ -47,7 +47,7 @@ template SHALL 可使用 `vars.<name>`，值來自本機 `host.toml` 的 `[vars]
 - **THEN** 該 template 不重新 render，也不取用任何秘密
 
 ### Requirement: Local edits to rendered files
-render 出來的目標被修改、偏好不是「關閉」時，SHALL 放進待處理清單（不論偏好是「自動」或「詢問」），因為內容無法寫回 template。`rsmt review accept` SHALL 把目前內容存成本機專用的 copy 宣告（`hosts/<識別名稱>/<路徑>`），沿用權限與加密，且只接受 `--scope host`；內容看起來像秘密而 template 沒有加密時 SHALL 拒絕。`rsmt review discard` SHALL 重新 render 並覆蓋。偏好為「關閉」時 SHALL 不處理，之後的套用也不覆蓋它。
+render 出來的目標被修改、偏好不是「關閉」時，SHALL 放進待處理清單（不論偏好是「自動」或「詢問」），因為內容無法寫回 template。`rsmt review accept` SHALL 把目前內容存成本機專用的 copy 宣告（`hosts/<識別名稱>/<路徑>`），沿用權限與加密，且只接受 `--scope host`；template 使用秘密來源、或內容看起來像秘密，而 template 沒有加密時 SHALL 拒絕。`rsmt review discard` SHALL 重新 render 並覆蓋。偏好為「關閉」時 SHALL 不處理，之後的套用也不覆蓋它。
 
 #### Scenario: Keep a hand edit
 - **WHEN** 使用者手動修改了 render 出來的 `~/.gitconfig`，再對該項目執行 `rsmt review accept`

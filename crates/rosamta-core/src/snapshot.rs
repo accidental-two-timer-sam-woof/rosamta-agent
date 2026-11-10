@@ -6,6 +6,7 @@
 //! rosamta first touched it, and `original-absent` lists files that did not
 //! exist then; neither is ever overwritten.
 
+use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 
 use crate::error::{Error, Result};
@@ -39,10 +40,13 @@ impl Snapshots {
     }
 
     fn ensure_repo(&self) -> Result<()> {
+        std::fs::create_dir_all(&self.dir).map_err(Error::write(&self.dir))?;
+        // What files held, rendered secrets included, is for this user alone.
+        std::fs::set_permissions(&self.dir, std::fs::Permissions::from_mode(0o700))
+            .map_err(Error::write(&self.dir))?;
         if self.dir.join(".git").exists() {
             return Ok(());
         }
-        std::fs::create_dir_all(&self.dir).map_err(Error::write(&self.dir))?;
         git::run(&self.dir, &["init", "--quiet"])?;
         // Local history only: no identity prompts, no signing passphrases.
         for (key, value) in [

@@ -2,15 +2,17 @@
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use crate::config::{HostFacts, Module, Shell};
+use crate::config::{HostConfig, HostFacts, Module, Shell};
 use crate::error::{Error, Result};
 use crate::generated::{self, CURRENT};
 use crate::hooks::{self, FileChange, HookEnv};
 use crate::paths::Paths;
 use crate::process::output_with_timeout;
 use crate::render::{self, Layout};
+use crate::secrets::Session;
 use crate::shells::{self, Detected};
 use crate::snapshot::Snapshots;
 use crate::{host, repo, validate};
@@ -25,6 +27,9 @@ pub struct Context {
     /// `rsmt apply` in a terminal: the only run that unlocks a secret
     /// source or runs a secret command.
     pub interactive: bool,
+    /// The session an interactive run shares, so a tool unlocks and a
+    /// command runs once however many deploys the run makes.
+    pub session: Mutex<Option<Arc<Session>>>,
 }
 
 impl Context {
@@ -37,7 +42,23 @@ impl Context {
             home,
             path_var: std::env::var("PATH").unwrap_or_default(),
             interactive: false,
+            session: Mutex::default(),
         })
+    }
+
+    /// Secret sources for one deploy; outside a terminal each deploy asks
+    /// afresh, since a tool may have been unlocked in between.
+    pub(crate) fn secrets(&self, host: &HostConfig) -> Result<Arc<Session>> {
+        if !self.interactive {
+            return Session::new(self, host, false).map(Arc::new);
+        }
+        let mut shared = self.session.lock().unwrap_or_else(|err| err.into_inner());
+        if let Some(session) = &*shared {
+            return Ok(Arc::clone(session));
+        }
+        let session = Arc::new(Session::new(self, host, true)?);
+        *shared = Some(Arc::clone(&session));
+        Ok(session)
     }
 
     fn snapshots(&self) -> Snapshots {

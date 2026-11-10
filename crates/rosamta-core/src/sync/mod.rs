@@ -615,6 +615,7 @@ mod tests {
             home: home.clone(),
             path_var: String::new(),
             interactive: false,
+            session: Default::default(),
         };
         std::fs::create_dir_all(ctx.paths.host_config().parent().unwrap()).unwrap();
         std::fs::write(

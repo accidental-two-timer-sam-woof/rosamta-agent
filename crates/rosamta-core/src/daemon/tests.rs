@@ -11,6 +11,7 @@ fn ctx(home: &Path) -> Context {
         home: home.to_path_buf(),
         path_var: String::new(),
         interactive: false,
+        session: Default::default(),
     }
 }
 

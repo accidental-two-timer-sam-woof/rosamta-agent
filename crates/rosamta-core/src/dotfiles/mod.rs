@@ -223,10 +223,17 @@ pub fn select(manifest: &DotfileManifest, host: &HostFacts) -> BTreeMap<PathBuf,
                 .copied()
                 .filter(|entry| entry.when.hosts.contains(&host.id))
                 .collect();
-            let choice = match (entries.as_slice(), named.as_slice()) {
-                ([only], _) | (_, [only]) => Choice::Use((*only).clone()),
-                (_, []) => Choice::Duplicate(entries.len()),
-                (_, named) => Choice::Duplicate(named.len()),
+            // A declaration for this host alone is the most specific.
+            let own: Vec<&Dotfile> = named
+                .iter()
+                .copied()
+                .filter(|entry| entry.when.hosts == [host.id.clone()])
+                .collect();
+            let choice = match (entries.as_slice(), named.as_slice(), own.as_slice()) {
+                ([only], _, _) | (_, [only], _) | (_, _, [only]) => Choice::Use((*only).clone()),
+                (_, [], _) => Choice::Duplicate(entries.len()),
+                (_, named, []) => Choice::Duplicate(named.len()),
+                (_, _, own) => Choice::Duplicate(own.len()),
             };
             (path, choice)
         })
