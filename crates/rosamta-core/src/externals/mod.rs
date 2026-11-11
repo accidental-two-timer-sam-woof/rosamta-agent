@@ -13,6 +13,13 @@ use crate::dotfiles::{self, Choice, clean};
 use crate::error::{Error, Result};
 use crate::validate;
 
+mod archive;
+pub mod deploy;
+mod git;
+pub mod state;
+
+pub use deploy::{Action, Step, apply, plan};
+
 pub const MANIFEST: &str = "externals.toml";
 
 /// `externals.toml`.

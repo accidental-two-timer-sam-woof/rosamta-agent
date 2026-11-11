@@ -31,6 +31,9 @@ pub enum Error {
     /// The background service could not start or keep running.
     #[error("{0}")]
     Daemon(String),
+    /// Downloading or extracting an external failed.
+    #[error("{0}")]
+    External(String),
     /// A template cannot render outside a terminal yet.
     #[error("{}", .0.describe())]
     Waiting(crate::dotfiles::review::WaitingFor),
