@@ -833,30 +833,28 @@ fn an_exported_marker_does_not_hide_env_snippets_from_a_nested_shell() {
     }
 }
 
-/// The env loader sources a snippet in two branches (first shell, nested
-/// shell); ejected code holds it once.
+/// Ejected code runs an env snippet once in a shell and once more in a
+/// shell started from it, as the loaders did.
 #[test]
-fn ejected_env_snippets_are_pasted_once() {
+fn ejected_env_snippets_run_once_in_every_shell() {
     let home = Home::new();
     home.cmd("rsmt").arg("init").assert().success();
+    let count = "N=\"x${N-}\"";
     home.write(
         "modules/opts.toml",
-        "phase = \"env\"\n[raw]\nbash = 'EJECTED=1'\nzsh = 'EJECTED=1'\n",
+        &format!("phase = \"env\"\n[raw]\nbash = '{count}'\nzsh = '{count}'\n"),
     );
     apply(&home);
     eject(&home);
-    let pasted: Vec<(&str, usize)> = rc_files(&home)
-        .into_iter()
-        .filter_map(|(rel, content)| {
-            let count = String::from_utf8(content?)
-                .unwrap()
-                .matches("EJECTED=1")
-                .count();
-            (count > 0).then_some((rel, count))
-        })
-        .collect();
-    assert!(!pasted.is_empty());
-    assert!(pasted.iter().all(|(_, count)| *count == 1), "{pasted:?}");
+    for shell in ["bash", "zsh"] {
+        if !has(shell) {
+            continue;
+        }
+        // `; :` keeps the nested shell a child: a last command may be exec'd.
+        let script = format!("echo \"$N\"; {shell} -i -c 'echo \"$N\"'; :");
+        let out = home.shell(&[shell, "-i", "-c", &script].map(String::from));
+        assert_eq!(String::from_utf8_lossy(&out.stdout), "x\nx\n", "{shell}");
+    }
 }
 
 #[test]
