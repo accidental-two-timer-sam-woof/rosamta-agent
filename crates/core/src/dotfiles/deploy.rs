@@ -636,8 +636,10 @@ pub fn deploy(ctx: &Context) -> Result<Vec<Step>> {
 /// password prompts and secret commands never stall the daemon. Returns
 /// what [`keep_prepared`] checks once the lock is held.
 pub fn prepare(ctx: &Context) -> Option<Vec<u8>> {
+    // Read first, so a change while the session loads counts as one.
+    let manifest = secrets_manifest(ctx);
     let _ = plan_with(ctx, true);
-    secrets_manifest(ctx)
+    manifest
 }
 
 /// Forgets the prepared secrets when a pull changed `secrets.toml` while
