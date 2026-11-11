@@ -202,15 +202,17 @@ fn create_writes_only_what_is_missing() {
     home.repo_write("home/.config/foo/config.toml", "a = 1\n");
     home.repo_write(
         "dotfiles.toml",
-        &format!("[[dotfile]]\npath = \"{path}\"\ndeploy = \"copy\"\n"),
+        &format!("[[dotfile]]\npath = \"{path}\"\n"),
     );
     home.deploy();
     home.repo_write(
         "dotfiles.toml",
         &format!("[[dotfile]]\npath = \"{path}\"\ndeploy = \"create\"\npermissions = \"0600\"\n"),
     );
-    // A copy's record goes once the path becomes create.
+    // A link into the repo becomes the host's own copy.
     assert_eq!(home.deploy(), one(path, Action::Unchanged));
+    assert!(!fs::symlink_metadata(&target).unwrap().is_symlink());
+    assert_eq!(read(&target), "a = 1\n");
     let records = || {
         dotfiles::state::load(home.ctx.paths.state())
             .unwrap()

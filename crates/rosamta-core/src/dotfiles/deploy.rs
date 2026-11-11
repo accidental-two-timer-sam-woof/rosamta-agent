@@ -287,11 +287,16 @@ fn plan_link(env: &Env, path: &Path, entry: &Dotfile) -> Result<Planned> {
     Ok(wait(path, Action::Conflict, local, repo_hash))
 }
 
-/// Whatever is at the target is the host's own; a record left from another
-/// deploy mode is dropped.
+/// Whatever is at the target is the host's own: what another deploy mode
+/// left is released, a link into the repo becoming a copy.
 fn plan_create(env: &Env, path: &Path, entry: &Dotfile) -> Result<Planned> {
     if std::fs::symlink_metadata(env.target(path)).is_ok() {
-        return Ok(step(path, Action::Unchanged, None, Work::Drop));
+        let work = match env.deployed.entries.get(path) {
+            Some(record) => plan_release(env, path, record).work,
+            None if env.deployed.ignored.contains_key(path) => Work::Drop,
+            None => Work::Nothing,
+        };
+        return Ok(step(path, Action::Unchanged, None, work));
     }
     Ok(match desired(env.ctx, entry)? {
         Some(desired) => write(path, entry, desired, Action::Copied, None),
@@ -713,6 +718,7 @@ fn run(ctx: &Context, repo: &Path, deployed: &mut Deployed, path: &Path, work: W
         Work::Nothing => return Ok(()),
         Work::Drop => {
             deployed.entries.remove(path);
+            deployed.ignored.remove(path);
             return Ok(());
         }
         Work::Unlink(record) => {
@@ -723,6 +729,7 @@ fn run(ctx: &Context, repo: &Path, deployed: &mut Deployed, path: &Path, work: W
                 history::recover(repo, &record.source, &target)?;
             }
             deployed.entries.remove(path);
+            deployed.ignored.remove(path);
             return Ok(());
         }
         Work::Keep(entry) => entry,
