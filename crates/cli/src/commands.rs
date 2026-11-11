@@ -75,11 +75,13 @@ pub fn apply(json: bool, dry_run: bool) -> Result<ExitCode> {
     ctx.interactive = interactive;
     // An external or a `before` script may set up a secret source, so
     // templates then wait for it, under the lock.
-    if interactive && !apply::setup_pending(&ctx) {
-        dotfiles::deploy::prepare(&ctx);
-    }
+    let prepared =
+        (interactive && !apply::setup_pending(&ctx)).then(|| dotfiles::deploy::prepare(&ctx));
     let applied = {
         let _lock = adopt::lock(&ctx)?;
+        if let Some(prepared) = prepared {
+            dotfiles::deploy::keep_prepared(&mut ctx, prepared);
+        }
         apply::apply(&ctx)?
     };
     warn_skipped(&applied.skipped);

@@ -1306,6 +1306,20 @@ mod templates {
     }
 
     #[test]
+    fn a_secret_command_changed_after_preparing_runs_again() {
+        let mut home = Home::new("ask");
+        let log = with_secret(&mut home);
+        home.ctx.interactive = true;
+        let prepared = dotfiles::deploy::prepare(&home.ctx);
+        let manifest = fs::read_to_string(home.ctx.paths.repo().join("secrets.toml")).unwrap();
+        home.repo_write("secrets.toml", &manifest.replace("{arg}", "--{arg}"));
+        dotfiles::deploy::keep_prepared(&mut home.ctx, prepared);
+        dotfiles::deploy::deploy_all(&home.ctx).unwrap();
+        assert_eq!(runs(&log), 2);
+        assert_eq!(read(&home.at(".npmrc")), "token=--npm_1\n");
+    }
+
+    #[test]
     fn a_failed_secret_command_is_not_run_again_in_the_same_apply() {
         let mut home = Home::new("ask");
         let log = with_secret(&mut home);
