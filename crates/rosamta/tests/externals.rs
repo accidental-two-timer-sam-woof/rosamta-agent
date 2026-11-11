@@ -34,3 +34,96 @@ fn validate_reports_unlocked_and_nested_externals() {
             .and(predicate::str::contains("is inside dotfile `.config/zsh`")),
     );
 }
+
+/// A repo outside the repo dir with `plugin.zsh`, and its commit.
+fn upstream(home: &Home) -> (std::path::PathBuf, String) {
+    let dir = home.root.join("upstream");
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(dir.join("plugin.zsh"), "export FROM_PLUGIN=1\n").unwrap();
+    common::git(&dir, &["init", "--quiet"]);
+    common::git(&dir, &["add", "-A"]);
+    common::git(&dir, &["commit", "--quiet", "-m", "plugin"]);
+    let mut cmd = assert_cmd::Command::new("git");
+    common::git_env(&mut cmd);
+    let out = cmd
+        .arg("-C")
+        .arg(&dir)
+        .args(["rev-parse", "HEAD"])
+        .output()
+        .unwrap();
+    (
+        dir,
+        String::from_utf8(out.stdout).unwrap().trim().to_string(),
+    )
+}
+
+#[test]
+fn externals_download_before_the_shells_are_checked() {
+    let home = Home::new();
+    home.cmd("rsmt").arg("init").assert().success();
+    let (url, rev) = upstream(&home);
+    // Unguarded, as a module loading oh-my-zsh would be.
+    let source = r#". "$HOME/.oh-my-zsh/plugin.zsh""#;
+    home.write(
+        "modules/omz.toml",
+        &format!("[raw]\nsh = '{source}'\nbash = '{source}'\nzsh = '{source}'\n"),
+    );
+    home.write(
+        "externals.toml",
+        &format!(
+            "[[external]]\npath = \".oh-my-zsh\"\ngit = \"{}\"\nrev = \"{rev}\"\n",
+            url.display()
+        ),
+    );
+    home.write(
+        "dotfiles.toml",
+        "[[dotfile]]\npath = \".oh-my-zsh/custom/aliases.zsh\"\n",
+    );
+    home.write("home/.oh-my-zsh/custom/aliases.zsh", "alias l=ls\n");
+    let omz = home.root.join(".oh-my-zsh");
+
+    home.cmd("rsmt")
+        .args(["apply", "--dry-run"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Downloaded ~/.oh-my-zsh"));
+    assert!(!omz.exists());
+    let out = home.cmd("rsmt").args(["apply", "--json"]).output().unwrap();
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let applied: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(applied["externals"][0]["action"], "downloaded");
+    assert_eq!(applied["dotfiles"][0]["action"], "linked");
+    assert!(omz.join("plugin.zsh").is_file());
+    assert!(omz.join("custom/aliases.zsh").is_symlink());
+}
+
+#[test]
+fn something_else_at_the_path_fails_apply() {
+    let home = Home::new();
+    home.cmd("rsmt").arg("init").assert().success();
+    let (url, rev) = upstream(&home);
+    std::fs::create_dir_all(home.root.join(".zplug")).unwrap();
+    std::fs::write(home.root.join(".zplug/mine"), "x").unwrap();
+    home.write(
+        "externals.toml",
+        &format!(
+            "[[external]]\npath = \".zplug\"\ngit = \"{}\"\nrev = \"{rev}\"\n",
+            url.display()
+        ),
+    );
+    home.cmd("rsmt")
+        .arg("apply")
+        .assert()
+        .code(1)
+        .stderr(predicate::str::contains(
+            "not downloaded ~/.zplug: something else is there",
+        ));
+    assert_eq!(
+        std::fs::read_to_string(home.root.join(".zplug/mine")).unwrap(),
+        "x"
+    );
+}

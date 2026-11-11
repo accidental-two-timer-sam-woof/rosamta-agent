@@ -177,6 +177,23 @@ fn pull_brings_in_and_applies_another_hosts_module() {
 }
 
 #[test]
+fn a_failing_external_does_not_fail_the_pull() {
+    let hosts = hosts();
+    run(&hosts.a, &["apply"]);
+    hosts.b.write(
+        "externals.toml",
+        &format!(
+            "[[external]]\npath = \".x\"\ngit = \"/nonexistent\"\nrev = \"{}\"\n",
+            "0".repeat(40)
+        ),
+    );
+    run(&hosts.b, &["publish"]);
+    run(&hosts.a, &["pull"]);
+    assert_eq!(state(&hosts.a)["pull"]["outcome"], "ok");
+    assert!(!hosts.a.root.join(".x").exists());
+}
+
+#[test]
 fn a_conflict_leaves_the_repo_as_it_was() {
     let hosts = hosts();
     run(&hosts.a, &["pull"]);

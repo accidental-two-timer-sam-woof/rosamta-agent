@@ -127,13 +127,17 @@ fn plan_all(ctx: &Context) -> Result<Vec<Planned>> {
     let host = crate::adopt::host_config(ctx)?;
     let (manifest, broken) = usable(&ctx.paths.repo())?;
     let records = state::load(ctx.paths.state())?;
+    let facts = HostFacts::current(&host);
     let mut failed = BTreeMap::new();
-    for (entry, problem) in broken {
+    for (entry, problem) in broken
+        .into_iter()
+        .filter(|(entry, _)| entry.when.matches(&facts))
+    {
         let path =
             crate::dotfiles::clean(&entry.path).unwrap_or_else(|| PathBuf::from(&entry.path));
         failed.entry(path).or_insert(problem);
     }
-    let selected = select(&manifest, &HostFacts::current(&host));
+    let selected = select(&manifest, &facts);
     let mut out = Vec::new();
     for (path, problem) in &failed {
         out.push(planned(path, Action::Failed, Some(problem), Work::Nothing));
