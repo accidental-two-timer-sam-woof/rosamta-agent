@@ -60,8 +60,12 @@ repo 裡宣告、在 host 上執行的設定腳本，只執行一次，或在內
 _Avoid_: hook, task, job
 
 **Condition**（套用範圍）:
-決定一個 module 或 dotfile 套用到哪些 host 的條件，依據 OS、架構、host ID 與 tag。
+決定一個 module 或 dotfile 套用到哪些 host 的條件，依據 OS、架構、host ID 與 tag；module 另可限定 shell。
 _Avoid_: filter, ignore rule
+
+**Include**（加入本機）:
+把本機加進另一台 host 新增的 module 或 dotfile 的套用範圍，讓它在本機載入。接管到與其他 host 相同的內容時也會這樣做，不另建 module。
+_Avoid_: merge, share, copy
 
 **Secret source**（秘密來源）:
 提供 template 秘密值的外部工具，例如 rbw、bw、bws。
