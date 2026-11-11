@@ -338,8 +338,10 @@ pub fn run(
     daemon.rc_changed();
     daemon.dotfiles_changed();
     loop {
-        // Dotfiles deployed since: their directories are watched from now on.
+        // Dotfiles deployed since, and startup files that moved: their
+        // directories are watched from now on.
         watch(&daemon, dotfile_watches(&dotfile_targets(&daemon.ctx)));
+        watch(&daemon, watch_list(&daemon.ctx, &daemon.env));
         match receiver.recv_timeout(TICK) {
             Ok(Event::Changed(paths)) => daemon.changed(&paths),
             Ok(Event::Action(action, ids)) => daemon.act(action, &ids),
@@ -488,7 +490,7 @@ impl Daemon {
     /// Watched rc files that exist, named as file events name them: the
     /// directory resolved, not the file, which may be a symlink.
     fn rc_files(&self) -> Vec<PathBuf> {
-        adopt::watched_files(&self.env)
+        let mut files: Vec<PathBuf> = adopt::watched_files(&self.env)
             .into_iter()
             .map(
                 |watched| match (watched.path.parent(), watched.path.file_name()) {
@@ -496,7 +498,10 @@ impl Daemon {
                     _ => watched.path,
                 },
             )
-            .collect()
+            .collect();
+        // Nothing is adopted from it, but fish stops loading rosamta without it.
+        files.push(real(&self.env.fish_config.join("conf.d")).join("rosamta.fish"));
+        files
     }
 
     /// Scan rc files and act on the adopt policy; announce new review items.
@@ -507,6 +512,13 @@ impl Daemon {
         let mut seen = fingerprint(&files);
         if self.rc_seen == Some(seen) {
             return;
+        }
+        if self.rc_seen.is_some() {
+            // A changed `.zshenv` may move ZDOTDIR; asking the shells is
+            // slow, so only once something changed.
+            self.env = self.ctx.hook_env(&self.ctx.installed());
+            files = self.rc_files();
+            seen = fingerprint(&files);
         }
         let result = (|| {
             let lock = adopt::lock(&self.ctx)?;
@@ -944,6 +956,14 @@ impl Daemon {
     /// if it comes back.
     fn report_problems(&mut self) {
         let mut problems: Vec<(&'static str, String)> = self.repo_problem.iter().cloned().collect();
+        let missing = apply::missing_hooks(&self.ctx, &self.env);
+        if !missing.is_empty() {
+            let files: Vec<String> = missing
+                .iter()
+                .map(|path| adopt::display(path, &self.ctx.home))
+                .collect();
+            problems.push(("hooks_missing", files.join(", ")));
+        }
         if dotfiles::needs_key(&self.ctx).unwrap_or(false) {
             problems.push(("locked", String::new()));
         }
@@ -1001,6 +1021,7 @@ impl Daemon {
             if !state.notified.contains(&key) {
                 let (text, arg) = match *kind {
                     "conflict" => ("problem.conflict", "files"),
+                    "hooks_missing" => ("problem.hooks_missing", "files"),
                     "offline" if reason == "1" => ("problem.offline_one", "count"),
                     "offline" => ("problem.offline", "count"),
                     _ => (&*format!("problem.{kind}"), "reason"),

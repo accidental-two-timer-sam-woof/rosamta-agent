@@ -1,9 +1,13 @@
 //! What needs attention, how this host is set up, and what happened lately.
 
+use std::path::Path;
+
 use gpui_kit::component::button::Button;
 use gpui_kit::component::{h_flex, v_flex};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
+use rosamta_core::adopt;
+use rosamta_core::apply::ShellStatus;
 use rosamta_core::config::{AdoptPolicy, SyncPolicy};
 use rosamta_core::sync::{Attempt, Outcome};
 
@@ -59,6 +63,7 @@ fn attention(app: &Rosamta, cx: &mut Context<Rosamta>) -> Option<impl IntoElemen
         .problem
         .iter()
         .cloned()
+        .chain(hooks_missing(&snap.shells, &snap.home))
         .chain(problem("publish", snap.sync.publish.as_ref()))
         .chain(problem("pull", snap.sync.pull.as_ref()))
         .collect();
@@ -97,6 +102,15 @@ fn attention(app: &Rosamta, cx: &mut Context<Rosamta>) -> Option<impl IntoElemen
     });
     let body = v_flex().children(items).children(problems);
     Some(section(t("overview.attention"), body, cx))
+}
+
+fn hooks_missing(shells: &[ShellStatus], home: &Path) -> Option<String> {
+    let files: Vec<String> = shells
+        .iter()
+        .flat_map(|status| &status.missing)
+        .map(|path| adopt::display(path, home))
+        .collect();
+    (!files.is_empty()).then(|| t_owned("problem.hooks_missing", &[("files", &files.join(", "))]))
 }
 
 /// The text for a publish or pull that needs the user.

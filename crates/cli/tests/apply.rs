@@ -970,3 +970,52 @@ fn conflicts_wait_in_the_review_queue() {
         .assert()
         .code(2);
 }
+
+#[test]
+fn apply_warns_when_chezmoi_would_drop_the_block() {
+    use std::os::unix::fs::PermissionsExt;
+    let home = set_up();
+    let bin = home.root.join("bin");
+    fs::create_dir_all(&bin).unwrap();
+    let chezmoi = bin.join("chezmoi");
+    // chezmoi manages ~/.profile; `cat` prints what its apply would write.
+    fs::write(
+        &chezmoi,
+        "#!/bin/sh\ncase \"$*\" in\n*managed*) printf '%s\\n' \"$HOME/.profile\" \"$HOME/.gitconfig\" ;;\n*cat*) cat \"$HOME/target\" ;;\nesac\n",
+    )
+    .unwrap();
+    fs::set_permissions(&chezmoi, fs::Permissions::from_mode(0o755)).unwrap();
+    let path = format!("{}:{}", bin.display(), std::env::var("PATH").unwrap());
+    let apply = |target: &str| {
+        fs::write(home.root.join("target"), target).unwrap();
+        let out = home
+            .cmd("rsmt")
+            .arg("apply")
+            .env("PATH", &path)
+            .output()
+            .unwrap();
+        assert!(out.status.success());
+        String::from_utf8(out.stderr).unwrap()
+    };
+    let stderr = apply("export A=1\n");
+    assert!(
+        stderr.contains("warning: chezmoi also manages ~/.profile, so"),
+        "{stderr}"
+    );
+    assert!(!stderr.contains(".gitconfig"), "{stderr}");
+    // No hook changed, so chezmoi is not asked: answering renders its templates.
+    let stderr = apply("export A=1\n");
+    assert!(!stderr.contains("chezmoi"), "{stderr}");
+    // `chezmoi apply` wrote its copy over the hook: hooking again asks again.
+    let unhooked = || fs::write(home.root.join(".profile"), "export A=1\n").unwrap();
+    unhooked();
+    let stderr = apply("export A=1\n");
+    assert!(
+        stderr.contains("chezmoi also manages ~/.profile"),
+        "{stderr}"
+    );
+    // A source that holds the block (`chezmoi re-add`) keeps it.
+    unhooked();
+    let stderr = apply(&format!("export A=1\n{BEGIN}\n# <<< rosamta <<<\n"));
+    assert!(!stderr.contains("chezmoi"), "{stderr}");
+}

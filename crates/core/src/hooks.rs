@@ -103,19 +103,24 @@ impl FileChange {
 }
 
 fn read(path: &Path) -> Result<Option<String>> {
-    match std::fs::read_to_string(path) {
-        Ok(text) => {
-            // An unpaired start line would make the next write pair it with
-            // a later end line and drop the user's lines in between.
-            let starts = text.lines().filter(|line| line.trim_end() == BEGIN).count();
-            if starts > usize::from(find_block(&text).is_some()) {
-                return Err(Error::Usage(format!(
-                    "{}: the `{BEGIN}` and `{END}` lines do not pair up; keep one of each around rosamta's block and try again",
-                    path.display()
-                )));
-            }
-            Ok(Some(text))
+    let text = read_raw(path)?;
+    if let Some(text) = &text {
+        // An unpaired start line would make the next write pair it with
+        // a later end line and drop the user's lines in between.
+        let starts = text.lines().filter(|line| line.trim_end() == BEGIN).count();
+        if starts > usize::from(find_block(text).is_some()) {
+            return Err(Error::Usage(format!(
+                "{}: the `{BEGIN}` and `{END}` lines do not pair up; keep one of each around rosamta's block and try again",
+                path.display()
+            )));
         }
+    }
+    Ok(text)
+}
+
+fn read_raw(path: &Path) -> Result<Option<String>> {
+    match std::fs::read_to_string(path) {
+        Ok(text) => Ok(Some(text)),
         Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(None),
         Err(err) => Err(Error::Read {
             path: path.to_path_buf(),
@@ -217,6 +222,14 @@ fn bash_profile(home: &Path) -> Option<PathBuf> {
 
 /// Changes that install `shell`'s hooks. Nothing is written.
 pub fn plan_install(shell: Shell, env: &HookEnv) -> Result<Vec<FileChange>> {
+    plan_install_with(shell, env, &read)
+}
+
+fn plan_install_with(
+    shell: Shell,
+    env: &HookEnv,
+    read: &dyn Fn(&Path) -> Result<Option<String>>,
+) -> Result<Vec<FileChange>> {
     let mut changes = Vec::new();
     let mut upsert = |path: PathBuf, block: String, seed: Option<String>| -> Result<()> {
         let before = read(&path)?;
@@ -324,6 +337,23 @@ pub fn hooked_files(shell: Shell, env: &HookEnv) -> Result<Vec<PathBuf>> {
     Ok(out)
 }
 
+/// Files that should hold `shell`'s block and do not, as when another tool
+/// writes its own copy of an rc file over rosamta's.
+pub fn missing(shell: Shell, env: &HookEnv) -> Result<Vec<PathBuf>> {
+    // Markers that do not pair up are apply's to report, in that file
+    // alone: any start line counts as a block here.
+    Ok(plan_install_with(shell, env, &read_raw)?
+        .into_iter()
+        .filter(|change| {
+            change
+                .before
+                .as_deref()
+                .is_none_or(|text| !text.lines().any(|line| line.trim_end() == BEGIN))
+        })
+        .map(|change| change.path)
+        .collect())
+}
+
 /// Changes that remove `shell`'s hooks. fish's file goes away entirely.
 pub fn plan_remove(shell: Shell, env: &HookEnv) -> Result<Vec<FileChange>> {
     let mut changes = Vec::new();
@@ -427,5 +457,22 @@ mod tests {
         }
         std::fs::write(&path, format!("a\n{block}b\n")).unwrap();
         assert!(read(&path).unwrap().is_some());
+    }
+
+    #[test]
+    fn unpaired_markers_hide_no_other_file_that_lost_its_block() {
+        let dir = tempfile::tempdir().unwrap();
+        let home = dir.path();
+        let env = HookEnv {
+            home: home.into(),
+            current: home.join("current"),
+            zshenv_dir: home.into(),
+            zdotdir: home.into(),
+            fish_config: home.join(".config/fish"),
+        };
+        std::fs::write(home.join(".zshenv"), format!("{BEGIN}\nx\n{END}\n")).unwrap();
+        std::fs::write(home.join(".zprofile"), format!("{BEGIN}\nx\n")).unwrap();
+        std::fs::write(home.join(".zshrc"), "export A=1\n").unwrap();
+        assert_eq!(missing(Shell::Zsh, &env).unwrap(), [home.join(".zshrc")]);
     }
 }

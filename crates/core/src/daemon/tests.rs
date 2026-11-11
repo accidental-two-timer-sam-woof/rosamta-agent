@@ -662,3 +662,34 @@ fn a_review_note_not_shown_is_shown_once_the_service_is_up() {
     let log = std::fs::read_to_string(state_dir.join("daemon.log")).unwrap();
     assert_eq!(log.matches("notified:").count(), 1, "{log}");
 }
+
+#[test]
+fn a_hook_block_another_tool_removed_is_notified_once() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut ctx = ctx(dir.path());
+    // sh alone: no other shell's startup runs.
+    let bin = dir.path().join("bin");
+    std::fs::create_dir(&bin).unwrap();
+    std::os::unix::fs::symlink("/bin/sh", bin.join("sh")).unwrap();
+    ctx.path_var = bin.display().to_string();
+    let generated = ctx.paths.generated();
+    std::fs::create_dir_all(generated.join("v1/sh")).unwrap();
+    std::os::unix::fs::symlink("v1", generated.join(crate::generated::CURRENT)).unwrap();
+    let shown = Arc::default();
+    let notifier = Box::new(Shown(Arc::clone(&shown)));
+    let mut daemon = Daemon::new(ctx, HostConfig::new("test".into()), notifier);
+    daemon.lang = Lang::En;
+    instance::save(daemon.ctx.paths.state(), &instance::DaemonState::default()).unwrap();
+    let profile = dir.path().join(".profile");
+    let hooked = format!("{}\n{}\n", crate::hooks::BEGIN, crate::hooks::END);
+
+    std::fs::write(&profile, "export A=1\n").unwrap();
+    daemon.report_problems();
+    daemon.report_problems();
+    std::fs::write(&profile, &hooked).unwrap();
+    daemon.report_problems();
+    std::fs::write(&profile, "export A=1\n").unwrap();
+    daemon.report_problems();
+    let removed = "Shells stopped loading rosamta: its block was removed from ~/.profile";
+    assert_eq!(*shown.lock().unwrap(), [removed, removed]);
+}
