@@ -10,6 +10,11 @@ waiting_locked = "{file}：等待 {tool} 解鎖"
 waiting_command = "{file}：等待在終端機執行秘密指令 {command}"
 waiting_many = "{count} 個設定檔等待中"
 waiting_unset = "{file}：等待 {vars} 的值"
+script_waiting = "{script}：等待執行"
+script_failed = "{script}：執行失敗"
+scripts_waiting = "{count} 個腳本等待執行"
+scripts_failed = "{count} 個腳本執行失敗"
+items_waiting = "{count} 個項目等待中"
 
 [action]
 adopt = "接管"

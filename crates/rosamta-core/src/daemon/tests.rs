@@ -325,6 +325,51 @@ fn waiting_items_beside_decisions_stay_out_of_the_note() {
     assert_eq!(notes[1].body, "2 dotfiles are waiting");
 }
 
+#[test]
+fn script_items_are_view_only_notes() {
+    use crate::scripts::{Run, apply::Why, review::ScriptItem};
+    let dir = tempfile::tempdir().unwrap();
+    let (mut daemon, _) = daemon(dir.path());
+    let notes = Arc::new(Mutex::new(Vec::new()));
+    daemon.notifier = Box::new(Notes(Arc::clone(&notes)));
+    let store = Store::new(daemon.ctx.paths.state());
+    let script = |id: u32, why: Why| QueueItem {
+        id,
+        script: Some(ScriptItem {
+            source: format!("s{id}.sh"),
+            run: Run::Once,
+            why,
+            hash: String::new(),
+        }),
+        ..Default::default()
+    };
+    let mut queue = store.queue().unwrap();
+    queue.items = vec![
+        script(1, Why::New),
+        script(2, Why::Changed),
+        script(3, Why::Failed),
+        script(4, Why::Failed),
+    ];
+    store.save_queue(&queue).unwrap();
+    for batch in [vec![1], vec![1, 2], vec![3], vec![3, 4], vec![2, 3]] {
+        daemon.batch = batch;
+        daemon.announce();
+    }
+    let notes = notes.lock().unwrap();
+    let bodies: Vec<&str> = notes.iter().map(|note| note.body.as_str()).collect();
+    assert_eq!(
+        bodies,
+        [
+            "s1.sh: waiting to run",
+            "2 scripts are waiting to run",
+            "s3.sh: failed",
+            "2 scripts failed",
+            "2 items are waiting",
+        ]
+    );
+    assert!(notes.iter().all(|note| note.view_only));
+}
+
 /// Records each notification whole.
 struct Notes(Arc<Mutex<Vec<Note>>>);
 

@@ -11,6 +11,11 @@ waiting_locked = "{file}: waiting for {tool} to unlock"
 waiting_command = "{file}: waiting for a terminal to run secret command {command}"
 waiting_many = "{count} dotfiles are waiting"
 waiting_unset = "{file}: waiting for values of {vars}"
+script_waiting = "{script}: waiting to run"
+script_failed = "{script}: failed"
+scripts_waiting = "{count} scripts are waiting to run"
+scripts_failed = "{count} scripts failed"
+items_waiting = "{count} items are waiting"
 
 [action]
 adopt = "Adopt"
