@@ -6,7 +6,7 @@
 ## Requirements
 
 ### Requirement: Detect likely secrets
-接管時 rosamta SHALL 以已知 token 格式與高熵字串規則檢查每個段落。值為字面字串的變數，名稱含 `KEY`、`TOKEN`、`SECRET`、`PASSWORD`、`PASSWD`、`PASSPHRASE`、`CREDENTIAL`、`PWD`，或全大寫且最後一段是 `AUTH`、`OAUTH`、`PAT`、`PASS`、`DSN`、`CREDS` 時，SHALL 也視為疑似秘密；值是開關（`true`、`false`、`yes`、`no`、`on`、`off`）或路徑時 SHALL 不算；值是數字時，3 位以內一律不算，4 到 6 位只有在名稱不是以上述的字結尾時才不算（`KEYTIMEOUT=1000` 不算，`DB_PASSWORD=482913` 算）。以 `/` 開頭、只由 base64 字元組成且各段不像名稱的值 SHALL 不視為路徑。雙引號中的 `$` 只有在後面接著名稱、`{`、`(` 或特殊參數時才視為展開，其餘視為字面值的一部分。網址中 `://使用者:密碼@` 的字面密碼 SHALL 視為疑似秘密。
+接管時 rosamta SHALL 以已知 token 格式與高熵字串規則檢查每個段落。值為字面字串的變數，名稱含 `KEY`、`TOKEN`、`SECRET`、`PASSWORD`、`PASSWD`、`PASSPHRASE`、`CREDENTIAL`、`PWD`，或全大寫且最後一段是 `AUTH`、`OAUTH`、`PAT`、`PASS`、`DSN`、`CREDS` 時，SHALL 也視為疑似秘密；值是開關（`true`、`false`、`yes`、`no`、`on`、`off`）或路徑時 SHALL 不算；值是數字時，3 位以內一律不算，4 到 6 位只有在名稱以 `_` 分開的每一段都不是以上述的字結尾時才不算（`KEYTIMEOUT=1000`、`MAX_TOKENS=4096` 不算，`DB_PASSWORD=482913` 算）。以 `/` 開頭、只由 base64 字元組成且各段不像名稱的值 SHALL 不視為路徑。`$` 只有在後面接著名稱、`{`、`(`、`[`、引號或特殊參數時才視為展開，其餘視為字面值的一部分。網址中 `://使用者:密碼@` 的字面密碼 SHALL 視為疑似秘密。
 
 #### Scenario: Known token format
 - **WHEN** 一段內容含有 `export OPENAI_API_KEY=sk-` 開頭的字串
