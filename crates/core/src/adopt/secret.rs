@@ -98,7 +98,7 @@ fn high_entropy(text: &str) -> bool {
             false => {
                 token.len() >= MIN_LEN
                     && !words(token)
-                    && !snake_name(token)
+                    && !known_name(token)
                     && entropy(token) > MIN_ENTROPY
             }
             true => {
@@ -136,20 +136,20 @@ fn words(token: &str) -> bool {
             && token.chars().any(|c| c.is_ascii_lowercase()))
 }
 
-/// An upper-case name such as `POWERLEVEL9K_DIR_FOREGROUND`, also as `NAME=`,
-/// `NAME+=` or at the end of a sentence: short parts joined by `_`, each
-/// longer one with a vowel.
-fn snake_name(token: &str) -> bool {
+/// Variable names of tools whose settings files are long lists of them, such
+/// as Powerlevel10k's `~/.p10k.zsh`.
+const KNOWN_PREFIXES: [&str; 2] = ["POWERLEVEL9K_", "P9K_"];
+
+/// A known tool's variable, such as `POWERLEVEL9K_DIR_FOREGROUND`, also as
+/// `NAME=`, `NAME+=` or at the end of a sentence.
+fn known_name(token: &str) -> bool {
     let token = token.trim_end_matches(['=', '+', '.']);
-    token.contains('_')
-        && token.split('_').all(|part| {
-            !part.is_empty()
-                && part.len() <= 12
-                && part
-                    .chars()
-                    .all(|c| c.is_ascii_uppercase() || c.is_ascii_digit())
-                && (part.len() <= 4 || part.contains(['A', 'E', 'I', 'O', 'U']))
-        })
+    KNOWN_PREFIXES
+        .iter()
+        .any(|prefix| token.starts_with(prefix))
+        && token
+            .chars()
+            .all(|c| c.is_ascii_uppercase() || c.is_ascii_digit() || c == '_')
 }
 
 /// `/usr/bin`, `~/.cargo`, `HOME/.local/share` (what `$HOME/...` leaves):
@@ -259,6 +259,7 @@ mod tests {
             "export NR_USER=NRAK-QW8ZRTYUPLKJHGFDSAXCVBN4M"
         ));
         assert!(looks_secret("export LICENSE=QW8ZRTYUPLKJ_HGFDSAXCVBNMKJH"));
+        assert!(looks_secret("export X=K7Q2_M9X4_P8R3_T6W1_Z5N0"));
         assert!(looks_secret(
             "aws_secret_access_key = wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY"
         ));
