@@ -61,9 +61,13 @@ pub(crate) fn scan(repo: &Path, range: &[&str]) -> Result<Vec<Hit>> {
     ];
     args.extend(PATCH);
     args.extend_from_slice(range);
+    let mut revs = vec!["rev-list"];
+    revs.extend_from_slice(range);
+    let commits = git::run(repo, &revs)?;
+    let hosts = host_ids(repo, commits.lines().map(|sha| format!("{sha}:")));
     Ok(unencrypted(
         repo,
-        check(&added_lines(&git::run(repo, &args)?), &host_ids(repo)),
+        check(&added_lines(&git::run(repo, &args)?), &hosts),
     ))
 }
 
@@ -75,18 +79,31 @@ pub(crate) fn staged(repo: &Path, paths: &[&str]) -> Result<Vec<Hit>> {
         args.push("--");
         args.extend_from_slice(paths);
     }
+    let hosts = host_ids(repo, [":".to_string()]);
     Ok(unencrypted(
         repo,
-        check(&added_lines(&git::run(repo, &args)?), &host_ids(repo)),
+        check(&added_lines(&git::run(repo, &args)?), &hosts),
     ))
 }
 
 /// Host IDs come from hostnames, which can look random (`Mac-1762…`) but
-/// are never secrets.
-fn host_ids(repo: &Path) -> Vec<String> {
-    crate::repo::read_manifest(repo)
+/// are never secrets: those registered now and in each of `snapshots` (a
+/// `<commit>:` or the index `:`), so a host renamed since still counts.
+fn host_ids(repo: &Path, snapshots: impl IntoIterator<Item = String>) -> Vec<String> {
+    let mut hosts = crate::repo::read_manifest(repo)
         .map(|manifest| manifest.hosts)
-        .unwrap_or_default()
+        .unwrap_or_default();
+    for snapshot in snapshots {
+        let blob = format!("{snapshot}{}", crate::repo::MANIFEST);
+        if let Ok(text) = git::run(repo, &["cat-file", "blob", &blob])
+            && let Ok(manifest) = crate::validate::parse::<crate::config::RepoManifest>(&text)
+        {
+            hosts.extend(manifest.hosts);
+        }
+    }
+    hosts.sort();
+    hosts.dedup();
+    hosts
 }
 
 /// Hits outside encrypted dotfiles. A changed ciphertext adds only base64
@@ -266,6 +283,29 @@ mod tests {
         crate::git::run(repo, &["add", "env"]).unwrap();
         crate::git::run(repo, &["commit", "--quiet", "--no-verify", "-m", "root"]).unwrap();
         assert_eq!(scan(repo, &["HEAD"]).unwrap().len(), 1);
+    }
+
+    /// A host renamed since a commit was made still counts for that commit.
+    #[test]
+    fn a_renamed_host_still_counts() {
+        crate::git::tests::isolate();
+        let dir = tempfile::tempdir().unwrap();
+        let repo = dir.path();
+        let host = "mac-zk3q9lmp2vr8ty6wb1nc4xj7";
+        crate::git::run(repo, &["init", "--quiet"]).unwrap();
+        let manifest = |host: &str| format!("format = 1\nhosts = [\"{host}\"]\n");
+        std::fs::write(repo.join("rosamta.toml"), manifest(host)).unwrap();
+        crate::git::run(repo, &["add", "--all"]).unwrap();
+        crate::git::run(repo, &["commit", "--quiet", "--no-verify", "-m", "join"]).unwrap();
+        std::fs::write(repo.join("rosamta.toml"), manifest("mbp")).unwrap();
+        crate::git::run(repo, &["add", "--all"]).unwrap();
+        crate::git::run(repo, &["commit", "--quiet", "--no-verify", "-m", "rename"]).unwrap();
+        assert_eq!(scan(repo, &["HEAD"]).unwrap(), []);
+        // The index, not the working tree, for staged changes.
+        std::fs::write(repo.join("rosamta.toml"), manifest(host)).unwrap();
+        crate::git::run(repo, &["add", "--all"]).unwrap();
+        std::fs::write(repo.join("rosamta.toml"), manifest("mbp")).unwrap();
+        assert_eq!(staged(repo, &[]).unwrap(), []);
     }
 
     /// A host named by a random-looking hostname is not a secret.
