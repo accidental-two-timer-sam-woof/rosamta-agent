@@ -31,8 +31,8 @@ hook SHALL 是以 `# >>> rosamta >>>` 與 `# <<< rosamta <<<` 包住的區塊。
 - **WHEN** 使用者刪掉 `# <<< rosamta <<<` 這一行後執行 `rsmt apply`
 - **THEN** `rsmt apply` 以 2 結束並指出該檔，檔案內容不變
 
-#### Scenario: Installer appends during the write
-- **WHEN** 安裝程式在 rosamta 寫入 `~/.zshrc` 的同時附加一行
+#### Scenario: Installer appends before the write
+- **WHEN** 安裝程式在 rosamta 讀取 `~/.zshrc` 之後、寫入之前附加一行
 - **THEN** 該行保留在 `~/.zshrc`，rosamta 不寫入並指出該檔
 
 ### Requirement: bash login and non-login shells
