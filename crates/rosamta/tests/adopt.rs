@@ -676,6 +676,31 @@ fn restoring_keeps_a_module_another_host_joined() {
 }
 
 #[test]
+fn restoring_keeps_an_every_host_module_for_the_others() {
+    if !has("zsh") {
+        return;
+    }
+    let home = hooked(&[(".zshrc", BUN)]);
+    home.write("rosamta.toml", "format = 1\nhosts = [\"test\", \"box\"]\n");
+    let item = review(&home).remove(0);
+    let out = run(
+        &home,
+        &[
+            "review",
+            "accept",
+            &item["id"].to_string(),
+            "--scope",
+            "all",
+        ],
+    );
+    assert!(!read(&home, BUN_MODULE).contains("hosts"));
+    run(&home, &["restore", &adopted_id(&out), "--yes"]);
+    let module = read(&home, BUN_MODULE);
+    assert!(module.contains("hosts = [\"box\"]\n"), "{module}");
+    assert!(read(&home, ".zshrc").contains("BUN_INSTALL"));
+}
+
+#[test]
 fn joining_for_every_host_comes_undone() {
     if !has("zsh") {
         return;

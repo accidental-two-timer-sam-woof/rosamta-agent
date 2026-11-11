@@ -55,16 +55,21 @@ pub(crate) fn widen(item: &mut dyn TableLike, widening: &Widening) {
     }
 }
 
-/// Take `host` out of `hosts`, if another host is listed; `false` when
-/// none is, so no other host uses the module.
-pub(crate) fn remove_host(module: &mut dyn TableLike, host: &str) -> bool {
+/// Take `host` out of the hosts that load the module: out of `hosts`, or,
+/// when none are listed and so every host loads it, list the other
+/// `registered` hosts. `false` when no other host would load it.
+pub(crate) fn remove_host(module: &mut dyn TableLike, host: &str, registered: &[String]) -> bool {
     let Some(hosts) = module
         .get_mut("when")
         .and_then(Item::as_table_like_mut)
         .and_then(|when| when.get_mut("hosts"))
         .and_then(Item::as_array_mut)
     else {
-        return false;
+        let others: Vec<String> = registered.iter().filter(|h| *h != host).cloned().collect();
+        if !others.is_empty() {
+            limit(module, &others, &[]);
+        }
+        return !others.is_empty();
     };
     if hosts.iter().all(|value| value.as_str() == Some(host)) {
         return false;
@@ -162,17 +167,31 @@ mod tests {
     #[test]
     fn removing_a_host_leaves_the_others() {
         let two = "[when]\nhosts = [\"mbp\", \"box\"]\n";
+        let registered = ["mbp".to_string(), "box".to_string()];
         assert_eq!(
-            edit(two, |doc| assert!(remove_host(doc, "box"))),
+            edit(two, |doc| assert!(remove_host(doc, "box", &registered))),
             "[when]\nhosts = [\"mbp\"]\n"
         );
         assert_eq!(
-            edit(two, |doc| assert!(remove_host(doc, "mbp"))),
+            edit(two, |doc| assert!(remove_host(doc, "mbp", &registered))),
             "[when]\nhosts = [\"box\"]\n"
         );
-        for alone in ["[when]\nhosts = [\"box\"]\n", "[env]\nA = \"1\"\n"] {
-            assert_eq!(edit(alone, |doc| assert!(!remove_host(doc, "box"))), alone);
-        }
+        let alone = "[when]\nhosts = [\"box\"]\n";
+        assert_eq!(
+            edit(alone, |doc| assert!(!remove_host(doc, "box", &registered))),
+            alone
+        );
+        // Every host loads it: the others keep it.
+        let open = "[env]\nA = \"1\"\n";
+        assert_eq!(
+            edit(open, |doc| assert!(remove_host(doc, "box", &registered))),
+            "[env]\nA = \"1\"\n\n[when]\nhosts = [\"mbp\"]\n"
+        );
+        let only = ["box".to_string()];
+        assert_eq!(
+            edit(open, |doc| assert!(!remove_host(doc, "box", &only))),
+            open
+        );
     }
 
     #[test]
