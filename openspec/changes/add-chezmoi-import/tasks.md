@@ -7,7 +7,7 @@
 
 ## 2. Template 轉換
 
-- [ ] 2.1 Go template 動作的解析與設計中列出的寫法轉成 minijinja（條件、比較、chezmoi 變數、hostname 換成識別名稱、資料與布林值、Bitwarden 與 1Password、去空白、`raw`）；其他寫法回報行號；整份單一條件改為 `when`；以單元測試與 rosamta 的 template 檢查驗證
+- [x] 2.1 Go template 動作的解析與設計中列出的寫法轉成 minijinja（條件、比較、chezmoi 變數、hostname 換成識別名稱、資料與布林值、Bitwarden 與 1Password、去空白、`raw`）；其他寫法回報行號；整份單一條件改為 `when`；以單元測試與 rosamta 的 template 檢查驗證
 
 ## 3. 匯入
 

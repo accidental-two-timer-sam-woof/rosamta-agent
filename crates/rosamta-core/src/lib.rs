@@ -2,6 +2,7 @@
 
 pub mod adopt;
 pub mod apply;
+pub mod chezmoi;
 pub mod config;
 pub mod daemon;
 pub mod dotfiles;
