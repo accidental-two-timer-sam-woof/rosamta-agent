@@ -10,7 +10,7 @@ rosamta 的目標之一是完全取代 chezmoi。現有的 chezmoi 使用者需�
 - 檔名屬性（`dot_`、`private_`、`executable_`、`symlink_`、`encrypted_`、`create_`、`readonly_` 等）轉成 `home/` 中的實際檔名與 `dotfiles.toml` 的宣告（ADR 0007）。
 - Go template 中常見的寫法自動轉成 minijinja（例如 `{{ if eq .chezmoi.os "darwin" }}`）；無法轉換的部分標示出來，請使用者手動修改。
 - `run_once_`、`run_onchange_` 腳本轉成 rosamta 的 scripts；`.chezmoiexternal.*` 轉成 externals；`.chezmoiignore` 轉成套用範圍。
-- 匯入 chezmoi 使用的 age 金鑰，並依 ADR 0012 以使用者設定的密碼加密後放進 repo。
+- 加密的檔案以 chezmoi 解密，再以 rosamta 的金鑰（ADR 0012）重新加密；不沿用 chezmoi 的金鑰，因為 repo 只有一把金鑰。
 - 產生匯入報告：成功轉換、需要手動處理、不支援的項目各有幾個，以及對應的檔案。
 - 設定精靈的「從 chezmoi 遷移」使用這個功能。
 
