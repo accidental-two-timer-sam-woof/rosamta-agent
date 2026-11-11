@@ -65,7 +65,7 @@ repo 根目錄的 `allow.toml` SHALL 可列出不檢查的內容：`files` 是 r
 
 #### Scenario: A line that is not a secret
 - **WHEN** 推送因 `home/.gitconfig` 的某一行受阻，使用者把回報的雜湊加進 `allow.toml` 的 `lines` 後再推送
-- **THEN** 推送成功，同一份內容出現在其他檔案或其他行時仍會受阻
+- **THEN** 推送成功；內容相同的行在其他檔案或其他位置也不再受阻，內容不同的行仍會受阻
 
 #### Scenario: A whole file
 - **WHEN** `allow.toml` 的 `files` 列出 `home/.p10k.zsh`

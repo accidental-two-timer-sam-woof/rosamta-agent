@@ -437,6 +437,18 @@ mod tests {
         assert!(toml::from_str::<Allowed>("line = []").is_err());
     }
 
+    /// Lines are listed by content: adopting moves a line into a module.
+    #[test]
+    fn a_listed_line_passes_wherever_it_appears() {
+        let key = "export GH=ghp_0123456789abcdefghijABCDEFGHIJ012345";
+        let allowed: Allowed =
+            toml::from_str(&format!("lines = [{:?}]\n", Allowed::hash(key))).unwrap();
+        let moved =
+            format!("# Adopted from ~/.zshrc on mbp.\n[raw]\nzsh = '''\n{key}\nexport B=2\n'''\n");
+        assert_eq!(Allowed::default().rule(&moved), Some("github-pat"));
+        assert_eq!(allowed.rule(&moved), None);
+    }
+
     #[test]
     fn rules_are_named() {
         assert_eq!(
