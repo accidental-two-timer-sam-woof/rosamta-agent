@@ -17,9 +17,9 @@ if [ $# -eq 0 ]; then
   done
 fi
 
-bin_mount=
+bin_dir=
 if [ -n "${ROSAMTA_BIN_DIR:-}" ]; then
-  bin_mount="-v $(cd "${ROSAMTA_BIN_DIR}" && pwd):/opt/rosamta/bin:ro"
+  bin_dir=$(cd "${ROSAMTA_BIN_DIR}" && pwd)
 fi
 
 status=0
@@ -30,9 +30,9 @@ for name in "$@"; do
     status=1
     continue
   fi
-  # shellcheck disable=SC2086 # bin_mount is either empty or two words
   # The repo sits at its host path too, for tests that read fixtures from the source tree.
-  docker run --rm -v "${here}:/opt/rosamta/tests:ro" -v "${root}:${root}:ro" ${bin_mount} "rosamta-test:${name}" \
+  docker run --rm -v "${here}:/opt/rosamta/tests:ro" -v "${root}:${root}:ro" \
+    ${bin_dir:+-v "${bin_dir}:/opt/rosamta/bin:ro"} "rosamta-test:${name}" \
     sh -c "${ROSAMTA_TEST_CMD:-sh /opt/rosamta/tests/check.sh}" || status=1
 done
 exit "${status}"
