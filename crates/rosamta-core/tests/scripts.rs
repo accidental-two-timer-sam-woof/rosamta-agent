@@ -141,6 +141,19 @@ fn logs_keep_the_output_in_order_privately_and_capped() {
     let mode = |path: &Path| fs::metadata(path).unwrap().permissions().mode() & 0o777;
     assert_eq!(mode(&log), 0o600);
     assert_eq!(mode(log.parent().unwrap()), 0o700);
+
+    // Output that fills the log exactly before more arrives is marked too.
+    home.repo_write(
+        "scripts.toml",
+        "[[script]]\nsource = \"aligned.sh\"\nrun = \"once\"\n",
+    );
+    home.repo_write(
+        "aligned.sh",
+        "dd if=/dev/zero bs=8192 count=512 2>/dev/null\n",
+    );
+    assert_eq!(home.apply()[0].1, Action::Ran);
+    let text = fs::read(apply_log(&home, "aligned.sh")).unwrap();
+    assert!(text.ends_with(b"# output past 1 MiB is not logged\n# exited with 0\n"));
 }
 
 fn apply_log(home: &Home, source: &str) -> PathBuf {

@@ -136,15 +136,17 @@ pub fn run(ctx: &Context, host_id: &str, script: &Script, terminal: bool) -> Res
     // A service the script started keeps the pipe open: its output is
     // read and dropped from here on, so neither side waits on the other.
     let _ = finished.recv_timeout(Duration::from_secs(2));
+    // shortcut: a job the script leaves running dies on its next write once
+    // this process exits; scripts redirect such jobs' output, as the README says.
+    let mut file = file.lock().unwrap_or_else(|err| err.into_inner());
+    // Under the lock, so nothing lands after the footer.
     closed.store(true, Ordering::SeqCst);
     let described = match (status, status.and_then(|status| status.code())) {
         (None, _) => format!("stopped after {} minutes", TIMEOUT.as_secs() / 60),
         (Some(_), Some(code)) => format!("exited with {code}"),
         (Some(status), None) => format!("ended by signal {}", status.signal().unwrap_or_default()),
     };
-    if let Ok(mut file) = file.lock() {
-        let _ = writeln!(file, "# {described}");
-    }
+    let _ = writeln!(file, "# {described}");
     Ok(Outcome {
         ok: status.is_some_and(|status| status.success()),
         status: described,
@@ -202,16 +204,17 @@ impl Pump {
                 let _ = out.write_all(&buf[..read]);
                 let _ = out.flush();
             }
-            if written >= LOG_LIMIT {
+            let mut file = self.file.lock().unwrap_or_else(|err| err.into_inner());
+            if self.closed.load(Ordering::SeqCst) || written > LOG_LIMIT {
                 continue;
             }
             let keep = read.min((LOG_LIMIT - written) as usize);
-            if let Ok(mut file) = self.file.lock() {
-                let _ = file.write_all(&buf[..keep]);
-                written += keep as u64;
-                if keep < read {
-                    let _ = writeln!(file, "\n# output past 1 MiB is not logged");
-                }
+            let _ = file.write_all(&buf[..keep]);
+            written += keep as u64;
+            if keep < read {
+                // One past the limit: the marker is written once.
+                let _ = writeln!(file, "\n# output past 1 MiB is not logged");
+                written += 1;
             }
         }
     }
