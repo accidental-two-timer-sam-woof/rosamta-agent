@@ -568,6 +568,29 @@ fn pulled_settings_that_do_not_apply_are_not_deployed() {
     assert!(!dir.path().join(".npmrc").exists());
 }
 
+#[test]
+fn a_note_the_service_never_takes_counts_as_shown_after_some_tries() {
+    let note = |body: &str| Note {
+        body: body.into(),
+        items: Vec::new(),
+        view_only: false,
+    };
+    let up = Arc::new(Mutex::new(false));
+    let shown = Arc::default();
+    let late = Late {
+        up: Arc::clone(&up),
+        shown: Arc::clone(&shown),
+    };
+    let notifier = notify::GiveUp::after(3, Box::new(late));
+    let tries: Vec<bool> = (0..4).map(|_| notifier.show(&note("a"))).collect();
+    // The third miss ends it; a note after that starts over.
+    assert_eq!(tries, [false, false, true, false]);
+    assert!(!notifier.show(&note("b")));
+    *up.lock().unwrap() = true;
+    assert!(notifier.show(&note("b")));
+    assert_eq!(*shown.lock().unwrap(), ["b"]);
+}
+
 /// Shows nothing until `up` is set, as before the desktop's notification
 /// service starts.
 struct Late {
