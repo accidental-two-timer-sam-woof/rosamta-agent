@@ -213,15 +213,17 @@ fn check(files: &[Added], hosts: &[String], allowed: &Allowed) -> Vec<Hit> {
             if added.lines.first().is_some_and(|(line, _)| *line == 1) && armored(&text) {
                 return None;
             }
-            let across = matched(&text)?;
-            // A line that matches on its own is reported with its own rule.
+            let rule = matched(&text)?;
+            // A line that matches the rule alone is the one to allow. A rule
+            // that needs several lines (a private key) has none, even when
+            // one of them matches another rule.
             let own = added
                 .lines
                 .iter()
-                .find_map(|(line, text)| Some((*line, matched(text)?, Allowed::hash(text))));
-            let (line, rule, hash) = match own {
-                Some((line, rule, hash)) => (line, rule, Some(hash)),
-                None => (added.lines[0].0, across, None),
+                .find(|(_, text)| matched(text) == Some(rule));
+            let (line, hash) = match own {
+                Some((line, text)) => (*line, Some(Allowed::hash(text))),
+                None => (added.lines[0].0, None),
             };
             Some(Hit {
                 commit: added.commit.clone(),
@@ -515,14 +517,47 @@ deleted file mode 100644
         assert_eq!(hits.len(), 1, "{hits:?}");
         assert_eq!((hits[0].line, &hits[0].hash), (1, &None));
 
-        // With a line that matches alone, that line, its rule and its hash.
+        // A line that matches another rule alone does not stand in for it.
         let key = "export MY_API_KEY=abc123";
         let mut added = added;
         added[0].lines.push((3, key.into()));
+        let across = hits[0].rule;
+        let hits = check(&added, &[], &Allowed::default());
+        assert_eq!(
+            (hits[0].line, hits[0].rule, &hits[0].hash),
+            (1, across, &None)
+        );
+
+        // Alone in the file, that line is the hit, with its hash.
+        added[0].lines.drain(..2);
         let hits = check(&added, &[], &Allowed::default());
         assert_eq!(
             (hits[0].line, hits[0].rule, hits[0].hash.clone()),
             (3, "secret-name", Some(Allowed::hash(key)))
+        );
+    }
+
+    #[test]
+    fn a_private_key_is_not_reported_as_one_of_its_lines() {
+        // Each body line alone looks like a high-entropy string.
+        let body = [
+            "u8jzPde0IgxLd6GncfBAepfJBd0Kh8oOOL8dKLzd+ocJ2isAjIhKtJ0RlgLKOmxgJTeKdN",
+            "nFRIBXuDL7DxtpYlSXpfKtHF4vUCsM+ehGAkWvj7FAc9QeWJKY40uvSwMFLZDe1f8rESQe",
+            "dUStPKR0CsTy4Qwb8DwkNhFdnXsiVpzz63FfkCzJr4i0B3JrTAwR4y9ojfljoQoaF1Llqs",
+        ];
+        let mut lines = vec![format!("-----BEGIN {} KEY-----", "OPENSSH PRIVATE")];
+        lines.extend(body.map(String::from));
+        lines.push(format!("-----END {} KEY-----", "OPENSSH PRIVATE"));
+        assert_eq!(secret_rule(body[0]), Some("high-entropy"));
+        let added = [Added {
+            commit: "1111".into(),
+            file: "home/.ssh/id_test".into(),
+            lines: (1..).zip(lines).collect(),
+        }];
+        let hits = check(&added, &[], &Allowed::default());
+        assert_eq!(
+            (hits[0].line, hits[0].rule, &hits[0].hash),
+            (1, "private-key", &None)
         );
     }
 }
