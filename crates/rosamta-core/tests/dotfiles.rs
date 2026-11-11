@@ -328,6 +328,32 @@ fn undeclared_links_become_files() {
 }
 
 #[test]
+fn an_undeclared_private_link_stays_private() {
+    let home = Home::new("ask");
+    home.repo_write("home/.netrc", "machine x\n");
+    home.repo_write(
+        "dotfiles.toml",
+        "[[dotfile]]\npath = \".netrc\"\npermissions = \"0600\"\n",
+    );
+    home.deploy();
+    git(&home.repo(), &["add", "-A"]);
+    git(
+        &home.repo(),
+        &["commit", "--quiet", "--no-verify", "-m", "add"],
+    );
+    // Another host forgot it; the pull deleted the source.
+    home.repo_write("dotfiles.toml", "");
+    git(&home.repo(), &["rm", "--quiet", "home/.netrc"]);
+    git(
+        &home.repo(),
+        &["commit", "--quiet", "--no-verify", "-am", "forget"],
+    );
+    assert_eq!(home.deploy(), one(".netrc", Action::Released));
+    assert_eq!(read(&home.at(".netrc")), "machine x\n");
+    assert_eq!(mode(&home.at(".netrc")), 0o600);
+}
+
+#[test]
 fn a_broken_declaration_fails_alone() {
     let home = Home::new("ask");
     home.repo_write("home/.vimrc", "set nu\n");
@@ -456,11 +482,14 @@ fn eject_leaves_regular_files() {
     home.deploy();
     let nvim = home.at(".config/nvim");
     assert!(nvim.symlink_metadata().unwrap().is_symlink());
+    let source = home.repo().join("home/.config/nvim");
+    fs::set_permissions(&source, fs::Permissions::from_mode(0o700)).unwrap();
 
     let released = dotfiles::manage::eject(&home.ctx).unwrap();
 
     assert_eq!(released, std::slice::from_ref(&nvim));
     assert!(nvim.symlink_metadata().unwrap().is_dir());
+    assert_eq!(mode(&nvim), 0o700);
     assert_eq!(read(&nvim.join("init.lua")), "vim.o.number = true\n");
     assert_eq!(read(&home.at(".npmrc")), "save-exact = true\n");
     let deployed = dotfiles::state::load(home.ctx.paths.state()).unwrap();

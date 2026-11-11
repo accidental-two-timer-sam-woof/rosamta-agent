@@ -744,6 +744,10 @@ fn run(ctx: &Context, repo: &Path, deployed: &mut Deployed, path: &Path, work: W
             } else {
                 history::recover(repo, &record.source, &target)?;
             }
+            // git keeps no private mode, and the declaration may be gone.
+            if let Some(mode) = record.mode {
+                tree::set_mode(&target, mode)?;
+            }
             deployed.entries.remove(path);
             deployed.ignored.remove(path);
             return Ok(());
@@ -810,6 +814,7 @@ fn run(ctx: &Context, repo: &Path, deployed: &mut Deployed, path: &Path, work: W
             source: entry.source(),
             source_hash,
             target_hash,
+            mode: entry.mode(),
         },
     );
     deployed.ignored.remove(path);

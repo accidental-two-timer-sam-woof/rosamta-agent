@@ -94,7 +94,7 @@ fn collect(path: &Path, out: &mut Vec<PathBuf>) -> Result<()> {
     }
 }
 
-/// Copy `from` to a new path `to`, keeping symlinks and the executable bit.
+/// Copy `from` to a new path `to`, keeping symlinks and modes.
 fn copy_new(from: &Path, to: &Path) -> Result<()> {
     let meta = std::fs::symlink_metadata(from).map_err(Error::read(from))?;
     if meta.is_symlink() {
@@ -105,7 +105,7 @@ fn copy_new(from: &Path, to: &Path) -> Result<()> {
         for name in names(from)? {
             copy_new(&from.join(&name), &to.join(&name))?;
         }
-        Ok(())
+        std::fs::set_permissions(to, meta.permissions()).map_err(Error::write(to))
     } else {
         std::fs::copy(from, to).map_err(Error::write(to)).map(drop)
     }
