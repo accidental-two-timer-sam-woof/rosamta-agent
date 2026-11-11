@@ -428,8 +428,11 @@ impl Daemon {
     /// to the repo reaches it as a repo change, which publishes it. A target
     /// rosamta wrote itself matches its record and is left alone.
     fn dotfiles_changed(&mut self) {
-        // A host that never applied has no deployed dotfiles to look after.
-        if generated::current_id(&self.ctx.paths.generated()).is_none() {
+        // A host that never applied has no deployed dotfiles to look after,
+        // and a repo that did not apply is not deployed either.
+        if generated::current_id(&self.ctx.paths.generated()).is_none()
+            || self.repo_problem.is_some()
+        {
             return;
         }
         let result = (|| {
@@ -541,8 +544,11 @@ impl Daemon {
         }
         self.repo_seen = Some(seen);
         self.repo_problem = self.apply_repo().err();
-        // Edits by hand are committed and pushed only after they apply.
+        // Edits by hand are committed and pushed only after they apply; an
+        // edit saved while applying waits for its own check.
+        let unchecked = fingerprint(&self.repo_files()) != seen;
         if self.repo_problem.is_none()
+            && !unchecked
             && self.host.publish == SyncPolicy::Auto
             && let Err(err) = sync::publish(&self.ctx)
             && !err.is_usage()

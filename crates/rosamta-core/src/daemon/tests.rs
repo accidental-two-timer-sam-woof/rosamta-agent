@@ -480,3 +480,17 @@ fn new_vars_in_host_toml_render_a_waiting_template() {
     );
     assert!(adopt::queue(&daemon.ctx).unwrap().is_empty());
 }
+
+#[test]
+fn a_repo_that_did_not_apply_is_not_deployed() {
+    crate::git::tests::isolate();
+    let dir = tempfile::tempdir().unwrap();
+    let (mut daemon, _) = daemon(dir.path());
+    with_template(&daemon, "save-exact = true\n");
+    daemon.repo_problem = Some(("apply_failed", "zsh: exited".into()));
+    daemon.dotfiles_changed();
+    assert!(!dir.path().join(".npmrc").exists());
+    daemon.repo_problem = None;
+    daemon.dotfiles_changed();
+    assert!(dir.path().join(".npmrc").exists());
+}
