@@ -108,7 +108,7 @@ pub fn update(ctx: &Context, only: &[PathBuf]) -> Result<Updated> {
     crate::sync::commit_scanned(
         ctx,
         &[MANIFEST],
-        Some(&format!("update(externals): {}", names.join(", "))),
+        Some(&format!("chore(externals): update {}", names.join(", "))),
     )?;
     Ok(out)
 }

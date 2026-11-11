@@ -407,7 +407,7 @@ pub(crate) fn commit_scanned(ctx: &Context, paths: &[&str], message: Option<&str
     }
 }
 
-/// `edit(modules): add bun, update zoxide` from `git status --porcelain`.
+/// `chore(modules): add bun, update zoxide` from `git status --porcelain`.
 fn edit_message(status: &str) -> String {
     let changes: Vec<(&str, String)> = status
         .lines()
@@ -434,7 +434,7 @@ fn edit_message(status: &str) -> String {
         "repo"
     };
     if changes.len() > 3 {
-        return format!("edit({scope}): change {} files", changes.len());
+        return format!("chore({scope}): change {} files", changes.len());
     }
     let name = |path: &str| {
         if in_modules(path) {
@@ -454,7 +454,7 @@ fn edit_message(status: &str) -> String {
             (!names.is_empty()).then(|| format!("{verb} {}", names.join(", ")))
         })
         .collect();
-    format!("edit({scope}): {}", parts.join(", "))
+    format!("chore({scope}): {}", parts.join(", "))
 }
 
 /// `commit_edits`: commit edits the user has not committed before the
@@ -718,26 +718,26 @@ mod tests {
     #[test]
     fn edit_messages_name_what_changed() {
         let cases = [
-            (" M modules/zoxide.toml\n", "edit(modules): update zoxide"),
+            (" M modules/zoxide.toml\n", "chore(modules): update zoxide"),
             (
                 "?? modules/tools/bun.toml\n M modules/zoxide.toml\n",
-                "edit(modules): add bun, update zoxide",
+                "chore(modules): add bun, update zoxide",
             ),
             (
                 " D modules/old.toml\n M rosamta.toml\n",
-                "edit(repo): update rosamta.toml, remove old",
+                "chore(repo): update rosamta.toml, remove old",
             ),
             (
                 " M modules/a.toml\n M modules/b.toml\n M modules/c.toml\n M modules/d.toml\n",
-                "edit(modules): change 4 files",
+                "chore(modules): change 4 files",
             ),
             (
                 " M home/.config/nvim/lazy-lock.json\n",
-                "edit(home): update .config/nvim/lazy-lock.json",
+                "chore(home): update .config/nvim/lazy-lock.json",
             ),
             (
                 " M dotfiles.toml\n?? hosts/mbp/.gitconfig\n",
-                "edit(home): add hosts/mbp/.gitconfig, update dotfiles.toml",
+                "chore(home): add hosts/mbp/.gitconfig, update dotfiles.toml",
             ),
         ];
         for (status, expected) in cases {

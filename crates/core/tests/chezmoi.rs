@@ -283,7 +283,7 @@ fn a_source_becomes_declarations() {
 
     let log = git(&repo, &["log", "-1", "--format=%B"]);
     assert!(
-        log.starts_with("import(chezmoi): 7 dotfiles, 3 scripts, 2 externals\n"),
+        log.starts_with("chore(import): 7 dotfiles, 3 scripts, 2 externals from chezmoi\n"),
         "{log}"
     );
     assert!(

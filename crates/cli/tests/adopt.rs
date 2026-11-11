@@ -269,7 +269,7 @@ fn structured_content_becomes_one_module_and_commit() {
     assert!(module.contains("shells = [\"zsh\"]"), "{module}");
     assert_eq!(
         repo_git(&home, &["log", "-1", "--format=%s"]).trim(),
-        format!("adopt(zsh): add bun env, PATH and aliases from ~/.zshrc on {host}")
+        format!("chore(adopt): add bun env, PATH and aliases from ~/.zshrc (zsh) on {host}")
     );
 }
 
@@ -509,7 +509,7 @@ fn restore_puts_one_adoption_back() {
     assert!(!home.repo().join("modules/adopted/orbstack.toml").exists());
     assert!(
         repo_git(&home, &["log", "-1", "--format=%s"])
-            .starts_with("restore(zsh): put back orbstack in ~/.zprofile")
+            .starts_with("chore(restore): put back orbstack in ~/.zprofile (zsh)")
     );
     // It stays in the rc file from now on.
     assert!(review(&home).is_empty());
@@ -788,7 +788,7 @@ fn the_same_lines_on_a_second_host_join_its_module() {
     assert!(!read(&home, ".zshrc").contains("BUN_INSTALL"));
     assert_eq!(
         repo_git(&home, &["log", "-1", "--format=%s"]).trim(),
-        "adopt(zsh): include bun from ~/.zshrc on test"
+        "chore(adopt): include bun from ~/.zshrc (zsh) on test"
     );
 
     run(&home, &["restore", &adopted_id(&out), "--yes"]);

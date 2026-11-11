@@ -97,11 +97,11 @@ rosamta SHALL 依序以 marker 名稱、`Added by <名稱>` 註解、內容中�
 - **THEN** 原段落每行前加上 `#`，上方多一行指出 module 檔案的位置，之後的掃描不再把它列為可接管
 
 ### Requirement: One commit per adoption
-每次接管 SHALL 在 repo 建立一個 commit，訊息格式為 `adopt(<shell>): <摘要> from <來源檔> on <識別名稱>`。
+每次接管 SHALL 在 repo 建立一個 commit，訊息格式為 `chore(adopt): <摘要> from <來源檔> (<shell>) on <識別名稱>`，符合 Conventional Commits。
 
 #### Scenario: Commit message
 - **WHEN** 在 `mbp` 上接管 `~/.zshrc` 中 bun 的 PATH
-- **THEN** repo 新增一個 commit，訊息為 `adopt(zsh): add bun PATH from ~/.zshrc on mbp`
+- **THEN** repo 新增一個 commit，訊息為 `chore(adopt): add bun PATH from ~/.zshrc (zsh) on mbp`
 
 ### Requirement: Re-added content
 安裝程式把已經接管過的內容再次寫回 rc 檔時，rosamta SHALL 認出它並直接依 host 設定移除，不產生新的 module，也不放進待處理清單。寫回原本的檔案時一律如此；寫進其他檔案時，只有對應的 module 在本機載入（已啟用且 `when` 符合本機）並且會在讀取該檔案的每個 shell 中生效，才 SHALL 視為已接管，否則照一般內容處理。

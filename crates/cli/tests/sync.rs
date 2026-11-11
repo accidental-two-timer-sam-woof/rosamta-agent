@@ -110,7 +110,7 @@ fn publish_commits_hand_edits_and_pushes() {
         .write("modules/zoxide.toml", "[env]\n_ZO_ECHO = \"1\"\n");
     let out = run(&hosts.a, &["publish"]);
     assert!(out.contains("Published 1 commit"), "{out}");
-    assert_eq!(remote_log(&hosts)[0], "edit(modules): add zoxide");
+    assert_eq!(remote_log(&hosts)[0], "chore(modules): add zoxide");
     assert_eq!(run(&hosts.a, &["publish"]), "Nothing to publish\n");
 }
 
@@ -287,7 +287,7 @@ fn publish_policy_decides_whether_adoption_pushes() {
     fs::write(hosts.a.host_config(), host.replace("manual", "auto")).unwrap();
     append(&hosts.a, ".profile", "export TWO=2\n");
     run(&hosts.a, &["adopt", "--yes"]);
-    assert!(remote_log(&hosts)[0].starts_with("adopt(sh)"));
+    assert!(remote_log(&hosts)[0].starts_with("chore(adopt)"));
     assert_eq!(state(&hosts.a)["unpushed"], 0);
 }
 
@@ -311,7 +311,7 @@ fn offline_commits_wait_for_the_next_sync() {
 
     fs::rename(&moved, &hosts.bare).unwrap();
     run(&hosts.a, &["sync"]);
-    assert!(remote_log(&hosts)[0].starts_with("adopt(sh)"));
+    assert!(remote_log(&hosts)[0].starts_with("chore(adopt)"));
     assert_eq!(state(&hosts.a)["unpushed"], 0);
 }
 
@@ -448,7 +448,7 @@ fn automatic_push_leaves_hand_edits_uncommitted() {
         .write("modules/zoxide.toml", "[env]\n_ZO_ECHO = \"1\"\n");
     append(&hosts.a, ".profile", "export ONE=1\n");
     run(&hosts.a, &["adopt", "--yes"]);
-    assert!(remote_log(&hosts)[0].starts_with("adopt(sh)"));
+    assert!(remote_log(&hosts)[0].starts_with("chore(adopt)"));
     assert_eq!(
         git(&hosts.a.repo(), &["status", "--porcelain"]),
         "?? modules/zoxide.toml\n"
@@ -474,7 +474,7 @@ fn automatic_push_after_a_rejected_push_leaves_hand_edits_uncommitted() {
         .write("modules/zoxide.toml", "[env]\n_ZO_ECHO = \"1\"\n");
     append(&hosts.a, ".profile", "export ONE=1\n");
     run(&hosts.a, &["adopt", "--yes"]);
-    assert!(remote_log(&hosts)[0].starts_with("adopt(sh)"));
+    assert!(remote_log(&hosts)[0].starts_with("chore(adopt)"));
     assert!(hosts.a.repo().join("modules/b.toml").is_file());
     assert_eq!(
         git(&hosts.a.repo(), &["status", "--porcelain"]),
