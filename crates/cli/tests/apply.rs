@@ -811,6 +811,28 @@ fn a_nested_shell_runs_env_snippets_again_but_not_the_exports() {
     }
 }
 
+/// The marker that a process ran its snippets reaches a nested shell when
+/// the user exports it (`set -a`); the nested shell runs them all the same.
+#[test]
+fn an_exported_marker_does_not_hide_env_snippets_from_a_nested_shell() {
+    let home = Home::new();
+    home.cmd("rsmt").arg("init").assert().success();
+    home.write(
+        "modules/opts.toml",
+        "phase = \"env\"\n[raw]\nbash = 'LOCAL=1'\nzsh = 'LOCAL=1'\n",
+    );
+    apply(&home);
+    for shell in ["bash", "zsh"] {
+        if !has(shell) {
+            continue;
+        }
+        // `; :` keeps the nested shell a child: a last command may be exec'd, keeping the PID.
+        let script = format!("export _rosamta_env; {shell} -i -c 'echo \"${{LOCAL-unset}}\"'; :");
+        let out = home.shell(&[shell, "-i", "-c", &script].map(String::from));
+        assert_eq!(String::from_utf8_lossy(&out.stdout), "1\n", "{shell}");
+    }
+}
+
 /// The env loader sources a snippet in two branches (first shell, nested
 /// shell); ejected code holds it once.
 #[test]

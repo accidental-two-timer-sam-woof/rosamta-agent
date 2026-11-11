@@ -432,6 +432,7 @@ fn loader(shell: Shell, stage: Stage, frags: &[&Fragment], dir: &Path, layout: &
 /// already. Exported values came down to it; what the snippets set without
 /// exporting (options, functions, plain variables) did not, so they run
 /// again, once per process.
+// shortcut: `exec` keeps the PID, so an exported marker still hides the snippets from an exec'd shell; unexport it per shell if that is reported.
 fn again(
     shell: Shell,
     version_id: &str,
@@ -465,7 +466,7 @@ fn again(
     };
     writeln!(
         out,
-        "_rosamta_env={id}\nelif [ \"${{_rosamta_env-}}\" != {id} ]{not_bash}; then\n_rosamta_env={id}"
+        "_rosamta_env={id}:$$\nelif [ \"${{_rosamta_env-}}\" != {id}:$$ ]{not_bash}; then\n_rosamta_env={id}:$$"
     )
     .unwrap();
     for path in snippets {
