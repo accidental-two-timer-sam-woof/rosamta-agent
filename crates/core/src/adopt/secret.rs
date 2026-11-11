@@ -94,26 +94,28 @@ fn secret_name(text: &str) -> bool {
 fn high_entropy(text: &str) -> bool {
     text.split(|c: char| !(c.is_ascii_alphanumeric() || "+/=_-.".contains(c)))
         .any(|whole| {
-            // `X="…"`, `X = '…'`, `key: "…"`: a quoted value is judged whole,
-            // never as `NAME=value` or a name; `env 'NAME=value'` is split.
+            let token = value(whole);
+            // In quotes a token may be a value (`X="…"`, fish `set X '…'`):
+            // it never passes as a name, and is judged whole as well unless
+            // it assigns to a known name (`env 'POWERLEVEL9K_X=red'`).
             let start = whole.as_ptr() as usize - text.as_ptr() as usize;
-            let quoted_value = text[..start]
-                .strip_suffix(['"', '\''])
-                .is_some_and(|before| before.trim_end().ends_with(['=', ':']));
-            let token = if quoted_value { whole } else { value(whole) };
-            // A known name passes as a name, never as an assignment's value.
-            let name = !quoted_value && token.len() == whole.len() && known_name(token);
-            match token.contains('/') {
-                false => {
-                    token.len() >= MIN_LEN && !words(token) && !name && entropy(token) > MIN_ENTROPY
-                }
-                true => {
-                    !path_like(token)
-                        && token.len() >= MIN_SLASHED_LEN
-                        && entropy(token) > MIN_SLASHED_ENTROPY
-                }
-            }
+            let quoted = text[..start].ends_with(['"', '\'']);
+            let assigned = &whole[..whole.len() - token.len()];
+            let name = !quoted && assigned.is_empty() && known_name(token);
+            high(token, name)
+                || (quoted && !assigned.is_empty() && !known_name(assigned) && high(whole, false))
         })
+}
+
+fn high(token: &str, name: bool) -> bool {
+    match token.contains('/') {
+        false => token.len() >= MIN_LEN && !words(token) && !name && entropy(token) > MIN_ENTROPY,
+        true => {
+            !path_like(token)
+                && token.len() >= MIN_SLASHED_LEN
+                && entropy(token) > MIN_SLASHED_ENTROPY
+        }
+    }
 }
 
 /// `NAME=value` and `NAME+=value` are judged by the value; base64 padding
@@ -281,6 +283,11 @@ mod tests {
             "export X=\"POWERLEVEL9K_QWERTYUIOPASDFGHJZXCVBNM\""
         ));
         assert!(looks_secret("X = \"P9K_QWERTYUIOPASDFGHJZXCVBNM\""));
+        assert!(looks_secret("set -gx X 'K7Q2M9X4P8R3T6W1Z5N0=abc'"));
+        assert!(looks_secret(&format!(
+            "export X=\"{}=Zk3q9LmP2vR8tY6wB1nC4xJ7\"",
+            "A".repeat(64)
+        )));
         assert!(looks_secret(
             "aws_secret_access_key = wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY"
         ));
