@@ -111,3 +111,10 @@ rosamta 的執行檔被新版本取代後，背景服務 SHALL 自行重新啟�
 #### Scenario: Unlock in another terminal
 - **WHEN** `~/.npmrc` 在等待 rbw 解鎖，使用者在另一個終端機執行 `rbw unlock`
 - **THEN** 一分鐘內 `~/.npmrc` 依 template 寫入，待處理清單不再有該項目
+
+### Requirement: Externals and scripts in the background
+背景服務套用時（包括拉取之後）SHALL 下載與更新 external，與 `rsmt apply` 相同；腳本 SHALL 依 `host.toml` 的 `scripts` 偏好處理，`ask` 時 SHALL NOT 執行任何腳本。背景服務執行的腳本 SHALL 沒有終端機，stdin 為 `/dev/null`。
+
+#### Scenario: Auto on a server
+- **WHEN** `scripts = "auto"`，背景服務拉取到修改過的 `onchange` 腳本
+- **THEN** 背景服務執行該腳本，輸出寫進紀錄檔
