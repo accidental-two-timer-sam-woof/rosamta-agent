@@ -96,17 +96,13 @@ fn high_entropy(text: &str) -> bool {
         .any(|whole| {
             let token = value(whole);
             // In quotes a token may be a literal value (`X="…"`, fish
-            // `set X '…'`): it never passes as a name, and the part before
-            // its `=` is judged too, unless it is a known name.
+            // `set X '…'`): it never passes as a name, and the part before its
+            // `=` is judged too unless it reads as a variable name, with `_`.
             let start = whole.as_ptr() as usize - text.as_ptr() as usize;
             let quoted = text[..start].ends_with(['"', '\'']);
             let assigned = whole[..whole.len() - token.len()].trim_end_matches(['=', '+']);
             let name = !quoted && assigned.is_empty() && known_name(token);
-            high(token, name)
-                || (quoted
-                    && !assigned.is_empty()
-                    && !known_name(assigned)
-                    && high(assigned, false))
+            high(token, name) || (quoted && !assigned.contains('_') && high(assigned, false))
         })
 }
 
@@ -333,6 +329,7 @@ mod tests {
             "Environment=\"KUBECONFIG=/etc/kubernetes/admin.conf\"",
             "  - \"NODE_OPTIONS=--max-old-space-size=4096\"",
             "docker run -e \"DATABASE_HOST=postgres.internal.example.com\" app",
+            "export \"QTWEBENGINE_CHROMIUM_FLAGS=--disable-gpu\"",
         ] {
             assert!(!looks_secret(text), "{text}");
         }
