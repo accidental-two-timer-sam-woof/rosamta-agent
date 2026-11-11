@@ -61,17 +61,29 @@ pub fn uses_secrets(names: &HashSet<String>) -> bool {
 /// a quoted name alone, so any command may run.
 pub fn secret_names(source: &str) -> Option<BTreeSet<String>> {
     static RULES: OnceLock<[Regex; 2]> = OnceLock::new();
-    let [block, call] = RULES.get_or_init(|| {
+    let [block, token] = RULES.get_or_init(|| {
+        let string = r#""(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*'"#;
         [
-            Regex::new(r"(?s)\{\{.*?\}\}|\{%.*?%\}").unwrap(),
-            Regex::new(r#"\bsecret\b(?:\s*\(\s*(?:"([^"\\]*)"|'([^'\\]*)')\s*,)?"#).unwrap(),
+            Regex::new(&format!(
+                r#"\{{\{{(?:{string}|[^"'}}]|\}}[^}}])*\}}\}}|\{{%(?:{string}|[^"'%]|%[^}}])*%\}}"#
+            ))
+            .unwrap(),
+            Regex::new(&format!(
+                r#"{string}|\bsecret\b(?:\s*\(\s*(?:"([^"\\]*)"|'([^'\\]*)')\s*,)?"#
+            ))
+            .unwrap(),
         ]
     });
-    block
-        .find_iter(source)
-        .flat_map(|block| call.captures_iter(block.as_str()))
-        .map(|caps| Some(caps.get(1).or(caps.get(2))?.as_str().to_string()))
-        .collect()
+    let mut names = BTreeSet::new();
+    for block in block.find_iter(source) {
+        for caps in token.captures_iter(block.as_str()) {
+            if caps[0].starts_with(['"', '\'']) {
+                continue;
+            }
+            names.insert(caps.get(1).or(caps.get(2))?.as_str().to_string());
+        }
+    }
+    Some(names)
 }
 
 /// `vars.*` names the template uses, sorted.
@@ -322,6 +334,13 @@ mod tests {
             None
         );
         assert_eq!(names("{{ secret(\"fetch\" ~ \"_prod\", \"x\") }}"), None);
+        let fetch = Some(vec!["fetch".to_string()]);
+        assert_eq!(names("{{ \"}}\" ~ secret(\"fetch\", \"npm\") }}"), fetch);
+        assert_eq!(names("{{ secret(\"fetch\", \"secret\") }}"), fetch);
+        assert_eq!(
+            names("{% if x == \"%}\" %}{{ secret('fetch', 'a') }}{% endif %}"),
+            fetch
+        );
         assert_eq!(
             names("# secret token\n{{ secret(\"fetch\", \"x\") }}"),
             Some(vec!["fetch".to_string()])

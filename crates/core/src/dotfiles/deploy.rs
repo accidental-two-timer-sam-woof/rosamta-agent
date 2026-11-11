@@ -500,7 +500,7 @@ fn input_hash(env: &Env, entry: &Dotfile, text: &str) -> Result<String> {
         "".into()
     } else {
         match (template::secret_names(text), secrets::load(&env.repo)) {
-            (Some(called), Ok(declared)) => called
+            (Some(called), Ok(declared)) if !called.is_empty() => called
                 .into_iter()
                 .map(|name| {
                     let run = declared.commands.get(&name).map(|command| &command.run);
