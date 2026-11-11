@@ -53,30 +53,69 @@ fn same(a: &Module, b: &Module) -> bool {
 }
 
 /// Snippet text without comment lines, blank lines or trailing spaces;
-/// here-document bodies are data and stay whole.
+/// lines inside a quoted string or a here-document are data and stay whole.
 pub(super) fn code(text: &str) -> Vec<&str> {
     use super::segment::{heredoc_end, heredocs};
     let mut out = Vec::new();
     let mut rest = text;
+    let mut quote = None;
     while !rest.is_empty() {
         let (line, after) = rest.split_once('\n').unwrap_or((rest, ""));
         rest = after;
-        let line = line.trim_end();
-        if line.is_empty() || line.trim_start().starts_with('#') {
+        let line = match quote {
+            Some(_) => line,
+            None => line.trim_end(),
+        };
+        if quote.is_none() && (line.is_empty() || line.trim_start().starts_with('#')) {
             continue;
         }
         out.push(line);
-        let body = heredoc_end(rest, &heredocs(line)).unwrap_or(rest.len());
-        out.extend(rest[..body].lines());
-        rest = &rest[body..];
+        quote = open_quote(line, quote);
+        if quote.is_none() {
+            let body = heredoc_end(rest, &heredocs(line)).unwrap_or(rest.len());
+            out.extend(rest[..body].lines());
+            rest = &rest[body..];
+        }
     }
     out
+}
+
+/// The quote still open after `line`, which starts inside `quote`.
+fn open_quote(line: &str, mut quote: Option<char>) -> Option<char> {
+    let (mut escaped, mut prev) = (false, ' ');
+    for c in line.chars() {
+        match quote {
+            _ if escaped => escaped = false,
+            Some('\'') if c == '\'' => quote = None,
+            Some('\'') => {}
+            Some(_) if c == '\\' => escaped = true,
+            Some(_) if c == '"' => quote = None,
+            Some(_) => {}
+            None if c == '#' && prev.is_whitespace() => break,
+            None if c == '\\' => escaped = true,
+            None if c == '\'' || c == '"' => quote = Some(c),
+            None => {}
+        }
+        prev = c;
+    }
+    quote
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::config::Os;
+
+    #[test]
+    fn lines_inside_a_string_are_code() {
+        let printf = |line: &str| format!("# say it\nprintf '%s\\n' 'a\n{line}\nb'\n# done\n");
+        assert_ne!(code(&printf("# x=1")), code(&printf("# x=2")));
+        assert_eq!(code(&printf("# x=1")), ["printf '%s\\n' 'a", "# x=1", "b'"]);
+        assert_eq!(
+            code("echo \"it's\" # note\n# gone\n"),
+            ["echo \"it's\" # note"]
+        );
+    }
 
     #[test]
     fn here_document_lines_are_code() {
