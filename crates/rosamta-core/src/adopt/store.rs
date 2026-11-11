@@ -41,6 +41,10 @@ pub struct Adoption {
     /// The module's host and OS limits before joining it for every host.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub limits: Option<Limits>,
+    /// The lines were already in a module that loads here; restoring them
+    /// leaves that module alone.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub duplicate: bool,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]

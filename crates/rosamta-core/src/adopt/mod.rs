@@ -888,6 +888,7 @@ fn edit_file(
                 at: now(),
                 include: candidate.kind == Kind::Include,
                 limits: None,
+                duplicate: candidate.kind == Kind::Duplicate,
             }
         })
         .collect();
@@ -1037,9 +1038,10 @@ pub fn execute(ctx: &Context, plan: Plan) -> Result<Vec<Adoption>> {
     }
     update_notice(&store, &host, queue.items.len())?;
     let repo_dir = ctx.paths.repo();
+    // A duplicate changes no module, and an edit in progress there is not ours to commit.
     for record in done
         .iter_mut()
-        .filter(|record| record.id > 0 && !record.local)
+        .filter(|record| record.id > 0 && !record.local && !record.duplicate)
     {
         let Some(module) = &record.module else {
             continue;
@@ -1308,7 +1310,7 @@ pub fn plan_undo(ctx: &Context, id: u32) -> Result<Undo> {
         other.id != id && other.module == adoption.module && other.local == adoption.local
     });
     let module = match &adoption.module {
-        Some(_) if in_use => None,
+        Some(_) if in_use || adoption.duplicate => None,
         Some(module) if adoption.local => Some(module.clone()),
         Some(module) => Some(ctx.paths.repo().join(module)),
         None => None,
@@ -1457,7 +1459,11 @@ pub fn undo(ctx: &Context, plan: Undo) -> Result<()> {
         ignored.hashes.push(plan.adoption.hash.clone());
     }
     store.save_ignored(&ignored)?;
-    if let (Some(module), false) = (&plan.adoption.module, plan.adoption.local) {
+    // Only a module this restore changed is committed; an edit in progress
+    // in one it left alone is not ours.
+    if let (Some(_), Some(module), false) =
+        (&plan.module, &plan.adoption.module, plan.adoption.local)
+    {
         let rel = module.to_string_lossy();
         let name = plan.adoption.name.as_deref().unwrap_or("adopted");
         let message = format!(
@@ -1518,6 +1524,7 @@ mod tests {
             at: 0,
             include: false,
             limits: None,
+            duplicate: false,
         }
     }
 
