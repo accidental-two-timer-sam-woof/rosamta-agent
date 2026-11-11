@@ -56,10 +56,13 @@ const LOG_LIMIT: u64 = 1 << 20;
 /// How often a template waiting for rbw tries again; unlocking rbw sends
 /// no event.
 const RBW_RETRY: Duration = Duration::from_secs(60);
-/// Seconds between pushes of commits that could not reach the remote.
+/// The wait before pushing again commits that could not reach the remote;
+/// after `PUSH_TRIES` misses it doubles each time, up to `PUSH_RETRY_MAX`.
 const PUSH_RETRY: Duration = Duration::from_secs(60);
 /// How often a problem the notification service did not take is shown again.
 const NOTIFY_RETRY: Duration = Duration::from_secs(60);
+const PUSH_TRIES: u32 = 3;
+const PUSH_RETRY_MAX: Duration = Duration::from_secs(15 * 60);
 
 /// Directories to watch: the parents of watched files, without recursion,
 /// so an installer writing a new file and renaming it over the old one is
@@ -256,6 +259,8 @@ struct Daemon {
     /// When waiting commits were last pushed again; a pull that fails first
     /// leaves no newer publish attempt to wait from.
     pushed_again: Option<Instant>,
+    /// Pushes again in a row that found no network.
+    push_misses: u32,
     /// Retries left for a sync after waking that found no network.
     wake_retries: &'static [Duration],
     clock: (Instant, SystemTime),
@@ -378,6 +383,7 @@ impl Daemon {
             next_sync: Instant::now(),
             next_rbw_retry: Instant::now() + RBW_RETRY,
             pushed_again: None,
+            push_misses: 0,
             wake_retries: &[],
             host,
             lang: Lang::system(),
@@ -679,6 +685,7 @@ impl Daemon {
         self.clock = now;
         if woke {
             self.wake_retries = &WAKE_RETRIES;
+            self.push_misses = 0;
         }
         if woke || now.0 >= self.next_sync {
             self.next_sync = now.0 + Duration::from_secs(u64::from(self.host.pull_interval) * 60);
@@ -691,6 +698,10 @@ impl Daemon {
                 }
                 _ => self.wake_retries = &[],
             }
+        }
+        // Pushed some other way: the next time offline starts over.
+        if self.push_misses > 0 && self.offline_push().is_none() {
+            self.push_misses = 0;
         }
         if self.push_due() {
             self.push_again();
@@ -726,35 +737,47 @@ impl Daemon {
         })
     }
 
-    /// Commits wait because the remote could not be reached, and a minute
-    /// has passed since that try.
+    fn push_delay(&self) -> Duration {
+        let doublings = self.push_misses.saturating_sub(PUSH_TRIES).min(8);
+        (PUSH_RETRY * 2u32.pow(doublings)).min(PUSH_RETRY_MAX)
+    }
+
+    /// When the publish that left commits waiting found no network.
+    fn offline_push(&self) -> Option<u64> {
+        let state = sync::load_state(self.ctx.paths.state()).ok()?;
+        let attempt = state.publish.filter(|_| state.unpushed > 0)?;
+        (attempt.outcome == Outcome::Offline).then_some(attempt.at)
+    }
+
+    /// Commits wait because the remote could not be reached, and the retry
+    /// delay has passed since that try.
     fn push_due(&self) -> bool {
+        let delay = self.push_delay();
         self.host.publish == SyncPolicy::Auto
+            && self.pushed_again.is_none_or(|at| at.elapsed() >= delay)
             && self
-                .pushed_again
-                .is_none_or(|at| at.elapsed() >= PUSH_RETRY)
-            && sync::load_state(self.ctx.paths.state()).is_ok_and(|state| {
-                state.unpushed > 0
-                    && state.publish.as_ref().is_some_and(|attempt| {
-                        attempt.outcome == Outcome::Offline
-                            && crate::time::now() >= attempt.at + PUSH_RETRY.as_secs()
-                    })
-            })
+                .offline_push()
+                .is_some_and(|at| crate::time::now() >= at + delay.as_secs())
     }
 
     /// Push the waiting commits; with pulling on, as a whole sync.
     fn push_again(&mut self) {
         self.pushed_again = Some(Instant::now());
+        let started = crate::time::now();
         if self.host.pull == SyncPolicy::Auto {
             self.sync_now();
-            return;
+        } else {
+            let pushed =
+                adopt::lock(&self.ctx).and_then(|lock| sync::publish_if_auto(&self.ctx, &lock));
+            if let Err(err) = pushed {
+                self.log(&err.to_string());
+            }
+            self.report_problems();
         }
-        let pushed =
-            adopt::lock(&self.ctx).and_then(|lock| sync::publish_if_auto(&self.ctx, &lock));
-        if let Err(err) = pushed {
-            self.log(&err.to_string());
-        }
-        self.report_problems();
+        self.push_misses = match self.offline_since(started) {
+            true => self.push_misses + 1,
+            false => 0,
+        };
     }
 
     /// Whether a sync from `started` on could not reach the remote.
