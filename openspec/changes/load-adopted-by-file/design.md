@@ -17,12 +17,14 @@
 
 - 不改變結構化 module 與使用者自己寫的 module 的載入方式。
 - 不處理部分接管時，留在檔案裡的行與被接管的行之間的先後順序（現在也是 hook 所在的位置決定）。
+- 不處理接管成結構化 module 的行（`export`、alias、PATH）：它們不記錄來源檔，從 `.bash_profile` 接管的 `export` 仍然在每個 bash 生效，#34 對這些行沒有解決（見 Open Questions 3）。
+- 不處理 fish：fish 的片段維持現在的階段（見 Open Questions 2）。
 
 ## Decisions
 
 ### 1. 片段記錄來源檔，而不是階段
 
-接管產生的片段 module 寫入 `file`，值是 `.profile`、`.bash_profile`、`.bash_login`、`.bashrc`、`.zshenv`、`.zprofile`、`.zshrc`、`.zlogin`、`config.fish` 之一。`file` 與 `phase` 不能同時出現；`file` 只能用在只有 `raw` 的 module。
+接管產生的片段 module 寫入 `file`，值是 `.profile`、`.bash_profile`、`.bash_login`、`.bashrc`、`.zshenv`、`.zprofile`、`.zshrc`、`.zlogin` 之一。`file` 與 `phase` 不能同時出現；`file` 只能用在只有 `raw` 的 module。
 
 為什麼不沿用階段再修正對應：階段是「在啟動流程的哪一步」，來源檔是「shell 讀到這個檔時」。兩者在 zsh 幾乎一對一，在 bash 不是（`.bash_profile` 與 `.bashrc` 何時被讀取決於使用者的接線），所以用階段表達一定要再猜一次接線。
 
@@ -38,9 +40,9 @@
 
 ### 4. 接線留在檔案裡，rosamta 不替使用者加
 
-執行其他啟動檔的行（`. ~/.bashrc`、`. ~/.profile`、`emulate sh -c '. ~/.profile'`）不接管。這是 `fix/bash-profile-wiring` 已經做的部分。
+執行其他啟動檔的行（`. ~/.bashrc`、`. ~/.profile`、`emulate sh -c '. ~/.profile'`）不接管。執行 `.bashrc` 的行已經在 `fix/bash-profile-wiring` 做完；執行 `.profile` 的行還沒有（tasks 2.4）。
 
-rosamta 不再替既有的 `.bash_profile` 加 `. ~/.bashrc`。為了讓 rosamta 自己的互動內容在 login bash 仍然生效，`.bash_profile` 的 hook 在互動 shell 中直接載入 `rc.bash`，並用一個**不 export** 的變數避免同一個程序在 `.bashrc` 的 hook 再載入一次。rosamta 新建 `.bash_profile` 時，仍然讓它執行 `.profile` 與 `.bashrc`，因為這時沒有既有的行為可以保留。
+rosamta 不再替既有的 `.bash_profile` 加 `. ~/.bashrc`。為了讓 rosamta 自己的互動內容在 login bash 仍然生效，`.bash_profile` 的 hook 在互動 shell 中直接載入 `rc.bash`，並用一個**不 export** 的變數避免同一個程序在 `.bashrc` 的 hook 再載入一次。`.bash_profile` 與 `.bash_login` 都不存在時，rosamta 和現在一樣新建 `.bash_profile`，讓它執行 `.profile` 與 `.bashrc`，login bash 才讀得到 bash 的 hook。`.profile` 可能直接或間接執行過 `.bashrc`，這一點靜態分析看不完：`.bashrc` 的 hook 設下一個不 export 的記號，新建的那一行只在記號不存在時才執行 `.bashrc`。
 
 ### 5. 格式 2 與 migration
 
@@ -49,7 +51,7 @@ rosamta 不再替既有的 `.bash_profile` 加 `. ~/.bashrc`。為了讓 rosamta
 ## Risks / Trade-offs
 
 - **login bash 的行為改變**：原本靠 rosamta 加的那一行才在 login bash 執行 `.bashrc` 的使用者，升級後 `.bashrc` 中沒有接管的內容不再於 login bash 執行。這正是 #38 回報的問題的另一面，需要你決定（見 Open Questions）。
-- **migration 改寫使用者的 repo**：在你的 Mac 上會改 36 個 module。migration 前後各比對一次每個 shell、每種啟動方式的環境與 alias，不同就停止並還原。
+- **migration 改寫使用者的 repo**：在你的 Mac 上會改 36 個 module。migration 前後比對每個 shell 的 login 互動 shell（它在兩種模型下都讀過所有的檔）的環境、alias 與函式，不同就停止並還原。其他啟動方式的差異正是這個變更要修正的行為，列在 migration 的輸出中，不視為失敗。
 - **跨主機**：`file = ".zprofile"` 的 module 套用到沒有 `.zprofile` 的主機時，rosamta 會建立只含 hook 的 `.zprofile`，和現在相同。
 - **測試量**：`crates/cli/tests/adopt.rs` 與 9 個發行版的 docker 測試都要重跑；#34–#38 各補一個重現的測試。
 
@@ -62,4 +64,5 @@ rosamta 不再替既有的 `.bash_profile` 加 `. ~/.bashrc`。為了讓 rosamta
 ## Open Questions
 
 1. **login bash 要不要執行使用者的 `.bashrc`？** 建議：不要替使用者決定，維持接管前的樣子（上面的決定 4）。另一個選擇是保留現在「一律執行」的規則，並把同時出現在兩個檔的行視為同一行，#38 要另外處理。
-2. **`file` 的值要不要包含 fish 的 `conf.d/<名稱>.fish`？** 建議：先只支援 `config.fish`，`conf.d` 的檔案維持整檔接管的現狀。
+2. **fish 的片段要不要也依來源檔載入？** 建議：先不要。`conf.d/rosamta.fish` 在 `config.fish` 之前執行，重新 `source config.fish` 時也不會再執行；要保留時機就得在 `config.fish` 放 hook，而目前的規格是不修改它。
+3. **接管成結構化 module 的行要不要也記錄來源檔？** 建議：先不要。匯出的環境變數本來就會傳給子程序，差別只出現在不經過 login shell 啟動的 bash；要做的話結構化 module 也要能依來源檔產生 script，範圍比這個變更大。
