@@ -946,6 +946,86 @@ pub(crate) fn unchanged(path: &Path, before: Option<&str>) -> Result<()> {
     Ok(())
 }
 
+/// Undo `change` in a file that may have been edited since rosamta wrote
+/// it: what rosamta took out goes back, and what was added since stays.
+/// Returns what the file holds now and what to write, writing nothing.
+fn given_back(scratch: &Path, change: &FileChange) -> Result<(Option<String>, Option<String>)> {
+    let (before, after) = (change.before.as_deref(), change.after.as_deref());
+    if unchanged(&change.path, after).is_ok() {
+        return Ok((change.after.clone(), change.before.clone()));
+    }
+    // A file removed since then is written anew, not taken for an empty one.
+    let current = match unchanged(&change.path, None) {
+        Ok(()) => None,
+        Err(_) => Some(read(&change.path)?),
+    };
+    let merged = merge_back(
+        scratch,
+        before.unwrap_or_default(),
+        after.unwrap_or_default(),
+        current.as_deref().unwrap_or_default(),
+    )?;
+    Ok((current, Some(merged)))
+}
+
+/// [`given_back`] for every file or for none: nothing is written until
+/// each file's text is known, and a failed write undoes the earlier ones.
+fn give_back_all(scratch: &Path, changes: &[&FileChange]) -> bool {
+    let Ok(texts) = changes
+        .iter()
+        .map(|change| given_back(scratch, change))
+        .collect::<Result<Vec<_>>>()
+    else {
+        return false;
+    };
+    for (done, (change, (now, back))) in changes.iter().zip(&texts).enumerate() {
+        if replace(&change.path, now.as_deref(), back.as_deref()).is_err() {
+            for (change, (now, back)) in changes.iter().zip(&texts).take(done) {
+                let _ = replace(&change.path, back.as_deref(), now.as_deref());
+            }
+            return false;
+        }
+    }
+    true
+}
+
+/// `current`, which grew out of `after`, with the changes from `after` back
+/// to `before` applied; where both touched the same lines, both are kept.
+fn merge_back(scratch: &Path, before: &str, after: &str, current: &str) -> Result<String> {
+    std::fs::create_dir_all(scratch).map_err(Error::write(scratch))?;
+    let sides = [("before", before), ("after", after), ("current", current)];
+    // rc files can hold secrets: only the owner reads the copies.
+    for (name, text) in sides {
+        crate::edit::write_private(&scratch.join(name), text)?;
+    }
+    let merged = git::run(
+        scratch,
+        &["merge-file", "-p", "--union", "before", "after", "current"],
+    );
+    for (name, _) in sides {
+        let _ = std::fs::remove_file(scratch.join(name));
+    }
+    merged
+}
+
+/// Writes `text` (or removes the file for `None`) only while `path` still
+/// holds `before`, checked at the last moment: an installer may append to
+/// an rc file at any time.
+pub(crate) fn replace(path: &Path, before: Option<&str>, text: Option<&str>) -> Result<()> {
+    match text {
+        Some(text) => {
+            if let Some(dir) = path.parent() {
+                std::fs::create_dir_all(dir).map_err(Error::write(dir))?;
+            }
+            crate::edit::write_atomic_if(path, text, || unchanged(path, before))
+        }
+        None => {
+            unchanged(path, before)?;
+            write_text(path, None)
+        }
+    }
+}
+
 fn write_text(path: &Path, text: Option<&str>) -> Result<()> {
     match text {
         Some(text) => {
@@ -995,6 +1075,7 @@ pub fn execute(ctx: &Context, plan: Plan) -> Result<Vec<Adoption>> {
         .collect();
     snapshots.save(&changed, "adopt")?;
     let mut written = false;
+    let (mut edited, mut replaced) = (Vec::new(), Vec::new());
     let write = || -> Result<()> {
         for change in plan.files.iter().chain(&plan.edits) {
             unchanged(&change.path, change.before.as_deref())?;
@@ -1003,11 +1084,15 @@ pub fn execute(ctx: &Context, plan: Plan) -> Result<Vec<Adoption>> {
         for (path, text) in &plan.modules {
             write_module(ctx, path, text)?;
         }
-        for edit in &plan.edits {
-            write_text(&edit.path, edit.after.as_deref())?;
-        }
-        for change in &plan.files {
-            write_text(&change.path, change.after.as_deref())?;
+        for (changes, done) in [(&plan.edits, &mut edited), (&plan.files, &mut replaced)] {
+            for change in changes {
+                replace(
+                    &change.path,
+                    change.before.as_deref(),
+                    change.after.as_deref(),
+                )?;
+                done.push(change);
+            }
         }
         Ok(())
     };
@@ -1018,11 +1103,22 @@ pub fn execute(ctx: &Context, plan: Plan) -> Result<Vec<Adoption>> {
         .collect();
     if let Err(err) = apply::apply_after(ctx, &shells, write) {
         if written {
-            for change in plan.files.iter().chain(&plan.edits) {
-                let _ = write_text(&change.path, change.before.as_deref());
-            }
-            for (path, _) in &plan.modules {
-                let _ = std::fs::remove_file(path);
+            // The lines go back into every file, around whatever was added
+            // since, before the modules holding them go: a line in neither
+            // would be lost to new shells, a line in both would run twice.
+            let scratch = ctx.paths.state().join("merge");
+            let restored = give_back_all(&scratch, &replaced);
+            if restored {
+                for change in &edited {
+                    let _ = replace(
+                        &change.path,
+                        change.after.as_deref(),
+                        change.before.as_deref(),
+                    );
+                }
+                for (path, _) in &plan.modules {
+                    let _ = std::fs::remove_file(path);
+                }
             }
         }
         return Err(err);
@@ -1449,16 +1545,21 @@ pub fn undo(ctx: &Context, plan: Undo) -> Result<()> {
         std::slice::from_ref(&plan.file.path),
         &format!("restore adoption {}", plan.adoption.id),
     )?;
-    let mut written = false;
+    let (mut written, mut narrowed) = (false, false);
     let write = || -> Result<()> {
         unchanged(&plan.file.path, plan.file.before.as_deref())?;
         if let Some((path, text)) = &plan.module {
             unchanged(path, Some(text))?;
         }
         written = true;
-        write_text(&plan.file.path, plan.file.after.as_deref())?;
-        if let Some((path, _)) = &plan.module {
-            write_text(path, plan.module_after.as_deref())?;
+        replace(
+            &plan.file.path,
+            plan.file.before.as_deref(),
+            plan.file.after.as_deref(),
+        )?;
+        if let Some((path, text)) = &plan.module {
+            replace(path, Some(text), plan.module_after.as_deref())?;
+            narrowed = true;
         }
         Ok(())
     };
@@ -1468,11 +1569,28 @@ pub fn undo(ctx: &Context, plan: Undo) -> Result<()> {
         .find(|watched| watched.path == plan.adoption.file)
         .map_or_else(|| vec![plan.adoption.shell], |watched| watched.shells);
     if let Err(err) = apply::apply_after(ctx, &shells, write) {
-        if written {
-            let _ = write_text(&plan.file.path, plan.file.before.as_deref());
-            if let Some((path, text)) = &plan.module {
-                let _ = write_module(ctx, path, text);
-            }
+        // The rc file gives the lines up again only while the module still
+        // holds what rosamta left there, narrowed or, if that write was
+        // refused, as it was; the module takes them back only after that.
+        let module_holds = plan.module.as_ref().is_none_or(|(path, text)| {
+            let expected = match narrowed {
+                true => plan.module_after.as_deref(),
+                false => Some(text.as_str()),
+            };
+            unchanged(path, expected).is_ok()
+        });
+        if written
+            && module_holds
+            && replace(
+                &plan.file.path,
+                plan.file.after.as_deref(),
+                plan.file.before.as_deref(),
+            )
+            .is_ok()
+            && narrowed
+            && let Some((path, text)) = &plan.module
+        {
+            let _ = write_module(ctx, path, text);
         }
         return Err(err);
     }
@@ -1526,6 +1644,64 @@ pub fn adoptions(ctx: &Context) -> Result<Vec<Adoption>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn lines_go_back_around_what_was_added_since() {
+        crate::git::tests::isolate();
+        let dir = tempfile::tempdir().unwrap();
+        let before = "export A=1\n# bun\nexport BUN=1\nexport Z=1\n";
+        let after = "export A=1\nexport Z=1\n";
+        let merge = |current: &str| merge_back(dir.path(), before, after, current).unwrap();
+        // Added at the end, away from the lines taken out.
+        assert_eq!(
+            merge("export A=1\nexport Z=1\nexport LATER=1\n"),
+            format!("{before}export LATER=1\n")
+        );
+        // Added right where they were: both are kept.
+        let merged = merge("export A=1\nexport LATER=1\nexport Z=1\n");
+        for line in ["# bun", "export BUN=1", "export LATER=1"] {
+            assert_eq!(merged.matches(line).count(), 1, "{merged}");
+        }
+        assert!(merged.starts_with("export A=1\n") && merged.ends_with("export Z=1\n"));
+        assert_eq!(std::fs::read_dir(dir.path()).unwrap().count(), 0);
+    }
+
+    /// A file that cannot be given back keeps the others as they are, so no
+    /// line ends up in both a file and the module that stays.
+    #[test]
+    fn lines_go_back_to_every_file_or_to_none() {
+        let dir = tempfile::tempdir().unwrap();
+        let zshrc = dir.path().join(".zshrc");
+        std::fs::write(&zshrc, "export A=1\n").unwrap();
+        let unreadable = dir.path().join(".bashrc");
+        std::fs::create_dir(&unreadable).unwrap();
+        let change = |path: &Path| FileChange {
+            path: path.to_path_buf(),
+            before: Some("export A=1\nexport BUN=1\n".into()),
+            after: Some("export A=1\n".into()),
+        };
+        let (first, second) = (change(&zshrc), change(&unreadable));
+        assert!(!give_back_all(
+            &dir.path().join("merge"),
+            &[&first, &second]
+        ));
+        assert_eq!(std::fs::read_to_string(&zshrc).unwrap(), "export A=1\n");
+    }
+
+    #[test]
+    fn a_file_removed_during_the_check_gets_its_lines_back() {
+        crate::git::tests::isolate();
+        let dir = tempfile::tempdir().unwrap();
+        let zshrc = dir.path().join(".zshrc");
+        let change = FileChange {
+            path: zshrc.clone(),
+            before: Some("export A=1\nexport BUN=1\n".into()),
+            after: Some("export A=1\n".into()),
+        };
+        assert!(give_back_all(&dir.path().join("merge"), &[&change]));
+        let text = std::fs::read_to_string(&zshrc).unwrap();
+        assert!(text.contains("export BUN=1"), "{text}");
+    }
 
     fn module(text: &str) -> Module {
         toml::from_str(text).unwrap()
