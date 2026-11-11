@@ -104,6 +104,34 @@ impl Chezmoi {
     }
 }
 
+/// Which of `paths` chezmoi manages: its next apply writes over them. None
+/// when chezmoi is not on PATH or does not answer.
+pub fn managed(ctx: &Context, paths: &[PathBuf]) -> Vec<PathBuf> {
+    let Some(chezmoi) = Chezmoi::find(ctx) else {
+        return Vec::new();
+    };
+    // Only for a warning, so never a prompt.
+    let chezmoi = Chezmoi {
+        args: vec!["--no-tty".to_string()],
+        terminal: false,
+        ..chezmoi
+    };
+    let Ok(out) = chezmoi.output(&[
+        "managed",
+        "--include=files,symlinks",
+        "--path-style=absolute",
+    ]) else {
+        return Vec::new();
+    };
+    let out = String::from_utf8_lossy(&out);
+    let managed: Vec<&Path> = out.lines().map(Path::new).collect();
+    paths
+        .iter()
+        .filter(|path| managed.contains(&path.as_path()))
+        .cloned()
+        .collect()
+}
+
 /// How long chezmoi may take without a terminal.
 const TIMEOUT: Duration = Duration::from_secs(60);
 

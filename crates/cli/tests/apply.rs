@@ -970,3 +970,28 @@ fn conflicts_wait_in_the_review_queue() {
         .assert()
         .code(2);
 }
+
+#[test]
+fn apply_warns_when_chezmoi_manages_a_hooked_file() {
+    use std::os::unix::fs::PermissionsExt;
+    let home = set_up();
+    let bin = home.root.join("bin");
+    fs::create_dir_all(&bin).unwrap();
+    let chezmoi = bin.join("chezmoi");
+    fs::write(
+        &chezmoi,
+        "#!/bin/sh\ncase \"$*\" in *managed*) printf '%s\\n' \"$HOME/.profile\" \"$HOME/.gitconfig\" ;; esac\n",
+    )
+    .unwrap();
+    fs::set_permissions(&chezmoi, fs::Permissions::from_mode(0o755)).unwrap();
+    let path = format!("{}:{}", bin.display(), std::env::var("PATH").unwrap());
+    home.cmd("rsmt")
+        .arg("apply")
+        .env("PATH", path)
+        .assert()
+        .success()
+        .stderr(
+            predicate::str::contains("warning: chezmoi also manages ~/.profile, so")
+                .and(predicate::str::contains(".gitconfig").not()),
+        );
+}

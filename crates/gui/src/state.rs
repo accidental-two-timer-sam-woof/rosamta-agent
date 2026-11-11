@@ -60,6 +60,8 @@ pub struct Snapshot {
     pub service: Service,
     pub remote: Option<String>,
     pub shells: Vec<ShellStatus>,
+    /// Startup files that lost rosamta's block.
+    pub hooks_missing: Vec<PathBuf>,
     pub modules: Vec<ModuleRow>,
     pub dotfiles: Vec<DotfileRow>,
     pub commits: Vec<CommitInfo>,
@@ -84,6 +86,7 @@ impl Snapshot {
             service: Service::Unavailable,
             remote: None,
             shells: Vec::new(),
+            hooks_missing: Vec::new(),
             modules: Vec::new(),
             dotfiles: Vec::new(),
             commits: Vec::new(),
@@ -142,6 +145,11 @@ pub fn load() -> Snapshot {
         note(err);
         Vec::new()
     });
+    out.hooks_missing =
+        apply::missing_hooks(&ctx, &ctx.hook_env(&ctx.installed())).unwrap_or_else(|err| {
+            note(err);
+            Vec::new()
+        });
     out.modules = modules(&ctx).unwrap_or_else(|err| {
         note(err);
         Vec::new()

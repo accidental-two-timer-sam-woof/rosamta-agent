@@ -85,6 +85,7 @@ pub fn apply(json: bool, dry_run: bool) -> Result<ExitCode> {
         apply::apply(&ctx)?
     };
     warn_skipped(&applied.skipped);
+    warn_chezmoi(&ctx);
     let failed = wrong_passphrase || !applied.failures().is_empty();
     if json {
         print_json(&applied);
@@ -256,6 +257,24 @@ fn print_step(ctx: &Context, step: &Step) {
         Action::Changed => println!("Not deployed {path}: changed on this host"),
         Action::Skipped => println!("Skipped {path}: {reason}"),
         Action::Failed => eprintln!("error: {path}: {reason}"),
+    }
+}
+
+/// An rc file chezmoi also manages loses rosamta's block at the next
+/// `chezmoi apply`.
+fn warn_chezmoi(ctx: &Context) {
+    let Ok(shells) = apply::shells(ctx) else {
+        return;
+    };
+    let hooked: Vec<_> = shells
+        .into_iter()
+        .flat_map(|status| status.hooked)
+        .collect();
+    for path in rosamta_core::chezmoi::managed(ctx, &hooked) {
+        let path = adopt::display(&path, &ctx.home);
+        eprintln!(
+            "warning: chezmoi also manages {path}, so `chezmoi apply` will remove rosamta's block; run `chezmoi forget {path}`, or move everything over with `rsmt import chezmoi`"
+        );
     }
 }
 
