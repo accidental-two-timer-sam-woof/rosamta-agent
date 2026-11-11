@@ -301,8 +301,20 @@ fn publish_locked(ctx: &Context, commit_edits: bool) -> Result<Published> {
         break;
     }
     let unpushed = Remote::required(&repo_dir)?.unpushed(&repo_dir)?;
+    // A commit rosamta could not make (signing, a stale lock) stays reported
+    // while its change is still uncommitted, whatever else was pushed.
+    let uncommitted = !commit_edits
+        && !git::run(&repo_dir, &["status", "--porcelain"])?
+            .trim()
+            .is_empty();
     state::update(ctx.paths.state(), |state| {
-        state.publish = Some(Attempt::ok());
+        let blocked = state
+            .publish
+            .as_ref()
+            .is_some_and(|attempt| attempt.outcome == Outcome::Blocked);
+        if !(blocked && uncommitted) {
+            state.publish = Some(Attempt::ok());
+        }
         state.unpushed = unpushed;
     })?;
     Ok(published)
