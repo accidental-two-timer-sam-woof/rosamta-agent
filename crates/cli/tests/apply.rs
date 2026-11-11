@@ -789,6 +789,15 @@ fn ejected_bashrc_parses_without_interactive_code() {
     }
 }
 
+/// How to start a shell from a `shell` that reads its env snippets' files
+/// again: any zsh, but only a login bash (`.bash_profile`, `.profile`).
+fn nested(shell: &str) -> &'static str {
+    match shell {
+        "bash" => "bash -l -i",
+        _ => "zsh -i",
+    }
+}
+
 /// What a startup file gave every shell (options, functions, variables it
 /// did not export) reaches a shell started from another one too; exported
 /// values came down already and are not built up a second time.
@@ -805,9 +814,15 @@ fn a_nested_shell_runs_env_snippets_again_but_not_the_exports() {
         if !has(shell) {
             continue;
         }
-        let script = format!("{shell} -i -c 'echo \"${{LOCAL-unset}} $CNT\"'");
+        let script = format!("{} -c 'echo \"${{LOCAL-unset}} $CNT\"'", nested(shell));
         let out = home.shell(&[shell, "-i", "-c", &script].map(String::from));
         assert_eq!(String::from_utf8_lossy(&out.stdout), "1 x\n", "{shell}");
+    }
+    // bash does not read `.bash_profile` again in a shell that is not a login one.
+    if has("bash") {
+        let script = "bash -i -c 'echo \"${LOCAL-unset} $CNT\"'; :";
+        let out = home.shell(&["bash", "-i", "-c", script].map(String::from));
+        assert_eq!(String::from_utf8_lossy(&out.stdout), "unset x\n");
     }
 }
 
@@ -827,7 +842,10 @@ fn an_exported_marker_does_not_hide_env_snippets_from_a_nested_shell() {
             continue;
         }
         // `; :` keeps the nested shell a child: a last command may be exec'd, keeping the PID.
-        let script = format!("export _rosamta_env; {shell} -i -c 'echo \"${{LOCAL-unset}}\"'; :");
+        let script = format!(
+            "export _rosamta_env; {} -c 'echo \"${{LOCAL-unset}}\"'; :",
+            nested(shell)
+        );
         let out = home.shell(&[shell, "-i", "-c", &script].map(String::from));
         assert_eq!(String::from_utf8_lossy(&out.stdout), "1\n", "{shell}");
     }
@@ -851,7 +869,7 @@ fn ejected_env_snippets_run_once_in_every_shell() {
             continue;
         }
         // `; :` keeps the nested shell a child: a last command may be exec'd.
-        let script = format!("echo \"$N\"; {shell} -i -c 'echo \"$N\"'; :");
+        let script = format!("echo \"$N\"; {} -c 'echo \"$N\"'; :", nested(shell));
         let out = home.shell(&[shell, "-i", "-c", &script].map(String::from));
         assert_eq!(String::from_utf8_lossy(&out.stdout), "x\nx\n", "{shell}");
     }

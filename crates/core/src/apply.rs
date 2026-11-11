@@ -899,8 +899,8 @@ fn nested(version: &Path, shell: Shell, end_guard: &str) -> Result<String> {
         .join(format!("env.{}", shell.ext()));
     let loader = std::fs::read_to_string(&loader_path).map_err(Error::read(&loader_path))?;
     let marker = match shell {
-        Shell::Fish => "\nset -g __rosamta_env ",
-        _ => "\n_rosamta_env=",
+        Shell::Fish => "\nelse if test \"$__rosamta_env\"",
+        _ => "\nelif [ \"${_rosamta_env-}\"",
     };
     let Some(start) = loader.find(marker) else {
         return Ok(String::new());
