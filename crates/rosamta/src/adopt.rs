@@ -8,7 +8,9 @@ use rosamta_core::adopt::{self, Adoption, Candidate, Kind, QueueItem, Scope};
 use rosamta_core::apply::Context;
 use rosamta_core::dotfiles::review::{self, Reason};
 use rosamta_core::hooks::FileChange;
-use rosamta_core::time;
+use rosamta_core::scripts::Run;
+use rosamta_core::scripts::apply::Why;
+use rosamta_core::{scripts, time};
 
 use crate::commands::confirm;
 use crate::print_json;
@@ -112,6 +114,23 @@ pub fn review(json: bool) -> Result<ExitCode> {
 /// `4  ~/.gitconfig  2026-11-10 14:31 UTC  differs from the repo`, or what a
 /// template waits for.
 fn item_line(ctx: &Context, item: &QueueItem) -> String {
+    if let Some(script) = &item.script {
+        let run = match script.run {
+            Run::Once => "once",
+            Run::Onchange => "onchange",
+        };
+        let why = match script.why {
+            Why::New => "never ran on this host",
+            Why::Changed => "changed since it last ran",
+            Why::Failed => "failed last time",
+        };
+        return format!(
+            "{}  {} ({run})  {}  {why}",
+            item.id,
+            script.source,
+            time::date_time(item.detected_at)
+        );
+    }
     if let Some(dotfile) = &item.dotfile {
         let what = match (&dotfile.waiting, dotfile.reason) {
             (Some(waiting), _) => waiting.describe(),
@@ -144,8 +163,29 @@ fn item_line(ctx: &Context, item: &QueueItem) -> String {
 
 pub fn accept(json: bool, id: u32, all_hosts: bool) -> Result<ExitCode> {
     let started = time::now();
-    let ctx = Context::from_env()?;
+    let mut ctx = Context::from_env()?;
     let lock = adopt::lock(&ctx)?;
+    if let Some(script) = scripts::review::item_of(&ctx, id)? {
+        // A script run from the queue gets the terminal as `rsmt apply` does.
+        ctx.interactive = !json && std::io::stdin().is_terminal();
+        let outcome = scripts::review::accept(&ctx, id, &script)?;
+        if json {
+            print_json(&serde_json::json!({
+                "source": script.source,
+                "ok": outcome.ok,
+                "status": outcome.status,
+            }));
+        } else if outcome.ok {
+            println!("Ran {}", script.source);
+        } else {
+            eprintln!("error: script {}: {}", script.source, outcome.status);
+        }
+        return Ok(if outcome.ok {
+            ExitCode::SUCCESS
+        } else {
+            ExitCode::FAILURE
+        });
+    }
     let scope = if all_hosts { Scope::All } else { Scope::Host };
     let dotfile = adopt::queue(&ctx)?
         .into_iter()

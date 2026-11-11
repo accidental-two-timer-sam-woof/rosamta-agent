@@ -122,6 +122,7 @@ pub(crate) fn sync_queue(ctx: &Context, waiting: Vec<DotfileItem>) -> Result<()>
             module: None,
             local: false,
             dotfile: Some(item),
+            script: None,
         });
     }
     items.sort_by_key(|item| item.id);
@@ -239,9 +240,11 @@ pub(crate) fn keep(ctx: &Context, id: u32, item: &DotfileItem, scope: Scope) -> 
 pub fn discard(ctx: &Context, id: u32) -> Result<PathBuf> {
     let (item, _) = adopt::take_item(ctx, id)?;
     let Some(dotfile) = item.dotfile else {
-        return Err(Error::Usage(
-            "discard applies only to dotfiles; use `rsmt review ignore` for rc file content".into(),
-        ));
+        return Err(Error::Usage(if item.script.is_some() {
+            "discard applies only to dotfiles; `rsmt review ignore` counts a script as run".into()
+        } else {
+            "discard applies only to dotfiles; use `rsmt review ignore` for rc file content".into()
+        }));
     };
     let entry = unchanged(ctx, id, &dotfile)?;
     deploy::force(ctx, &dotfile.path, &entry)?;

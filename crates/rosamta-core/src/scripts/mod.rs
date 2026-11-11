@@ -13,6 +13,7 @@ use crate::error::{Error, Result};
 use crate::validate;
 
 pub mod apply;
+pub mod review;
 pub mod run;
 
 pub const MANIFEST: &str = "scripts.toml";

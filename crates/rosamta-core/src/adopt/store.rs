@@ -61,6 +61,16 @@ pub struct QueueItem {
     /// describe rc file lines are then empty.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub dotfile: Option<crate::dotfiles::review::DotfileItem>,
+    /// Set for a script waiting to run; `file` is then the script.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub script: Option<crate::scripts::review::ScriptItem>,
+}
+
+impl QueueItem {
+    /// Content from an rc file waiting to be adopted.
+    pub fn is_rc(&self) -> bool {
+        self.dotfile.is_none() && self.script.is_none()
+    }
 }
 
 #[derive(Debug, Default, Serialize, Deserialize)]

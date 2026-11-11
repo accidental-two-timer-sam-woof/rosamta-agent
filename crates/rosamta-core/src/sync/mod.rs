@@ -490,7 +490,7 @@ fn pull_locked(ctx: &Context, commit_edits: bool) -> Result<Pulled> {
         });
     }
     // Judged against how shells start now, so only new errors stop it.
-    match apply::after_externals(ctx, || apply::apply_after(ctx, || Ok(()))) {
+    match apply::around_shells(ctx, || apply::apply_after(ctx, || Ok(()))) {
         Ok(applied) => {
             record_pull(ctx, Attempt::ok())?;
             Ok(Pulled {

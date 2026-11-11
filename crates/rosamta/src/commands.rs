@@ -10,6 +10,7 @@ use rosamta_core::daemon::service;
 use rosamta_core::dotfiles::{self, Action, Step};
 use rosamta_core::externals;
 use rosamta_core::hooks::FileChange;
+use rosamta_core::scripts::apply as scripts;
 use rosamta_core::{Error, Result};
 
 use crate::print_json;
@@ -20,6 +21,7 @@ pub fn apply(json: bool, dry_run: bool) -> Result<ExitCode> {
         let plan = apply::plan(&ctx)?;
         let externals = externals::plan(&ctx)?;
         let dotfiles = dotfiles::plan(&ctx)?;
+        let scripts = scripts::plan(&ctx)?;
         warn_skipped(&plan.skipped);
         if json {
             let steps: Vec<&Step> = dotfiles.iter().map(|planned| &planned.step).collect();
@@ -27,6 +29,7 @@ pub fn apply(json: bool, dry_run: bool) -> Result<ExitCode> {
                 plan: &plan,
                 externals: &externals,
                 dotfiles: steps,
+                scripts: &scripts,
             });
             return Ok(ExitCode::SUCCESS);
         }
@@ -34,7 +37,7 @@ pub fn apply(json: bool, dry_run: bool) -> Result<ExitCode> {
             .iter()
             .filter(|planned| planned.step.action != Action::Unchanged)
             .collect();
-        if plan.is_up_to_date() && changed.is_empty() && settled(&externals) {
+        if plan.is_up_to_date() && changed.is_empty() && settled(&externals) && scripts.is_empty() {
             println!("Already up to date");
         }
         if !plan.is_up_to_date() {
@@ -52,6 +55,9 @@ pub fn apply(json: bool, dry_run: bool) -> Result<ExitCode> {
                     apply::unified(&name, before.as_deref(), after.as_deref())
                 );
             }
+        }
+        for step in &scripts {
+            print_script(step);
         }
         return Ok(ExitCode::SUCCESS);
     }
@@ -79,7 +85,11 @@ pub fn apply(json: bool, dry_run: bool) -> Result<ExitCode> {
         || applied
             .externals
             .iter()
-            .any(|step| step.action == externals::Action::Failed);
+            .any(|step| step.action == externals::Action::Failed)
+        || applied
+            .scripts
+            .iter()
+            .any(|step| step.action == scripts::Action::Failed);
     if json {
         print_json(&applied);
     } else {
@@ -88,7 +98,11 @@ pub fn apply(json: bool, dry_run: bool) -> Result<ExitCode> {
             .iter()
             .filter(|step| step.action != Action::Unchanged)
             .collect();
-        if applied.up_to_date && changed.is_empty() && settled(&applied.externals) {
+        if applied.up_to_date
+            && changed.is_empty()
+            && settled(&applied.externals)
+            && applied.scripts.is_empty()
+        {
             println!("Already up to date");
         }
         for step in &applied.externals {
@@ -107,6 +121,9 @@ pub fn apply(json: bool, dry_run: bool) -> Result<ExitCode> {
         }
         for step in changed {
             print_step(&ctx, step);
+        }
+        for step in &applied.scripts {
+            print_script(step);
         }
         if std::io::stdin().is_terminal() {
             settle_conflicts(&ctx, &applied.dotfiles)?;
@@ -183,6 +200,27 @@ struct DryRun<'a> {
     plan: &'a apply::Plan,
     externals: &'a [externals::Step],
     dotfiles: Vec<&'a Step>,
+    scripts: &'a [scripts::Step],
+}
+
+fn print_script(step: &scripts::Step) {
+    use scripts::{Action, Why};
+    let source = &step.source;
+    let why = match step.why {
+        Some(Why::New) => "never ran on this host",
+        Some(Why::Changed) => "changed since it last ran",
+        Some(Why::Failed) => "failed last time",
+        None => "",
+    };
+    match step.action {
+        Action::Ran => println!("Ran {source}"),
+        Action::WillRun => println!("Will run {source}: {why}"),
+        Action::Queued => println!("Queued {source} for review: {why}"),
+        Action::Failed => eprintln!(
+            "error: script {source}: {}",
+            step.reason.as_deref().unwrap_or_default()
+        ),
+    }
 }
 
 pub(crate) fn settled(steps: &[externals::Step]) -> bool {

@@ -977,6 +977,8 @@ pub struct Reviewed {
 /// Scan and act on the host's adopt policy: `auto` adopts, `ask` queues,
 /// `off` does nothing. Content adopted before is removed under `auto` and `ask`.
 pub fn refresh(ctx: &Context) -> Result<Reviewed> {
+    // A broken scripts.toml leaves its items as they were; validate reports it.
+    let _ = crate::scripts::review::sync_queue(ctx);
     let host = host_config(ctx)?;
     let store = Store::new(ctx.paths.state());
     if host.adopt == AdoptPolicy::Off {
@@ -990,13 +992,13 @@ pub fn refresh(ctx: &Context) -> Result<Reviewed> {
         });
     let adopted = adopt(ctx, &now_adopt, Scope::Host)?;
     let old = store.queue()?;
-    // Dotfile items are kept up to date by deploying.
+    // Dotfile and script items are kept up to date by applying.
     let mut queue = Queue {
         next_id: old.next_id.max(1),
         items: old
             .items
             .iter()
-            .filter(|item| item.dotfile.is_some())
+            .filter(|item| !item.is_rc())
             .cloned()
             .collect(),
     };
@@ -1023,6 +1025,7 @@ pub fn refresh(ctx: &Context) -> Result<Reviewed> {
             module: candidate.module.clone(),
             local: candidate.local,
             dotfile: None,
+            script: None,
         });
     }
     store.save_queue(&queue)?;
@@ -1077,8 +1080,10 @@ fn candidate_of(ctx: &Context, id: u32, item: &QueueItem) -> Result<Candidate> {
 /// What accepting an rc file item would write, writing nothing.
 pub fn preview(ctx: &Context, id: u32, scope: Scope) -> Result<Plan> {
     let (item, _) = take_item(ctx, id)?;
-    if item.dotfile.is_some() {
-        return Err(Error::Usage(format!("review item {id} is a dotfile")));
+    if !item.is_rc() {
+        return Err(Error::Usage(format!(
+            "review item {id} is not rc file content"
+        )));
     }
     plan(ctx, &[candidate_of(ctx, id, &item)?], scope)
 }
@@ -1089,6 +1094,11 @@ pub fn accept(ctx: &Context, id: u32, scope: Scope) -> Result<Vec<Adoption>> {
     if let Some(dotfile) = &item.dotfile {
         crate::dotfiles::review::keep(ctx, id, dotfile, scope)?;
         return Ok(Vec::new());
+    }
+    if item.script.is_some() {
+        return Err(Error::Usage(format!(
+            "review item {id} is a script; run it with `rsmt review accept`"
+        )));
     }
     let candidate = candidate_of(ctx, id, &item)?;
     let adopted = adopt(ctx, &[candidate], scope)?;
@@ -1104,6 +1114,10 @@ pub fn ignore(ctx: &Context, id: u32) -> Result<QueueItem> {
     let (item, queue) = take_item(ctx, id)?;
     if let Some(dotfile) = &item.dotfile {
         crate::dotfiles::review::ignore(ctx, id, dotfile)?;
+        return Ok(item);
+    }
+    if let Some(script) = &item.script {
+        crate::scripts::review::ignore(ctx, id, script)?;
         return Ok(item);
     }
     let store = Store::new(ctx.paths.state());
