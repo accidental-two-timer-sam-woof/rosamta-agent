@@ -166,5 +166,5 @@ fn apply_if_applied(ctx: &Context) -> Done {
     if generated::current_id(&ctx.paths.generated()).is_none() {
         return Ok(None);
     }
-    apply::apply(ctx).map(|_| None)
+    Ok(apply::apply(ctx)?.failures().into_iter().next())
 }

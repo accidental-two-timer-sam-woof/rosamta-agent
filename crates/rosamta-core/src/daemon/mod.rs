@@ -581,16 +581,19 @@ impl Daemon {
             return Ok(());
         }
         let _lock = adopt::lock(&self.ctx).map_err(|err| ("apply_failed", err.to_string()))?;
-        apply::apply(&self.ctx)
-            .map(drop)
-            .map_err(|err| ("apply_failed", err.to_string()))
+        let applied = apply::apply(&self.ctx).map_err(|err| ("apply_failed", err.to_string()))?;
+        match applied.failures().into_iter().next() {
+            Some(failure) => Err(("apply_failed", failure)),
+            None => Ok(()),
+        }
     }
 
     fn sync_now(&mut self) {
         if self.host.pull != SyncPolicy::Auto {
             return;
         }
-        match sync::sync_per_policy(&self.ctx) {
+        // Hand edits that did not apply stay unpublished; pulling may fix them.
+        match sync::sync_per_policy(&self.ctx, self.repo_problem.is_some()) {
             Ok(_) => {}
             // No remote yet, or no repo: nothing to sync with.
             Err(err) if err.is_usage() => {}

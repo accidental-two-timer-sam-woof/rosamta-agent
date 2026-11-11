@@ -59,12 +59,12 @@ fn sync_locked(ctx: &Context) -> Result<Published> {
     Ok(published)
 }
 
-/// The background service's Sync: with the publish policy `manual`, only
-/// Pull, leave edits the user has not committed alone and count unpushed
-/// commits.
-pub fn sync_per_policy(ctx: &Context) -> Result<()> {
+/// The background service's Sync: with the publish policy `manual`, or
+/// while the repo has edits that do not apply (`hold`), only Pull, leave
+/// edits the user has not committed alone and count unpushed commits.
+pub fn sync_per_policy(ctx: &Context, hold: bool) -> Result<()> {
     let _lock = adopt::lock(ctx)?;
-    if host::load(&ctx.paths.host_config())?.publish == SyncPolicy::Auto {
+    if !hold && host::load(&ctx.paths.host_config())?.publish == SyncPolicy::Auto {
         return sync_locked(ctx).map(drop);
     }
     pull_locked(ctx, false)?;
@@ -643,7 +643,7 @@ mod tests {
         std::fs::write(repo_dir.join("modules/a.toml"), "[env]\nA = \"2\"\n").unwrap();
         let remote_head = git::run(&bare, &["rev-parse", "HEAD"]).unwrap();
 
-        sync_per_policy(&ctx).unwrap();
+        sync_per_policy(&ctx, false).unwrap();
         assert!(repo_dir.join("modules/b.toml").is_file());
         assert_eq!(
             git::run(&bare, &["rev-parse", "HEAD"]).unwrap(),
@@ -656,6 +656,18 @@ mod tests {
         let state = load_state(ctx.paths.state()).unwrap();
         assert_eq!(state.unpushed, 1);
         assert_eq!(state.pull.unwrap().outcome, Outcome::Ok);
+
+        // An edit that does not apply is held back under `auto` too.
+        std::fs::write(ctx.paths.host_config(), "id = \"a\"\npublish = \"auto\"\n").unwrap();
+        sync_per_policy(&ctx, true).unwrap();
+        assert_eq!(
+            git::run(&bare, &["rev-parse", "HEAD"]).unwrap(),
+            remote_head
+        );
+        assert_eq!(
+            git::run(&repo_dir, &["status", "--porcelain"]).unwrap(),
+            " M modules/a.toml\n"
+        );
     }
 
     #[test]
