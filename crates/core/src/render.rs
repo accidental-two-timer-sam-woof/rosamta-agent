@@ -367,6 +367,7 @@ fn loader(shell: Shell, stage: Stage, frags: &[&Fragment], dir: &Path, layout: &
         )
         .unwrap();
         if stage == Stage::Env {
+            out.push_str(&again(shell, &layout.version_id, frags, &file));
             out.push_str(end_guard);
         } else {
             let notice = fish_quote(&layout.notice.display().to_string());
@@ -413,6 +414,7 @@ fn loader(shell: Shell, stage: Stage, frags: &[&Fragment], dir: &Path, layout: &
     }
     out.push_str("  :\nfi\n");
     if stage == Stage::Env {
+        out.push_str(&again(shell, &layout.version_id, frags, &file));
         out.push_str(end_guard);
     } else {
         // A builtin read, so the reminder costs no process start.
@@ -426,6 +428,56 @@ fn loader(shell: Shell, stage: Stage, frags: &[&Fragment], dir: &Path, layout: &
     out
 }
 
+/// The branch of the env guard for a shell started from one that ran env
+/// already. Exported values came down to it; what the snippets set without
+/// exporting (options, functions, plain variables) did not, so they run
+/// again, once per process, where the shell would read their file again:
+/// in every zsh and fish, in a login bash (its env snippets come from
+/// `.bash_profile` and `.profile`), and never in sh.
+// shortcut: `exec` keeps the PID, so an exported marker still hides the snippets from an exec'd shell; unexport it per shell if that is reported.
+fn again(
+    shell: Shell,
+    version_id: &str,
+    frags: &[&Fragment],
+    file: &dyn Fn(&Fragment) -> String,
+) -> String {
+    let snippets: Vec<String> = frags
+        .iter()
+        .filter(|frag| frag.is_raw())
+        .map(|frag| file(frag))
+        .collect();
+    if snippets.is_empty() || shell == Shell::Sh {
+        return String::new();
+    }
+    let id = format!("{version_id}:{}", shell.name());
+    let mut out = String::new();
+    if shell == Shell::Fish {
+        writeln!(
+            out,
+            "else if test \"$__rosamta_env\" != {id}\nset -g __rosamta_env {id}"
+        )
+        .unwrap();
+        for path in snippets {
+            writeln!(out, "source {}", fish_quote(&path)).unwrap();
+        }
+        return out;
+    }
+    let login = match shell {
+        // Another shell may read `.bashrc`, and so this loader; it has no `shopt`.
+        Shell::Bash => " && shopt -q login_shell 2>/dev/null",
+        _ => "",
+    };
+    writeln!(
+        out,
+        "elif [ \"${{_rosamta_env-}}\" != {id}:$$ ]{login}; then\n_rosamta_env={id}:$$"
+    )
+    .unwrap();
+    for path in snippets {
+        writeln!(out, ". {}", posix_quote(&path)).unwrap();
+    }
+    out
+}
+
 fn stage_name(stage: Stage) -> &'static str {
     match stage {
         Stage::Env => "env",
@@ -434,13 +486,17 @@ fn stage_name(stage: Stage) -> &'static str {
 }
 
 /// The lines around the env stage that run it once per process tree, and
-/// the line that closes them. The marker is per shell: a bash started from
-/// sh still needs its own env.
+/// the line that closes them; [`again`] adds what every process still needs.
+/// The marker is per shell: a bash started from sh still needs its own env.
+/// The process is marked before anything runs: a snippet may source a file
+/// whose hook loads env again.
 pub(crate) fn env_guard(shell: Shell, version_id: &str) -> (String, &'static str) {
     let id = format!("{version_id}:{}", shell.name());
     match shell {
         Shell::Fish => (
-            format!("if test \"$ROSAMTA_ENV\" != {id}\nset -gx ROSAMTA_ENV {id}\n"),
+            format!(
+                "if test \"$ROSAMTA_ENV\" != {id}\nset -gx ROSAMTA_ENV {id}\nset -g __rosamta_env {id}\n"
+            ),
             "end\n",
         ),
         Shell::Sh => (
@@ -451,7 +507,7 @@ pub(crate) fn env_guard(shell: Shell, version_id: &str) -> (String, &'static str
         ),
         _ => (
             format!(
-                "if [ \"${{ROSAMTA_ENV-}}\" != {id} ]; then\nROSAMTA_ENV={id}\nexport ROSAMTA_ENV\n"
+                "if [ \"${{ROSAMTA_ENV-}}\" != {id} ]; then\nROSAMTA_ENV={id}\nexport ROSAMTA_ENV\n_rosamta_env={id}:$$\n"
             ),
             "fi\n",
         ),

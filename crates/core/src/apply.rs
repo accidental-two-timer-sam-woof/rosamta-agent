@@ -1,6 +1,6 @@
 //! `rsmt apply`, `hook`, `unhook`, `eject` and `restore --original`.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashSet};
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
@@ -822,7 +822,8 @@ pub fn plan_eject(ctx: &Context) -> Result<Vec<FileChange>> {
                 return Ok(text);
             }
             let (guard, end_guard) = render::env_guard(shell, &id);
-            Ok(format!("{guard}{text}{end_guard}"))
+            let nested = nested(&version, shell, end_guard)?;
+            Ok(format!("{guard}{text}{nested}{end_guard}"))
         };
         let interactive = |text: String| match shell {
             _ if text.is_empty() => text,
@@ -873,15 +874,47 @@ pub fn plan_eject(ctx: &Context) -> Result<Vec<FileChange>> {
     Ok(changes)
 }
 
-/// The fragments a loader sources, concatenated in its order.
+/// The fragments a loader sources, concatenated in its order, each once:
+/// the env loader sources its snippets again for a nested shell.
 fn inline(version: &Path, shell: Shell, stage: &str) -> Result<String> {
     let loader_path = version
         .join(shell.name())
         .join(format!("{stage}.{}", shell.ext()));
     let loader = std::fs::read_to_string(&loader_path).map_err(Error::read(&loader_path))?;
     let mut out = String::new();
+    let mut seen = HashSet::new();
     for path in loader.lines().filter_map(sourced) {
-        out.push_str(&pasted(shell, &path)?);
+        if seen.insert(path.clone()) {
+            out.push_str(&pasted(shell, &path)?);
+        }
+    }
+    Ok(out)
+}
+
+/// The env loader's branch for a shell started from another one, up to
+/// `end_guard`, with its snippets pasted: they run once per shell there too.
+fn nested(version: &Path, shell: Shell, end_guard: &str) -> Result<String> {
+    let loader_path = version
+        .join(shell.name())
+        .join(format!("env.{}", shell.ext()));
+    let loader = std::fs::read_to_string(&loader_path).map_err(Error::read(&loader_path))?;
+    let marker = match shell {
+        Shell::Fish => "\nelse if test \"$__rosamta_env\"",
+        _ => "\nelif [ \"${_rosamta_env-}\"",
+    };
+    let Some(start) = loader.find(marker) else {
+        return Ok(String::new());
+    };
+    let branch = &loader[start + 1..];
+    let mut out = String::new();
+    for line in branch.strip_suffix(end_guard).unwrap_or(branch).lines() {
+        match sourced(line) {
+            Some(path) => out.push_str(&pasted(shell, &path)?),
+            None => {
+                out.push_str(line);
+                out.push('\n');
+            }
+        }
     }
     Ok(out)
 }
