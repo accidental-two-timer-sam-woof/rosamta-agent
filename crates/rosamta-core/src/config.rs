@@ -387,8 +387,8 @@ pub enum ScriptPolicy {
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
 #[serde(rename_all = "lowercase")]
 pub enum AdoptPolicy {
-    Auto,
     #[default]
+    Auto,
     Ask,
     Off,
 }
@@ -509,7 +509,7 @@ tags = ["work"]
     fn host_defaults() {
         let host: HostConfig = toml::from_str(r#"id = "mbp""#).unwrap();
         assert_eq!(host, HostConfig::new("mbp".into()));
-        assert_eq!(host.adopt, AdoptPolicy::Ask);
+        assert_eq!(host.adopt, AdoptPolicy::Auto);
         assert_eq!(host.adopt_original, OriginalLines::Delete);
         assert_eq!(
             (host.publish, host.pull, host.pull_interval),

@@ -32,7 +32,7 @@ pub const ADOPTED_DIR: &str = "modules/adopted";
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Kind {
-    /// Environment, PATH and aliases every shell loads.
+    /// Environment, PATH and aliases, for the shells that read the file.
     Structured,
     /// Code kept as written, for the shells that read the file.
     Snippet,
@@ -256,7 +256,7 @@ pub fn scan(ctx: &Context) -> Result<Vec<Candidate>> {
                 out.push(candidate);
                 continue;
             }
-            let module = match module {
+            let mut module = match module {
                 Some(module) => {
                     candidate.kind = Kind::Structured;
                     module
@@ -267,6 +267,8 @@ pub fn scan(ctx: &Context) -> Result<Vec<Candidate>> {
                     snippet(ctx, &text, &watched)
                 }
             };
+            // Only the shells that read the file ran it before.
+            module.shells = shells.to_vec();
             order += 1;
             let name = derive_name(&segment, &watched, &module, &ctx.home);
             let name = unique(&name, &mut taken);
@@ -553,14 +555,31 @@ pub fn module_toml(module: &Module, origin: &str) -> String {
         let items: Vec<String> = values.iter().map(|value| string(value)).collect();
         format!("[{}]", items.join(", "))
     };
+    let names = |values: Vec<toml::Value>| {
+        let items: Vec<String> = values.iter().map(toml::Value::to_string).collect();
+        format!("[{}]", items.join(", "))
+    };
+    fn value<T: Serialize>(value: T) -> toml::Value {
+        toml::Value::try_from(value).expect("an enum serializes")
+    }
     let mut out = format!("# Adopted from {origin}.\n");
     if let Some(phase) = module.phase {
-        let phase = toml::Value::try_from(phase).expect("phase serializes");
-        writeln!(out, "phase = {phase}").unwrap();
+        writeln!(out, "phase = {}", value(phase)).unwrap();
     }
     writeln!(out, "order = {}", module.order).unwrap();
-    if !module.when.hosts.is_empty() {
-        writeln!(out, "\n[when]\nhosts = {}", list(&module.when.hosts)).unwrap();
+    if !module.shells.is_empty() {
+        let shells = module.shells.iter().map(|&shell| value(shell)).collect();
+        writeln!(out, "shells = {}", names(shells)).unwrap();
+    }
+    if !module.when.hosts.is_empty() || !module.when.os.is_empty() {
+        out.push_str("\n[when]\n");
+        if !module.when.hosts.is_empty() {
+            writeln!(out, "hosts = {}", list(&module.when.hosts)).unwrap();
+        }
+        if !module.when.os.is_empty() {
+            let os = module.when.os.iter().map(|&os| value(os)).collect();
+            writeln!(out, "os = {}", names(os)).unwrap();
+        }
     }
     if !module.env.is_empty() {
         out.push_str("\n[env]\n");
@@ -647,6 +666,7 @@ pub fn plan(ctx: &Context, candidates: &[Candidate], scope: Scope) -> Result<Pla
         content.order = candidate.order;
         if scope == Scope::Host {
             content.when.hosts = vec![host.id.clone()];
+            content.when.os = vec![HostFacts::current(&host).os];
         }
         let origin = format!("{} on {}", display(&candidate.file, &ctx.home), host.id);
         let path = if candidate.local {
