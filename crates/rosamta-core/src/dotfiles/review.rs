@@ -121,6 +121,7 @@ pub(crate) fn sync_queue(ctx: &Context, waiting: Vec<DotfileItem>) -> Result<()>
             text: String::new(),
             module: None,
             local: false,
+            include: false,
             dotfile: Some(item),
             script: None,
         });

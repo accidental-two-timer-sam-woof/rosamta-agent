@@ -48,12 +48,7 @@
 ## ADDED Requirements
 
 ### Requirement: Same content on another host
-接管到的內容與 repo 中一個只套用到其他主機的 module 相同時，rosamta SHALL 把本機的識別名稱加進該 module 的 `hosts`，`os` 有值且不含本機的 OS 時一併加入，不另建 module。相同的條件為：
-
-- 該 module 的 `hosts` 有值，`shells` 與這次接管的來源 shell 相同，且加入後會在本機載入；
-- 結構化 module 的環境變數、PATH 與 alias 在家目錄路徑改寫為 `$HOME` 後完全相同，不論順序；片段 module 的文字在改寫家目錄路徑、去掉註解行與行尾空白後完全相同。
-
-不符合時 SHALL 照常另建 module，不做近似比對。內容看起來像秘密而留在本機的 module SHALL NOT 合併。這次接管的 commit 訊息 SHALL 為 `adopt(<shell>): include <module> from <來源檔> on <識別名稱>`；還原這次接管時，SHALL 把原行放回 rc 檔，並從 `hosts` 移除本機。
+接管到的內容與 repo 中一個只套用到其他主機的 module 相同（見「Matching content」）時，rosamta SHALL 把本機的識別名稱加進該 module 的 `hosts`，`os` 有值且不含本機的 OS 時一併加入，不另建 module。使用者選擇所有主機時，SHALL 改為去掉該 module 的主機與 OS 限制。內容看起來像秘密而留在本機的 module SHALL NOT 合併。這次接管的 commit 訊息 SHALL 為 `adopt(<shell>): include <module> from <來源檔> on <識別名稱>`。
 
 #### Scenario: Installed on two hosts
 - **WHEN** repo 有 `modules/adopted/bun.toml`，宣告 `hosts = ["mbp"]`、`os = ["macos"]`、`shells = ["zsh"]`；Linux 主機 `box` 的 `~/.zshrc` 被 bun 的安裝程式寫入相同的 PATH
@@ -70,3 +65,23 @@
 #### Scenario: Restore an include
 - **WHEN** 使用者在 `box` 上還原這次合併
 - **THEN** 原行回到 `box` 的 `~/.zshrc`，`bun.toml` 的 `hosts` 回到 `["mbp"]`
+
+#### Scenario: Restore an include for every host
+- **WHEN** `box` 以所有主機範圍接受這次合併，之後還原
+- **THEN** `bun.toml` 的 `hosts` 回到 `["mbp"]`、`os` 回到 `["macos"]`
+
+### Requirement: Matching content
+只有下列條件都成立時，rosamta SHALL 視為相同，否則照常另建 module，不做近似比對：
+
+- 該 module 的 `hosts` 有值，`shells` 與這次接管的來源 shell 相同，載入階段相同，且加入本機後會在本機載入；
+- 該 module 的順序排在本機從同一個檔案接管的其他內容之後，讓檔案中的內容照原本的順序執行；
+- 結構化 module 的環境變數與 alias 在家目錄路徑改寫為 `$HOME` 後相同，不論順序，PATH 則連順序也相同；
+- 片段 module 的文字在改寫家目錄路徑、去掉註解行、空白行與行尾空白後相同。
+
+#### Scenario: Comments differ
+- **WHEN** `mbp` 的片段 module 是 `# Added by OrbStack` 加上 `source ~/.orbstack/shell/init.zsh`，`box` 接管到的同一行上方是另一句註解
+- **THEN** `box` 加入 `mbp` 的 module
+
+#### Scenario: Earlier content runs first
+- **WHEN** `box` 的 `~/.zshrc` 先有一段已接管、順序在 `mbp` 那個 module 之後的內容，接著才是相同的內容
+- **THEN** `box` 另建 module，讓兩段照檔案中的順序執行

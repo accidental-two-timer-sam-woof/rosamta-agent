@@ -16,7 +16,7 @@ use serde::Serialize;
 pub use recognize::{Dialect, Recognizer, Structured, recognize, recognizers};
 pub use secret::{looks_secret, secret_rule};
 pub use segment::{Source, Watched, watched_files};
-pub use store::{Adoption, QueueItem};
+pub use store::{Adoption, Limits, QueueItem};
 
 use crate::apply::{self, Context};
 use crate::config::{AdoptPolicy, HostConfig, HostFacts, Module, OriginalLines, Phase, Shell};
@@ -270,14 +270,18 @@ pub fn scan(ctx: &Context) -> Result<Vec<Candidate>> {
             // Only the shells that read the file ran it before.
             module.shells = shells.to_vec();
             let local = secret::looks_secret(&text);
-            if let Some(name) = shared::find(&repo_modules, &module, &facts).filter(|_| !local) {
+            if let Some((name, old)) =
+                shared::find(&repo_modules, &module, &facts, order).filter(|_| !local)
+            {
+                // What this file adopts next runs after the joined module.
+                order = old.order;
                 candidate.kind = Kind::Include;
                 candidate.module = module_files
                     .iter()
-                    .find(|path| repo::module_name(path) == name)
+                    .find(|path| repo::module_name(path) == *name)
                     .and_then(|path| path.strip_prefix(ctx.paths.repo()).ok())
                     .map(Path::to_path_buf);
-                candidate.name = Some(name.to_string());
+                candidate.name = Some(name.clone());
                 out.push(candidate);
                 continue;
             }
@@ -677,12 +681,17 @@ pub fn plan(ctx: &Context, candidates: &[Candidate], scope: Scope) -> Result<Pla
         if candidate.kind == Kind::Include
             && let Some(module) = &candidate.module
         {
-            join(
+            let limits = join(
                 &mut plan.edits,
                 &ctx.paths.repo().join(module),
                 &facts,
                 scope,
             )?;
+            for record in plan.records.iter_mut() {
+                if record.file == candidate.file && record.hash == candidate.hash {
+                    record.limits = limits.clone();
+                }
+            }
             continue;
         }
         let (Some(content), Some(module)) = (&candidate.content, &candidate.module) else {
@@ -707,9 +716,14 @@ pub fn plan(ctx: &Context, candidates: &[Candidate], scope: Scope) -> Result<Pla
 }
 
 /// Add this host (and its OS, where the module lists one) to another
-/// host's module, or drop both limits for every host. Several candidates
-/// may join the same module.
-fn join(edits: &mut Vec<FileChange>, path: &Path, facts: &HostFacts, scope: Scope) -> Result<()> {
+/// host's module, or drop both limits for every host, returning what they
+/// were. Several candidates may join the same module.
+fn join(
+    edits: &mut Vec<FileChange>,
+    path: &Path,
+    facts: &HostFacts,
+    scope: Scope,
+) -> Result<Option<Limits>> {
     let at = match edits.iter().position(|edit| edit.path == path) {
         Some(at) => at,
         None => {
@@ -723,6 +737,19 @@ fn join(edits: &mut Vec<FileChange>, path: &Path, facts: &HostFacts, scope: Scop
         }
     };
     let edit = &mut edits[at];
+    let limits = match scope {
+        Scope::Host => None,
+        Scope::All => {
+            let before = edit.before.as_deref().unwrap_or_default();
+            let old: Module = toml::from_str(before).map_err(|err| {
+                Error::Usage(format!("{}: {}", path.display(), err.message().trim()))
+            })?;
+            Some(Limits {
+                hosts: old.when.hosts,
+                os: old.when.os,
+            })
+        }
+    };
     let text = edit.after.as_deref().unwrap_or_default();
     edit.after = Some(edit_module(path, text, |doc| match scope {
         Scope::Host => crate::scope::widen(
@@ -735,7 +762,7 @@ fn join(edits: &mut Vec<FileChange>, path: &Path, facts: &HostFacts, scope: Scop
         ),
         Scope::All => crate::scope::every_host(doc),
     })?);
-    Ok(())
+    Ok(limits)
 }
 
 fn edit_module(
@@ -775,7 +802,7 @@ fn edit_file(
         let comment = mode == OriginalLines::Comment
             && matches!(
                 candidate.kind,
-                Kind::Structured | Kind::Snippet | Kind::Duplicate
+                Kind::Structured | Kind::Snippet | Kind::Duplicate | Kind::Include
             );
         let mut start = first;
         if comment {
@@ -845,6 +872,7 @@ fn edit_file(
                 order: candidate.order,
                 at: now(),
                 include: candidate.kind == Kind::Include,
+                limits: None,
             }
         })
         .collect();
@@ -1130,6 +1158,7 @@ pub fn refresh(ctx: &Context) -> Result<Reviewed> {
             text: candidate.text.clone(),
             module: candidate.module.clone(),
             local: candidate.local,
+            include: candidate.kind == Kind::Include,
             dotfile: None,
             script: None,
         });
@@ -1240,25 +1269,29 @@ pub struct Undo {
     pub file: FileChange,
     /// The module file with its content now.
     pub module: Option<(PathBuf, String)>,
-    /// What the module becomes; `None` removes it. A module this host only
-    /// joined loses this host instead.
+    /// What the module becomes; `None` removes it.
     pub module_after: Option<String>,
 }
 
-/// Plan `rsmt restore <id>`: put the lines back where they were, and remove
-/// the module.
+/// Plan `rsmt restore <id>`: put the lines back where they were, and take
+/// the module away from this host.
 pub fn plan_undo(ctx: &Context, id: u32) -> Result<Undo> {
     let store = Store::new(ctx.paths.state());
-    let adoption = store
-        .adoptions()?
-        .adoptions
-        .into_iter()
+    let adoptions = store.adoptions()?.adoptions;
+    let adoption = adoptions
+        .iter()
         .find(|adoption| adoption.id == id)
+        .cloned()
         .ok_or_else(|| Error::Usage(format!("no adoption {id}")))?;
     let exists = adoption.file.exists();
     let text = read(&adoption.file)?;
     let after = put_back(&text, &adoption);
+    // Lines from another file on this host may still need the module.
+    let in_use = adoptions.iter().any(|other| {
+        other.id != id && other.module == adoption.module && other.local == adoption.local
+    });
     let module = match &adoption.module {
+        Some(_) if in_use => None,
         Some(module) if adoption.local => Some(module.clone()),
         Some(module) => Some(ctx.paths.repo().join(module)),
         None => None,
@@ -1270,13 +1303,8 @@ pub fn plan_undo(ctx: &Context, id: u32) -> Result<Undo> {
     })
     .transpose()?;
     let module_after = match &module {
-        Some((path, text)) if adoption.include => {
-            let host = host_config(ctx)?;
-            Some(edit_module(path, text, |doc| {
-                crate::scope::remove_host(doc, &host.id)
-            })?)
-        }
-        _ => None,
+        Some((path, text)) => released(path, text, &adoption, &host_config(ctx)?.id)?,
+        None => None,
     };
     Ok(Undo {
         file: FileChange {
@@ -1288,6 +1316,18 @@ pub fn plan_undo(ctx: &Context, id: u32) -> Result<Undo> {
         module,
         module_after,
     })
+}
+
+/// The module once this host no longer uses it: with the limits it had
+/// before this host joined it for every host, without this host while
+/// another host is listed, and otherwise gone.
+fn released(path: &Path, text: &str, adoption: &Adoption, host: &str) -> Result<Option<String>> {
+    let mut others = true;
+    let after = edit_module(path, text, |doc| match &adoption.limits {
+        Some(limits) => crate::scope::limit(doc, &limits.hosts, &limits.os),
+        None => others = crate::scope::remove_host(doc, host),
+    })?;
+    Ok(others.then_some(after))
 }
 
 /// The file with the adopted lines back in place.
@@ -1445,6 +1485,7 @@ mod tests {
             order: 0,
             at: 0,
             include: false,
+            limits: None,
         }
     }
 
