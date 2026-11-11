@@ -56,34 +56,18 @@ pub fn uses_secrets(names: &HashSet<String>) -> bool {
     names.contains("secret") || names.contains("bitwarden")
 }
 
-/// The command names `secret()` is called with; `None` when `secret`
-/// appears in an expression other than as a call whose first argument is
-/// a quoted name alone, so any command may run.
+/// The command names `secret()` is called with; `None` when the word
+/// `secret` appears anywhere, text and strings included, other than as a
+/// call whose first argument is a quoted name alone, so any command may
+/// run. Finding expression boundaries is left to the template parser.
 pub fn secret_names(source: &str) -> Option<BTreeSet<String>> {
-    static RULES: OnceLock<[Regex; 2]> = OnceLock::new();
-    let [block, token] = RULES.get_or_init(|| {
-        let string = r#""(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*'"#;
-        [
-            Regex::new(&format!(
-                r#"\{{\{{(?:{string}|[^"'}}]|\}}[^}}])*\}}\}}|\{{%(?:{string}|[^"'%]|%[^}}])*%\}}"#
-            ))
-            .unwrap(),
-            Regex::new(&format!(
-                r#"{string}|\bsecret\b(?:\s*\(\s*(?:"([^"\\]*)"|'([^'\\]*)')\s*,)?"#
-            ))
-            .unwrap(),
-        ]
+    static CALL: OnceLock<Regex> = OnceLock::new();
+    let call = CALL.get_or_init(|| {
+        Regex::new(r#"\bsecret\b(?:\s*\(\s*(?:"([^"\\]*)"|'([^'\\]*)')\s*,)?"#).unwrap()
     });
-    let mut names = BTreeSet::new();
-    for block in block.find_iter(source) {
-        for caps in token.captures_iter(block.as_str()) {
-            if caps[0].starts_with(['"', '\'']) {
-                continue;
-            }
-            names.insert(caps.get(1).or(caps.get(2))?.as_str().to_string());
-        }
-    }
-    Some(names)
+    call.captures_iter(source)
+        .map(|caps| Some(caps.get(1).or(caps.get(2))?.as_str().to_string()))
+        .collect()
 }
 
 /// `vars.*` names the template uses, sorted.
@@ -336,14 +320,26 @@ mod tests {
         assert_eq!(names("{{ secret(\"fetch\" ~ \"_prod\", \"x\") }}"), None);
         let fetch = Some(vec!["fetch".to_string()]);
         assert_eq!(names("{{ \"}}\" ~ secret(\"fetch\", \"npm\") }}"), fetch);
-        assert_eq!(names("{{ secret(\"fetch\", \"secret\") }}"), fetch);
         assert_eq!(
             names("{% if x == \"%}\" %}{{ secret('fetch', 'a') }}{% endif %}"),
             fetch
         );
+        let both = Some(vec!["fetch".to_string(), "other".to_string()]);
+        assert_eq!(
+            names("{{ {'k': {}} ~ secret('fetch', 'n') }}{{ secret('other', 'x') }}"),
+            both
+        );
+        assert_eq!(
+            names(
+                "{% raw %}{{ \"{% endraw %}{{ secret(\"fetch\", \"x\") }}\" }}{{ secret(\"other\", \"x\") }}"
+            ),
+            both
+        );
+        // The word elsewhere, even in text or a string, may hide a call.
+        assert_eq!(names("{{ secret(\"fetch\", \"secret\") }}"), None);
         assert_eq!(
             names("# secret token\n{{ secret(\"fetch\", \"x\") }}"),
-            Some(vec!["fetch".to_string()])
+            None
         );
     }
 }
