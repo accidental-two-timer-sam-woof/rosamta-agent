@@ -288,13 +288,23 @@ fn a_replaced_executable_restarts_the_daemon() {
         .env("HOME", &home.root)
         .env("SHELL", "/bin/sh")
         .env("ROSAMTA_NO_KEYCHAIN", "1")
+        .env("ROSAMTA_NO_NOTIFY", "1")
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null());
     for var in ["XDG_CONFIG_HOME", "XDG_DATA_HOME", "XDG_STATE_HOME"] {
         cmd.env_remove(var);
     }
-    let _daemon = Daemon(cmd.spawn().unwrap());
+    // A fork in another test can hold the fresh copy open for writing for a
+    // moment, and Linux then refuses to run it ("text file busy").
+    let child = (0..50)
+        .find_map(|_| {
+            cmd.spawn()
+                .inspect_err(|_| std::thread::sleep(Duration::from_millis(100)))
+                .ok()
+        })
+        .expect("the copied rsmt starts");
+    let _daemon = Daemon(child);
     wait_for(&home, Duration::from_secs(20), || {
         log(&home).contains("scanned rc files")
     });

@@ -4,6 +4,7 @@
 //! shell reminder still are.
 
 use std::sync::mpsc::Sender;
+use std::time::{Duration, Instant};
 
 use crate::i18n::{self, Lang};
 
@@ -95,6 +96,53 @@ pub trait Notifier: Send {
     fn show(&self, note: &Note) -> bool;
 }
 
+/// Stops trying a note the service keeps refusing: a session bus with no
+/// notification service on it (a server) never takes one, and the note
+/// would stay unannounced for good.
+pub struct GiveUp {
+    inner: Box<dyn Notifier>,
+    /// How long a note is tried, however many times in that time.
+    limit: Duration,
+    /// Without a try for this long, a note that reads the same is a new one.
+    pause: Duration,
+    /// By note text: when it was first and last refused.
+    refused: std::sync::Mutex<std::collections::BTreeMap<String, (Instant, Instant)>>,
+}
+
+impl GiveUp {
+    pub fn new(inner: Box<dyn Notifier>, limit: Duration, pause: Duration) -> Self {
+        Self {
+            inner,
+            limit,
+            pause,
+            refused: Default::default(),
+        }
+    }
+
+    /// Whether the note refused at `now` has been tried for long enough.
+    pub(super) fn done(&self, body: &str, now: Instant) -> bool {
+        let mut refused = self.refused.lock().unwrap();
+        refused.retain(|_, (_, last)| now.duration_since(*last) <= self.pause);
+        let (first, last) = refused.entry(body.to_string()).or_insert((now, now));
+        *last = now;
+        let done = now.duration_since(*first) >= self.limit;
+        if done {
+            refused.remove(body);
+        }
+        done
+    }
+}
+
+impl Notifier for GiveUp {
+    fn show(&self, note: &Note) -> bool {
+        if self.inner.show(note) {
+            self.refused.lock().unwrap().remove(&note.body);
+            return true;
+        }
+        self.done(&note.body, Instant::now())
+    }
+}
+
 /// For hosts without a notification service: there is nothing to wait for.
 pub struct Silent;
 
@@ -126,6 +174,19 @@ mod linux {
         waiting: Mutex<Option<NotificationHandle>>,
     }
 
+    /// Whether there is a session bus to ask, where the bus library looks
+    /// for one: the address, the runtime directory, or its default place.
+    fn session_bus() -> bool {
+        // SAFETY: geteuid has no preconditions and cannot fail.
+        let default = format!("/run/user/{}", unsafe { libc::geteuid() });
+        std::env::var_os("DBUS_SESSION_BUS_ADDRESS").is_some_and(|address| !address.is_empty())
+            || std::env::var_os("XDG_RUNTIME_DIR")
+                .map(std::path::PathBuf::from)
+                .into_iter()
+                .chain([default.into()])
+                .any(|dir| dir.join("bus").exists())
+    }
+
     impl Desktop {
         pub fn new(lang: Lang, events: Sender<Event>) -> Self {
             Self {
@@ -153,6 +214,11 @@ mod linux {
 
     impl Notifier for Desktop {
         fn show(&self, note: &Note) -> bool {
+            // Without a bus (a container, a bare server) no notification
+            // service will ever answer: there is nothing to wait for.
+            if !session_bus() {
+                return true;
+            }
             let Some(actions) = self.actions() else {
                 return false;
             };
