@@ -1,6 +1,6 @@
 # Third-party notices
 
-rosamta includes the following crates, and the secret detection rules listed last. Regenerate this file with `cargo about generate --workspace about.md.hbs -o THIRD_PARTY_NOTICES.md`.
+rosamta includes the following crates, and the secret detection rules listed last. Regenerate this file with `cargo about generate --workspace -c packaging/about.toml packaging/about.md.hbs -o THIRD_PARTY_NOTICES.md`.
 
 ## BSD Zero Clause License
 

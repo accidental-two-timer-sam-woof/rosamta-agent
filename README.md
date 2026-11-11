@@ -612,7 +612,7 @@ rsmt schema module > module.schema.json
 ### 需求
 - rustup：Rust 版本由 `rust-toolchain.toml` 決定，第一次執行 `cargo` 時自動下載
 - macOS：Xcode 與 Metal 編譯器
-- Linux：桌面 App 需要的系統套件見 [CONTRIBUTING.md](CONTRIBUTING.md)
+- Linux：桌面 App 需要的系統套件見 [CONTRIBUTING.md](.github/CONTRIBUTING.md)
 - 建置或測試整個 workspace 都會建置桌面 App
 - Docker 或 OrbStack：發行版測試需要
 
@@ -631,7 +631,7 @@ cargo run -p rosamta-gui
 cargo test --workspace --locked
 ```
 
-> 💡 送 PR 前的完整檢查、發行版測試與安裝程式 fixture 的擷取方式，見 [CONTRIBUTING.md](CONTRIBUTING.md)。
+> 💡 送 PR 前的完整檢查、發行版測試與安裝程式 fixture 的擷取方式，見 [CONTRIBUTING.md](.github/CONTRIBUTING.md)。
 
 ## 專案架構
 
@@ -654,22 +654,22 @@ rosamta-agent/
 │   ├── cli/                      # 命令列程式（rosamta / rsmt）
 │   └── gui/                      # 桌面 App（GPUI）
 │       └── src/pages/            # 總覽、待處理、模組、設定檔、歷史、設定
-├── assets/                       # App 圖示
-├── packaging/                    # macOS App bundle、Homebrew、AUR
+├── packaging/                    # App 圖示、macOS App bundle、Homebrew、AUR、第三方授權清單的產生設定
 ├── tests/
 │   ├── docker/                   # 各發行版的 shell 測試映像
 │   └── fixtures/installers/      # 安裝程式寫入 shell 設定檔前後的內容
 ├── docs/adr/                     # 架構決策紀錄
 ├── openspec/                     # 功能規格與變更提案
 ├── GLOSSARY.md                   # 用語定義
-└── .github/workflows/            # CI 與發行
+├── .cargo/deny.toml              # 相依套件的授權與安全檢查
+└── .github/                      # CI、發行與貢獻指南
 ```
 
 ## 貢獻
 歡迎 PR 與 Issue！
 
 送出前請確認：
-1. 依 [CONTRIBUTING.md](CONTRIBUTING.md) 在本機跑過格式、clippy、測試與 `cargo deny`
+1. 依 [CONTRIBUTING.md](.github/CONTRIBUTING.md) 在本機跑過格式、clippy、測試與 `cargo deny`
 2. 用語以 [GLOSSARY.md](GLOSSARY.md) 為準，設計不違反 [docs/adr](docs/adr) 的決策
 3. 影響架構或規模較大的變更，先在 `openspec/changes/` 以 [OpenSpec](https://github.com/Fission-AI/OpenSpec) 規劃
 4. commit message 使用英文的 Conventional Commits
