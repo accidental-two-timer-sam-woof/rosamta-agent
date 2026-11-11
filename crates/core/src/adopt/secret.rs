@@ -269,10 +269,27 @@ pub fn unsure(text: &str) -> bool {
         .map(value)
         .any(|token| {
             token.len() >= MIN_UNSURE_LEN
-                && !token.contains('/')
                 && !known_name(token)
-                && !token.split(['-', '_', '.', '=', '+']).all(wordish)
+                && match token.contains('/') {
+                    false => !token.split(['-', '_', '.', '=', '+']).all(wordish),
+                    // Base64 has no `-`, `_` or `.`; with one of them, or as
+                    // a path, the token is a file or a repo, not a key.
+                    true => {
+                        !path_like(token)
+                            && !token.contains(['-', '_', '.'])
+                            && !token.split(['/', '=', '+']).all(named)
+                    }
+                }
         })
+}
+
+/// [`wordish`], or a word with a short number inside it (`powerlevel10k`,
+/// `k8s`): what the parts of `user/repo` look like.
+fn named(part: &str) -> bool {
+    let digit = |c: char| c.is_ascii_digit();
+    let (head, tail) = part.split_at(part.find(digit).unwrap_or(part.len()));
+    let word = tail.trim_start_matches(digit);
+    wordish(part) || (tail.len() - word.len() <= 4 && wordish(&format!("{head}{word}")))
 }
 
 /// A word, a number, or a word with a short number after it (`aarch64`,
@@ -629,6 +646,49 @@ mod tests {
         ] {
             assert!(!unsure(text), "{text}");
         }
+    }
+
+    /// Base64 may hold `/`. Below the length the entropy rule wants, such a
+    /// value was neither found nor asked about.
+    #[test]
+    fn base64_with_a_slash_is_asked_about() {
+        for text in [
+            "export BLOB=FAKEfake0123FAKE/fake4567FAKEfake",
+            "export PIN=sha256/FAKEfake0123FAKEfake4567=",
+        ] {
+            assert!(unsure(text) && !looks_secret(text), "{text}");
+        }
+        for text in [
+            "ZSH_THEME=\"powerlevel10k/powerlevel10k\"",
+            "zinit light romkatv/powerlevel10k",
+            "zinit snippet OMZP::kubectl/k8s/completions",
+            "export PATH=/Library/TeX/texbin:/Applications/Ghostty.app/Contents/MacOS:$PATH",
+            "source ~/.oh-my-zsh/custom/plugins/zsh-autosuggestions/zsh-autosuggestions.zsh",
+            "export TZ=America/Argentina/Buenos_Aires",
+            "antigen bundle MichaelAquilina/zsh-you-should-use",
+            "export ACCEPT=application/octet/stream",
+        ] {
+            assert!(!unsure(text), "{text}");
+        }
+        const B64: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+        let mut state = 0x9E3779B97F4A7C15u64;
+        let (mut slashed, mut kept) = (0, 0);
+        while slashed < 1000 {
+            let token: String = (0..24)
+                .map(|_| {
+                    state ^= state << 13;
+                    state ^= state >> 7;
+                    state ^= state << 17;
+                    B64[(state % 64) as usize] as char
+                })
+                .collect();
+            if token.contains('/') {
+                slashed += 1;
+                kept += usize::from(unsure(&format!("export SERVICE_ID={token}")));
+            }
+        }
+        // The rest starts like a path (`/…`, `AB/…`).
+        assert!(kept >= 800, "kept {kept}");
     }
 
     /// The pre-push scan reads module TOML, where `=` has spaces around it.
