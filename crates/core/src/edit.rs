@@ -74,6 +74,8 @@ pub(crate) fn write_atomic(path: &Path, text: &str) -> Result<()> {
 
 /// [`write_atomic`] that runs `check` last, between writing the temporary
 /// file and the rename, so an edit made by then is never overwritten.
+/// shortcut: an edit landing between `check` and the rename is still lost;
+/// installers take no lock, so nothing can keep them out.
 pub(crate) fn write_atomic_if(
     path: &Path,
     text: &str,

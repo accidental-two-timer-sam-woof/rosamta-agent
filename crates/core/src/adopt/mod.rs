@@ -1013,6 +1013,7 @@ pub fn execute(ctx: &Context, plan: Plan) -> Result<Vec<Adoption>> {
         .collect();
     snapshots.save(&changed, "adopt")?;
     let mut written = false;
+    let mut replaced = Vec::new();
     let write = || -> Result<()> {
         for change in plan.files.iter().chain(&plan.edits) {
             unchanged(&change.path, change.before.as_deref())?;
@@ -1021,15 +1022,13 @@ pub fn execute(ctx: &Context, plan: Plan) -> Result<Vec<Adoption>> {
         for (path, text) in &plan.modules {
             write_module(ctx, path, text)?;
         }
-        for edit in &plan.edits {
-            replace(&edit.path, edit.before.as_deref(), edit.after.as_deref())?;
-        }
-        for change in &plan.files {
+        for change in plan.edits.iter().chain(&plan.files) {
             replace(
                 &change.path,
                 change.before.as_deref(),
                 change.after.as_deref(),
             )?;
+            replaced.push(change);
         }
         Ok(())
     };
@@ -1040,15 +1039,21 @@ pub fn execute(ctx: &Context, plan: Plan) -> Result<Vec<Adoption>> {
         .collect();
     if let Err(err) = apply::apply_after(ctx, &shells, write) {
         if written {
-            for change in plan.files.iter().chain(&plan.edits) {
-                let _ = replace(
+            let mut restored = true;
+            for change in &replaced {
+                restored &= replace(
                     &change.path,
                     change.after.as_deref(),
                     change.before.as_deref(),
-                );
+                )
+                .is_ok();
             }
-            for (path, _) in &plan.modules {
-                let _ = std::fs::remove_file(path);
+            // A file edited since rosamta wrote it keeps the adopted lines
+            // out, so the modules holding them stay.
+            if restored {
+                for (path, _) in &plan.modules {
+                    let _ = std::fs::remove_file(path);
+                }
             }
         }
         return Err(err);
@@ -1498,15 +1503,20 @@ pub fn undo(ctx: &Context, plan: Undo) -> Result<()> {
         .find(|watched| watched.path == plan.adoption.file)
         .map_or_else(|| vec![plan.adoption.shell], |watched| watched.shells);
     if let Err(err) = apply::apply_after(ctx, &shells, write) {
-        if written {
-            let _ = replace(
+        // The module takes the lines back only when the rc file gave them
+        // back, and only while it still holds what rosamta wrote.
+        let restored = written
+            && replace(
                 &plan.file.path,
                 plan.file.after.as_deref(),
                 plan.file.before.as_deref(),
-            );
-            if let Some((path, text)) = &plan.module {
-                let _ = write_module(ctx, path, text);
-            }
+            )
+            .is_ok();
+        if restored
+            && let Some((path, text)) = &plan.module
+            && unchanged(path, plan.module_after.as_deref()).is_ok()
+        {
+            let _ = write_module(ctx, path, text);
         }
         return Err(err);
     }
