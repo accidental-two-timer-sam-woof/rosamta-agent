@@ -42,5 +42,5 @@
 
 ## 8. 驗證與文件
 
-- [ ] 8.1 在 macOS 與 8 個 Linux distro 上跑完整測試，含 symlink、權限與加密
-- [ ] 8.2 README 說明 `dotfiles.toml`、`rsmt add`、`forget`、衝突處理與加密（含密碼無法找回），並把新增的 CLI 與通知文字列出給使用者審閱
+- [x] 8.1 在 macOS 與 8 個 Linux distro 上跑完整測試，含 symlink、權限與加密
+- [x] 8.2 README 說明 `dotfiles.toml`、`rsmt add`、`forget`、衝突處理與加密（含密碼無法找回），並把新增的 CLI 與通知文字列出給使用者審閱

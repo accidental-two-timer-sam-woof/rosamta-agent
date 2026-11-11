@@ -21,4 +21,4 @@
 
 ## 5. 驗證
 
-- [ ] 5.1 fmt、clippy、全部測試、Linux distro、`cargo deny`，更新 README、GLOSSARY、THIRD_PARTY_NOTICES，列出所有使用者看得到的文字供審閱
+- [x] 5.1 fmt、clippy、全部測試、Linux distro、`cargo deny`，更新 README、GLOSSARY、THIRD_PARTY_NOTICES，列出所有使用者看得到的文字供審閱
