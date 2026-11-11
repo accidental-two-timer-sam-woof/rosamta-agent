@@ -455,6 +455,14 @@ mod view_tests {
     fn the_review_page_follows_the_queue_and_actions() {
         let home = tempfile::tempdir().unwrap();
         let mut child = Command::new(std::env::current_exe().unwrap());
+        // Nothing of this process's environment but what running needs: no
+        // XDG paths, ZDOTDIR or git index of the developer's.
+        child.env_clear();
+        for var in ["PATH", "TMPDIR", "RUST_BACKTRACE", "LLVM_PROFILE_FILE"] {
+            if let Some(value) = std::env::var_os(var) {
+                child.env(var, value);
+            }
+        }
         child
             .args(["--exact", "app::view_tests::in_own_home", "--ignored"])
             .env("HOME", home.path())
@@ -466,16 +474,6 @@ mod view_tests {
             .env("GIT_AUTHOR_EMAIL", "test@example.com")
             .env("GIT_COMMITTER_NAME", "test")
             .env("GIT_COMMITTER_EMAIL", "test@example.com");
-        for var in [
-            "XDG_CONFIG_HOME",
-            "XDG_DATA_HOME",
-            "XDG_STATE_HOME",
-            "XDG_CACHE_HOME",
-            "XDG_RUNTIME_DIR",
-            "ZDOTDIR",
-        ] {
-            child.env_remove(var);
-        }
         let out = child.output().unwrap();
         assert!(
             out.status.success() && String::from_utf8_lossy(&out.stdout).contains("1 passed"),
@@ -509,7 +507,7 @@ mod view_tests {
         assert!(git.success());
         let mut manifest = String::new();
         for name in [".a", ".b"] {
-            write(&repo.join("home").join(name), "repo\n");
+            write(&repo.join("home").join(name), &format!("repo{name}\n"));
             write(&core.home.join(name), "mine\n");
             manifest.push_str(&format!(
                 "[[dotfile]]\npath = \"{name}\"\ndeploy = \"copy\"\n\n"
@@ -541,9 +539,11 @@ mod view_tests {
             view.snap.queue.iter().map(|item| item.id).collect()
         });
         assert_eq!(ids.len(), 2);
+        let diff_has = |view: &Rosamta, text: &str| matches!(&view.detail, Some(Detail::Dotfile(diff)) if diff.contains(text));
         view.read_with(cx, |view, _| {
+            assert_eq!(view.snap.problem, None);
             assert_eq!(view.selected, Some(ids[0]));
-            assert!(matches!(&view.detail, Some(Detail::Dotfile(diff)) if diff.contains("+repo")));
+            assert!(diff_has(view, "+repo.a"));
         });
 
         // Choosing an item opens it on the review page with its own diff.
@@ -555,27 +555,28 @@ mod view_tests {
             assert!(view.page == Page::Review && view.detail.is_none());
         });
         cx.run_until_parked();
-        assert!(view.read_with(cx, |view, _| view.detail.is_some()));
+        assert!(view.read_with(cx, |view, _| diff_has(view, "+repo.b")));
 
-        // Buttons wait while an action runs; afterwards the item is gone
-        // and the remaining one is selected.
-        let second = ids[1];
+        // While an action runs another waits its turn: ignored, not queued.
+        // Afterwards the item is gone and the remaining one is selected.
+        let (first, second) = (ids[0], ids[1]);
         cx.update(|window, cx| {
             view.update(cx, |view, cx| {
                 view.run(window, cx, move |core| actions::discard(core, second));
-                assert!(view.busy);
+                view.run(window, cx, move |core| actions::discard(core, first));
             })
         });
         cx.run_until_parked();
         view.read_with(cx, |view, _| {
             assert!(!view.busy);
             assert_eq!(view.snap.queue.len(), 1);
-            assert_eq!(view.selected, Some(ids[0]));
-            assert!(view.detail.is_some());
+            assert_eq!(view.selected, Some(first));
+            assert!(diff_has(view, "+repo.a"));
         });
+        let read = |name| std::fs::read_to_string(core.home.join(name)).unwrap();
         assert_eq!(
-            std::fs::read_to_string(core.home.join(".b")).unwrap(),
-            "repo\n"
+            (read(".a"), read(".b")),
+            ("mine\n".into(), "repo.b\n".into())
         );
     }
 }
