@@ -14,6 +14,7 @@ use rosamta_core::dotfiles::{
     review::{Reason, WaitingFor},
 };
 use rosamta_core::repo;
+use rosamta_core::scripts::{Run, apply::Why, review::ScriptItem, run::log_path};
 
 use super::{Tone, badge, code, diff, empty, header, mono};
 use crate::actions;
@@ -30,12 +31,38 @@ pub enum Detail {
         modules: Vec<(String, String)>,
     },
     Dotfile(String),
+    Script {
+        text: String,
+        /// The end of the last run's log, if it ran.
+        log: Option<String>,
+    },
     Error(String),
+}
+
+/// Enough of a log to see how the last run ended.
+const LOG_TAIL: usize = 64 * 1024;
+
+fn script_detail(core: &Core, script: &ScriptItem) -> rosamta_core::Result<Detail> {
+    let path = core.paths.repo().join(&script.source);
+    let text = std::fs::read(&path).map_err(|source| rosamta_core::Error::Read { path, source })?;
+    let log = std::fs::read(log_path(core, &script.source))
+        .ok()
+        .map(|log| {
+            let start = log.len().saturating_sub(LOG_TAIL);
+            String::from_utf8_lossy(&log[start..]).into_owned()
+        });
+    Ok(Detail::Script {
+        text: String::from_utf8_lossy(&text).into_owned(),
+        log,
+    })
 }
 
 pub fn detail(item: &QueueItem, scope: Scope) -> Detail {
     let read = || -> rosamta_core::Result<Detail> {
         let core = Core::from_env()?;
+        if let Some(script) = &item.script {
+            return script_detail(&core, script);
+        }
         if let Some(dotfile) = &item.dotfile {
             if dotfile.waiting.is_some() {
                 // Nothing rendered yet to compare; `selected` shows what it waits for.
@@ -71,6 +98,12 @@ pub fn detail(item: &QueueItem, scope: Scope) -> Detail {
 }
 
 pub fn item_badge(item: &QueueItem) -> (&'static str, Tone) {
+    if let Some(script) = &item.script {
+        return match script.why {
+            Why::Failed => ("badge.failed", Tone::Warn),
+            Why::New | Why::Changed => ("badge.script", Tone::Accent),
+        };
+    }
     match item.dotfile.as_ref().map(|dotfile| dotfile.reason) {
         Some(Reason::Conflict) => ("badge.conflict", Tone::Warn),
         Some(Reason::Changed) => ("badge.changed", Tone::Accent),
@@ -92,6 +125,9 @@ pub fn waiting_text(waiting: &WaitingFor) -> SharedString {
 
 /// The module it would become, or the dotfile it is.
 pub fn item_title(item: &QueueItem, home: &Path) -> String {
+    if let Some(script) = &item.script {
+        return script.source.clone();
+    }
     match (&item.dotfile, &item.module) {
         (Some(dotfile), _) => adopt::display(&home.join(&dotfile.path), home),
         (None, Some(module)) => repo::module_name(module),
@@ -101,18 +137,28 @@ pub fn item_title(item: &QueueItem, home: &Path) -> String {
 
 pub fn item_meta(item: &QueueItem, home: &Path) -> String {
     let mut parts = Vec::new();
-    if item.dotfile.is_none() {
-        parts.push(adopt::display(&item.file, home));
+    if let Some(script) = &item.script {
+        parts.push(t(match script.run {
+            Run::Once => "item.run_once",
+            Run::Onchange => "item.run_onchange",
+        }));
+        parts.push(t(match script.why {
+            Why::New => "item.why_new",
+            Why::Changed => "item.why_changed",
+            Why::Failed => "item.why_failed",
+        }));
+    } else if item.dotfile.is_none() {
+        parts.push(adopt::display(&item.file, home).into());
         let (start, end) = (item.start.to_string(), item.end.to_string());
         let lines = if item.start == item.end {
             tf("item.line", &[("start", &start)])
         } else {
             tf("item.lines", &[("start", &start), ("end", &end)])
         };
-        parts.push(lines.to_string());
+        parts.push(lines);
     }
     if item.detected_at > 0 {
-        parts.push(when(item.detected_at));
+        parts.push(when(item.detected_at).into());
     }
     parts.join(" · ")
 }
@@ -207,7 +253,33 @@ fn selected(app: &Rosamta, cx: &mut Context<Rosamta>) -> Option<impl IntoElement
         .dotfile
         .as_ref()
         .and_then(|dotfile| dotfile.waiting.as_ref());
-    let buttons = if item.dotfile.is_some() {
+    let ignore = super::ghost(Button::new("ignore"))
+        .label(t("action.ignore"))
+        .disabled(busy)
+        .on_click(cx.listener(move |this, _, window, cx| {
+            this.run(window, cx, move |core| actions::ignore(core, id));
+        }));
+    let buttons = if item.script.is_some() {
+        // Marking it as run is what ignoring a script does.
+        h_flex()
+            .gap(px(S8))
+            .child(
+                super::glass(Button::new("mark-run"), cx)
+                    .label(t("item.mark_run"))
+                    .disabled(busy)
+                    .on_click(cx.listener(move |this, _, window, cx| {
+                        this.run(window, cx, move |core| actions::ignore(core, id));
+                    })),
+            )
+            .child(
+                super::prominent(Button::new("run"))
+                    .label(t("action.run"))
+                    .loading(busy)
+                    .on_click(cx.listener(move |this, _, window, cx| {
+                        this.run(window, cx, move |core| actions::run_script(core, id));
+                    })),
+            )
+    } else if item.dotfile.is_some() {
         h_flex()
             .gap(px(S8))
             .child(
@@ -228,6 +300,7 @@ fn selected(app: &Rosamta, cx: &mut Context<Rosamta>) -> Option<impl IntoElement
                         });
                     })),
             )
+            .child(ignore)
     } else {
         let scope = app.scope;
         h_flex()
@@ -261,15 +334,8 @@ fn selected(app: &Rosamta, cx: &mut Context<Rosamta>) -> Option<impl IntoElement
                         this.run(window, cx, move |core| actions::accept(core, id, scope));
                     })),
             )
-    }
-    .child(
-        super::ghost(Button::new("ignore"))
-            .label(t("action.ignore"))
-            .disabled(busy)
-            .on_click(cx.listener(move |this, _, window, cx| {
-                this.run(window, cx, move |core| actions::ignore(core, id));
-            })),
-    );
+            .child(ignore)
+    };
     let content = match (&app.detail, waiting) {
         // Not a decision: no diff and no buttons until it can render.
         (_, Some(waiting)) => div()
@@ -284,6 +350,16 @@ fn selected(app: &Rosamta, cx: &mut Context<Rosamta>) -> Option<impl IntoElement
             .child(err.clone())
             .into_any_element(),
         (Some(Detail::Dotfile(text)), _) => diff(text, cx).into_any_element(),
+        (Some(Detail::Script { text, log }), _) => v_flex()
+            .gap(px(S16))
+            .child(heading(t("item.script"), cx))
+            .child(code(text, cx))
+            .when_some(log.as_ref(), |content, log| {
+                content
+                    .child(heading(t("item.last_run"), cx))
+                    .child(code(log, cx))
+            })
+            .into_any_element(),
         (Some(Detail::Rc { files, modules }), _) => v_flex()
             .gap(px(S16))
             .child(heading(t("item.rc"), cx))

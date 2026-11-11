@@ -9,7 +9,10 @@ use rosamta_core::daemon::service;
 use rosamta_core::dotfiles;
 use rosamta_core::edit;
 use rosamta_core::generated;
-use rosamta_core::{Result, host, repo, sync};
+use rosamta_core::scripts::review as scripts;
+use rosamta_core::{Error, Result, host, repo, sync};
+
+use crate::text::tf;
 
 /// Done, with a warning to show when the change was made but a follow-up,
 /// such as pushing it, was not.
@@ -42,6 +45,15 @@ pub fn accept(ctx: &Context, id: u32, scope: Scope) -> Done {
 pub fn ignore(ctx: &Context, id: u32) -> Done {
     let _lock = adopt::lock(ctx)?;
     adopt::ignore(ctx, id).map(|_| None)
+}
+
+/// Run a script item. One that fails stays listed, with its log to read.
+pub fn run_script(ctx: &Context, id: u32) -> Done {
+    let _lock = adopt::lock(ctx)?;
+    let listed =
+        scripts::item_of(ctx, id)?.ok_or_else(|| Error::Usage(format!("no review item {id}")))?;
+    let outcome = scripts::accept(ctx, id, &listed)?;
+    Ok((!outcome.ok).then(|| tf("item.script_failed", &[("script", &listed.source)]).to_string()))
 }
 
 /// Put the repo's version of a dotfile back.

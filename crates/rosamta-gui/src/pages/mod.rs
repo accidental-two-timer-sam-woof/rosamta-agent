@@ -288,15 +288,11 @@ pub fn code(text: &str, cx: &App) -> impl IntoElement {
         .py(px(S8))
         .font_family(cx.theme().mono_font_family.clone())
         .text_xs()
-        .children(
-            text.lines()
-                .filter(|line| !line.starts_with("--- ") && !line.starts_with("+++ "))
-                .map(|line| {
-                    div()
-                        .min_h(px(S16))
-                        .child(SharedString::from(line.to_string()))
-                }),
-        )
+        .children(text.lines().map(|line| {
+            div()
+                .min_h(px(S16))
+                .child(SharedString::from(line.to_string()))
+        }))
 }
 
 #[cfg(test)]

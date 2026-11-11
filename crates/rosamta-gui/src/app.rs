@@ -439,7 +439,7 @@ mod view_tests {
     use std::path::Path;
     use std::process::Command;
 
-    use gpui_kit::TestAppContext;
+    use gpui_kit::{AppContext as _, TestAppContext};
     use rosamta_core::apply::Context as Core;
 
     // Not `super::*`: gpui's `test` attribute would replace the standard one.
@@ -488,7 +488,8 @@ mod view_tests {
         std::fs::write(path, text).unwrap();
     }
 
-    /// Two copies that differ from the repo: two review items.
+    /// Two copies that differ from the repo and a script to run: three
+    /// review items.
     fn set_up(core: &Core) {
         let repo = core.paths.repo();
         write(
@@ -515,6 +516,15 @@ mod view_tests {
         }
         write(&repo.join("dotfiles.toml"), &manifest);
         rosamta_core::dotfiles::deploy(core).unwrap();
+        write(
+            &repo.join("scripts.toml"),
+            "[[script]]\nsource = \"setup.sh\"\nrun = \"once\"\n",
+        );
+        write(
+            &repo.join("setup.sh"),
+            "[ -f \"$HOME/fail\" ] && exit 3\necho ran > \"$HOME/ran\"\n",
+        );
+        write(&core.home.join("fail"), "");
     }
 
     #[test]
@@ -529,16 +539,21 @@ mod view_tests {
 
         let mut cx = TestAppContext::single();
         cx.update(gpui_kit::init);
-        let (view, cx) = cx.add_window_view(|window, cx| {
+        // In a root as `open_window` builds it, which notifications need.
+        let mut built = None;
+        let (_root, cx) = cx.add_window_view(|window, cx| {
             crate::theme::init(window, cx);
-            Rosamta::new(None, window, cx)
+            let view = cx.new(|cx| Rosamta::new(None, window, cx));
+            built = Some(view.clone());
+            gpui_kit::base::Root::new(view, window, cx)
         });
+        let view = built.unwrap();
         cx.run_until_parked();
         let ids: Vec<u32> = view.read_with(cx, |view, _| {
             assert!(view.snap.ready);
             view.snap.queue.iter().map(|item| item.id).collect()
         });
-        assert_eq!(ids.len(), 2);
+        assert_eq!(ids.len(), 3);
         let diff_has = |view: &Rosamta, text: &str| matches!(&view.detail, Some(Detail::Dotfile(diff)) if diff.contains(text));
         view.read_with(cx, |view, _| {
             assert_eq!(view.snap.problem, None);
@@ -569,7 +584,7 @@ mod view_tests {
         cx.run_until_parked();
         view.read_with(cx, |view, _| {
             assert!(!view.busy);
-            assert_eq!(view.snap.queue.len(), 1);
+            assert_eq!(view.snap.queue.len(), 2);
             assert_eq!(view.selected, Some(first));
             assert!(diff_has(view, "+repo.a"));
         });
@@ -578,5 +593,38 @@ mod view_tests {
             (read(".a"), read(".b")),
             ("mine\n".into(), "repo.b\n".into())
         );
+
+        // A script shows what it would run, and after a failed run its log;
+        // it stays listed until it succeeds.
+        let script = ids[2];
+        view.update(cx, |view, cx| view.select(script, cx));
+        cx.run_until_parked();
+        let shown = |view: &Rosamta| match &view.detail {
+            Some(Detail::Script { text, log }) => (text.clone(), log.clone()),
+            _ => panic!("not a script"),
+        };
+        let (text, log) = view.read_with(cx, |view, _| shown(view));
+        assert!(text.contains("exit 3") && log.is_none());
+        let run = |cx: &mut gpui_kit::VisualTestContext| {
+            cx.update(|window, cx| {
+                view.update(cx, |view, cx| {
+                    view.run(window, cx, move |core| actions::run_script(core, script));
+                })
+            });
+            cx.run_until_parked();
+        };
+        run(cx);
+        let (_, log) = view.read_with(cx, |view, _| {
+            assert_eq!(view.selected, Some(script));
+            shown(view)
+        });
+        assert!(log.unwrap().ends_with("# exited with 3\n"));
+        std::fs::remove_file(core.home.join("fail")).unwrap();
+        run(cx);
+        view.read_with(cx, |view, _| {
+            assert_eq!(view.snap.queue.len(), 1);
+            assert!(view.snap.queue.iter().all(|item| item.script.is_none()));
+        });
+        assert_eq!(read("ran"), "ran\n");
     }
 }
