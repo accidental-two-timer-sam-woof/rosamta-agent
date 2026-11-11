@@ -1293,6 +1293,19 @@ mod templates {
     }
 
     #[test]
+    fn secrets_asked_before_the_lock_are_not_asked_again() {
+        let mut home = Home::new("ask");
+        let log = with_secret(&mut home);
+        home.ctx.interactive = true;
+        dotfiles::deploy::prepare(&home.ctx);
+        assert_eq!(runs(&log), 1);
+        assert!(!home.at(".npmrc").exists());
+        dotfiles::deploy::deploy_all(&home.ctx).unwrap();
+        assert_eq!(runs(&log), 1);
+        assert_eq!(read(&home.at(".npmrc")), "token=npm_1\n");
+    }
+
+    #[test]
     fn a_terminal_unlocks_bw_once_for_the_whole_run() {
         let mut home = Home::new("ask");
         let bin = home.ctx.home.join("bin");
