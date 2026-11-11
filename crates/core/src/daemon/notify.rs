@@ -105,7 +105,7 @@ impl Notifier for Silent {
 }
 
 #[cfg(target_os = "linux")]
-pub use linux::Desktop;
+pub use linux::{Desktop, session_bus};
 
 #[cfg(target_os = "linux")]
 mod linux {
@@ -124,6 +124,15 @@ mod linux {
         /// The review notification still waiting for a click. A newer one
         /// closes it, so one thread at most waits.
         waiting: Mutex<Option<NotificationHandle>>,
+    }
+
+    /// Whether there is a session bus to ask. Without one (a server, a
+    /// container) no notification service will ever answer, so waiting for
+    /// it would keep every note unannounced.
+    pub fn session_bus() -> bool {
+        std::env::var_os("DBUS_SESSION_BUS_ADDRESS").is_some_and(|address| !address.is_empty())
+            || std::env::var_os("XDG_RUNTIME_DIR")
+                .is_some_and(|dir| std::path::Path::new(&dir).join("bus").exists())
     }
 
     impl Desktop {
