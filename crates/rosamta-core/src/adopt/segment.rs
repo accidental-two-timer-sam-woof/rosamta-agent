@@ -289,10 +289,18 @@ pub(super) fn heredocs(line: &str) -> Vec<(String, bool)> {
                         let len = spec
                             .find(|c: char| c.is_whitespace() || ";&|<>()".contains(c))
                             .unwrap_or(spec.len());
-                        let word: String = spec[..len]
-                            .chars()
-                            .filter(|c| !"'\"\\".contains(*c))
-                            .collect();
+                        let word: String = match spec.chars().next() {
+                            // A quoted delimiter may hold spaces: `<<'END FILE'`.
+                            Some(quote @ ('\'' | '"')) => spec[1..]
+                                .split(quote)
+                                .next()
+                                .unwrap_or_default()
+                                .to_string(),
+                            _ => spec[..len]
+                                .chars()
+                                .filter(|c| !"'\"\\".contains(*c))
+                                .collect(),
+                        };
                         if !word.is_empty() {
                             out.push((word, after.starts_with('-')));
                         }
@@ -501,6 +509,11 @@ mod tests {
         assert_eq!(spans("cat <<EOF\na\n\nb\nEOF\n\nc\n"), [(1, 5), (7, 7)]);
         assert_eq!(
             spans("cat <<-'END' >x\n\ta\n\n\t}\n\tEND\n\nc\n"),
+            [(1, 5), (7, 7)]
+        );
+        // A quoted delimiter is the whole quoted word, spaces included.
+        assert_eq!(
+            spans("cat <<'END FILE'\nEND\n\nx\nEND FILE\n\nc\n"),
             [(1, 5), (7, 7)]
         );
         // Neither a here-string, a shift nor a comment opens one.
