@@ -20,7 +20,7 @@ generated script 不存在或無法讀取時，shell SHALL 正常啟動，且不
 - **THEN** 新開的 shell 印出一行包含該 module 名稱的警告，其他 module 的設定照常生效
 
 ### Requirement: Environment loaded once
-同一個 shell 程序中，env 階段 SHALL 只執行一次，即使多個 rc 檔都有 hook。從這個 shell 啟動的另一個 shell SHALL 不再套用一次已經匯出的環境變數，但 SHALL 再執行 env 階段的片段：片段設定的選項、函式與沒有匯出的變數不會傳給子程序。
+同一個 shell 程序中，env 階段 SHALL 只執行一次，即使多個 rc 檔都有 hook。從這個 shell 啟動的另一個 shell SHALL 不再套用一次已經匯出的環境變數，但 SHALL 在該 shell 會重讀片段來源檔的情況下再執行 env 階段的片段：zsh 與 fish 的每個 shell，以及 bash 的 login shell（bash 的 env 片段來自 `.bash_profile` 與 `.profile`）；sh 不重新執行。片段設定的選項、函式與沒有匯出的變數不會傳給子程序。
 
 #### Scenario: Login bash
 - **WHEN** 開啟同時讀取 `~/.bash_profile` 與 `~/.bashrc` 的 login bash
@@ -29,6 +29,10 @@ generated script 不存在或無法讀取時，shell SHALL 正常啟動，且不
 #### Scenario: Nested shell
 - **WHEN** env 階段有一個 module 宣告 `CNT = "x$CNT"`，另有片段設定沒有匯出的 `LOCAL=1`，使用者在互動 zsh 中再啟動一個互動 zsh
 - **THEN** 內層的 `CNT` 仍是 `x`，`LOCAL` 是 `1`
+
+#### Scenario: Nested bash that is not a login shell
+- **WHEN** 同樣的 module，使用者在互動 bash 中再啟動一個不是 login shell 的互動 bash
+- **THEN** 內層的 `CNT` 仍是 `x`，片段沒有再執行：bash 在這種 shell 不讀 `.bash_profile`
 
 #### Scenario: Debian profile
 - **WHEN** `~/.profile` 在 bash 中載入 `~/.bashrc`（Debian 與 Ubuntu 的預設），使用者開啟 login bash

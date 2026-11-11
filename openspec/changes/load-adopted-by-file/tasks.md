@@ -13,7 +13,7 @@
 
 - [ ] 3.1 每個來源檔產生一份 script；`.profile` 的片段只產生在 sh
 - [ ] 3.2 每個 watched file 的 hook 載入自己的那一份；加上 `.zlogin` 與 `.bash_login` 的 hook
-- [x] 3.3 巢狀 shell 重新執行 env 階段的片段，匯出的環境變數不重複套用（#35）
+- [x] 3.3 巢狀 shell 重新執行 env 階段的片段（zsh、fish 的每個 shell 與 bash 的 login shell），匯出的環境變數不重複套用（#35）
 - [ ] 3.5 刪除 `NOT_BASH` 與 `profile_readers`
 - [ ] 3.4 `.bash_profile` 的 hook 在互動 shell 載入 `rc.bash`，以不 export 的變數避免同一個程序載入兩次；不再替既有的 `.bash_profile` 加上執行 `.bashrc` 的行；新建的 `.bash_profile` 以 `.bashrc` hook 的記號判斷 `.bashrc` 是否已經執行過
 
