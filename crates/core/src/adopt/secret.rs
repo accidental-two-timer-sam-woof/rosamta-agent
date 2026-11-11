@@ -28,11 +28,12 @@ fn known_format(text: &str) -> Option<&'static str> {
         .map(|((id, _, _), _)| *id)
 }
 
-/// `NAME=literal` (POSIX), `NAME = "literal"` (TOML, key maybe quoted) or
-/// `set ... NAME literal` (fish): a value with no expansion in it (an
-/// escaped `\$` is none), which a
+/// `NAME=literal` (POSIX), `NAME = "literal"` (TOML, key maybe quoted),
+/// `set ... NAME literal` (fish) or `setenv NAME literal` (csh, launchctl):
+/// a value with no expansion in it (an escaped `\$` is none), which a
 /// secret-looking name makes suspicious. With spaces around `=` only a
 /// quoted value counts, so INI lines such as `signingkey = ABCD` do not.
+/// Each captures the name and the value.
 fn literal_assignments() -> &'static [Regex; 2] {
     static RULES: OnceLock<[Regex; 2]> = OnceLock::new();
     RULES.get_or_init(|| {
@@ -41,39 +42,54 @@ fn literal_assignments() -> &'static [Regex; 2] {
         let end = r"\s*(?:;|#|$)";
         [
             Regex::new(&format!(
-                r#"{start}(?:export\s+)?["']?([A-Za-z_][A-Za-z0-9_]*)["']?(?:={value}|\s*=\s*{quoted}){end}"#
+                r#"{start}(?:export\s+)?["']?([A-Za-z_][A-Za-z0-9_]*)["']?(?:=({value})|\s*=\s*({quoted})){end}"#
             ))
             .unwrap(),
             Regex::new(&format!(
-                r"{start}set\s+(?:-{{1,2}}[A-Za-z]+\s+)*([A-Za-z_][A-Za-z0-9_]*)\s+{value}{end}"
+                r"{start}(?:set\s+(?:-{{1,2}}[A-Za-z]+\s+)*|(?:launchctl\s+)?setenv\s+)([A-Za-z_][A-Za-z0-9_]*)\s+({value}){end}"
             ))
             .unwrap(),
         ]
     })
 }
 
-/// A quoted literal, and a quoted or bare one: no expansion inside.
-const QUOTED: &str = r#"(?:'[^']+'|"(?:[^"$`\\]|\\.)+")"#;
-const VALUE: &str = r#"(?:'[^']+'|"(?:[^"$`\\]|\\.)+"|(?:[^\s'"$`\\;()]|\\.)+)"#;
+/// A quoted literal (`$'...'` too), and a quoted or bare one: no expansion
+/// inside.
+const QUOTED: &str = r#"(?:\$?'[^']+'|"(?:[^"$`\\]|\\.)+")"#;
+const VALUE: &str = r#"(?:\$?'[^']+'|"(?:[^"$`\\]|\\.)+"|(?:[^\s'"$`\\;()]|\\.)+)"#;
 
-/// The names of every `NAME=literal` word in `command`, as in
+/// Every `NAME=literal` word in `command` with its value, as in
 /// `export A=1 TOKEN=x` or `local -r KEY=x`.
-fn assigned_words(command: &str) -> impl Iterator<Item = &str> {
+fn assigned_words(command: &str) -> impl Iterator<Item = (&str, &str)> {
     static WORD: OnceLock<Regex> = OnceLock::new();
-    let word = WORD
-        .get_or_init(|| Regex::new(&format!(r"(?:^|\s)([A-Za-z_][A-Za-z0-9_]*)={VALUE}")).unwrap());
+    let word = WORD.get_or_init(|| {
+        Regex::new(&format!(r"(?:^|\s)([A-Za-z_][A-Za-z0-9_]*)=({VALUE})")).unwrap()
+    });
     word.captures_iter(command).filter_map(move |caps| {
         // A value that goes on, as in `KEY=a$b` or `KEY="a"$b`, expands.
         let rest = &command[caps.get(0)?.end()..];
         rest.chars()
             .next()
             .is_none_or(|c| c.is_whitespace() || c == '#')
-            .then(|| caps.get(1).map(|name| name.as_str()))
+            .then(|| Some((caps.get(1)?.as_str(), caps.get(2)?.as_str())))
             .flatten()
     })
 }
 
-const SECRET_NAMES: [&str; 6] = ["KEY", "TOKEN", "SECRET", "PASSWORD", "PASSWD", "PASSPHRASE"];
+/// Words that make a name a secret's wherever they sit in it, and ones too
+/// short or too common for that (`PAT` is in `PATH`, `OS_AUTH_URL` is no
+/// secret), which count as the last `_` part.
+const SECRET_NAMES: [&str; 8] = [
+    "KEY",
+    "TOKEN",
+    "SECRET",
+    "PASSWORD",
+    "PASSWD",
+    "PASSPHRASE",
+    "CREDENTIAL",
+    "PWD",
+];
+const SECRET_ENDINGS: [&str; 6] = ["AUTH", "OAUTH", "PAT", "PASS", "DSN", "CREDS"];
 /// Shannon entropy above this, over at least `MIN_LEN` characters, is suspicious.
 const MIN_ENTROPY: f64 = 4.0;
 const MIN_LEN: usize = 20;
@@ -81,16 +97,21 @@ const MIN_LEN: usize = 20;
 /// keys do, words joined by `/` stay below.
 const MIN_SLASHED_ENTROPY: f64 = 4.5;
 const MIN_SLASHED_LEN: usize = 32;
+/// A literal this long that is not made of words could be a key no rule
+/// knows; see [`unsure`].
+const MIN_UNSURE_LEN: usize = 16;
 
 /// Whether `text` holds what looks like a secret.
 pub fn looks_secret(text: &str) -> bool {
     secret_rule(text).is_some()
 }
 
-/// The rule `text` matches: a gitleaks rule ID, `secret-name` or `high-entropy`.
+/// The rule `text` matches: a gitleaks rule ID, `secret-name`,
+/// `url-credentials` or `high-entropy`.
 pub fn secret_rule(text: &str) -> Option<&'static str> {
     known_format(text)
         .or_else(|| secret_name(text).then_some("secret-name"))
+        .or_else(|| url_credentials(text).then_some("url-credentials"))
         .or_else(|| high_entropy(text).then_some("high-entropy"))
 }
 
@@ -104,21 +125,91 @@ fn secret_name(text: &str) -> bool {
     std::iter::once(text).chain(commands).any(|text| {
         let leading = literal_assignments()
             .iter()
-            .flat_map(|rule| rule.captures_iter(text).filter_map(|caps| caps.get(1)))
-            .any(|name| {
-                let name = name.as_str().to_ascii_uppercase();
-                SECRET_NAMES.iter().any(|word| name.contains(word))
+            .flat_map(|rule| rule.captures_iter(text))
+            .filter_map(|caps| Some((caps.get(1)?, caps.get(2).or(caps.get(3))?)))
+            .any(|(name, value)| {
+                let upper = name.as_str().to_ascii_uppercase();
+                !plain(value.as_str())
+                    && (SECRET_NAMES.iter().any(|word| upper.contains(word))
+                        || ends_secret(name.as_str()))
             });
         // Later words are often shell locals such as `key_bindings` or
         // `VI_KEYMAP`: only an upper-case name with the word as a part counts.
         leading
             || !text.trim_start().starts_with('#')
-                && assigned_words(text).any(|name| {
+                && assigned_words(text).any(|(name, value)| {
                     name.bytes()
                         .all(|b| b.is_ascii_uppercase() || b.is_ascii_digit() || b == b'_')
-                        && name.split('_').any(|part| SECRET_NAMES.contains(&part))
+                        && !plain(value)
+                        && (name.split('_').any(|part| SECRET_NAMES.contains(&part))
+                            || ends_secret(name))
                 })
     })
+}
+
+/// Whether the last `_` part of `name` is a short secret word, in capitals:
+/// `prev_pass` is a shell local.
+fn ends_secret(name: &str) -> bool {
+    name.rsplit('_')
+        .next()
+        .is_some_and(|part| SECRET_ENDINGS.contains(&part))
+}
+
+/// A value no secret has, whatever its name: a short number, a switch or
+/// a path (`KEYTIMEOUT=1`, `TOKENIZERS_PARALLELISM=false`,
+/// `PASSWORD_STORE_DIR=~/.password-store`).
+fn plain(value: &str) -> bool {
+    let value = value.strip_prefix('$').unwrap_or(value);
+    let value = value
+        .strip_prefix(['\'', '"'])
+        .and_then(|rest| rest.strip_suffix(['\'', '"']))
+        .unwrap_or(value);
+    let number = value.len() <= 6 && value.bytes().all(|b| b.is_ascii_digit());
+    let switch =
+        ["true", "false", "yes", "no", "on", "off"].contains(&value.to_ascii_lowercase().as_str());
+    let path = value == "~"
+        || ["/", "~/", "./", "../"]
+            .iter()
+            .any(|start| value.starts_with(start));
+    number || switch || path
+}
+
+/// `scheme://user:password@host` with a literal password: no expansion,
+/// no pattern, and not the word a manual puts there.
+fn url_credentials(text: &str) -> bool {
+    const PLACEHOLDERS: [&str; 6] = ["pass", "password", "passwd", "pwd", "secret", "token"];
+    static RULE: OnceLock<Regex> = OnceLock::new();
+    RULE.get_or_init(|| {
+        Regex::new(r"[A-Za-z][A-Za-z0-9+.-]*://[^\s/:@]*:([^\s/@$`{}<>()\[\]*|\\]{3,})@").unwrap()
+    })
+    .captures_iter(text)
+    .any(|caps| !PLACEHOLDERS.contains(&caps[1].to_ascii_lowercase().as_str()))
+}
+
+/// Whether `text` holds a literal that no rule calls a secret but that
+/// could be one: long and not made of words, such as a hex key under a
+/// plain name. Adopting on its own would publish it, so the background
+/// service asks instead.
+pub fn unsure(text: &str) -> bool {
+    text.split(|c: char| !(c.is_ascii_alphanumeric() || "+/=_-.".contains(c)))
+        .map(value)
+        .any(|token| {
+            token.len() >= MIN_UNSURE_LEN
+                && !token.contains('/')
+                && !known_name(token)
+                && !token.split(['-', '_', '.', '=', '+']).all(wordish)
+        })
+}
+
+/// A word, a number, or a word with a short number after it (`aarch64`,
+/// `sha256`); capitals only as in `JetBrainsMono`.
+fn wordish(part: &str) -> bool {
+    let letters = part.trim_end_matches(|c: char| c.is_ascii_digit());
+    let digits = part.len() - letters.len();
+    let capitals = letters.bytes().filter(u8::is_ascii_uppercase).count();
+    (letters.is_empty() || digits <= 4)
+        && letters.bytes().all(|b| b.is_ascii_alphabetic())
+        && (capitals == letters.len() || capitals * 3 <= letters.len())
 }
 
 fn high_entropy(text: &str) -> bool {
@@ -288,6 +379,149 @@ mod tests {
             "local key_bindings=\"/usr/share/fzf/key-bindings.zsh\""
         ));
         assert!(!looks_secret("# parse valid KEY=VALUE pairs"));
+    }
+
+    #[test]
+    fn more_names_and_ways_to_assign() {
+        let hex = "0123456789abcdef0123456789abcdef01234567";
+        for text in [
+            "export MYSQL_PWD=hunter2".to_string(),
+            format!("export GITHUB_PAT={hex}"),
+            format!("export NPM_AUTH={hex}"),
+            "export SERVICE_CREDENTIALS=correct-horse-battery-staple".to_string(),
+            format!("export SENTRY_DSN=https://{hex}@o1.ingest.sentry.io/1"),
+            "export API_KEY=$'abc123'".to_string(),
+            "launchctl setenv API_KEY abc123".to_string(),
+            "setenv API_KEY abc123".to_string(),
+        ] {
+            assert_eq!(secret_rule(&text), Some("secret-name"), "{text}");
+        }
+    }
+
+    #[test]
+    fn plain_values_and_look_alike_names_are_not_secrets() {
+        for text in [
+            "export KEYTIMEOUT=1",
+            "export KEY_REPEAT=2",
+            "export TOKENIZERS_PARALLELISM=false",
+            "export PASSWORD_STORE_DIR=~/.password-store",
+            "export SSH_AUTH_SOCK=/Users/me/.ssh/agent.sock",
+            "export GIT_ASKPASS=/usr/bin/ksshaskpass",
+            "export GIT_AUTHOR_NAME=\"Me\"",
+            "export PATH=/usr/local/bin",
+            "export OS_AUTH_URL=https://keystone.example.com:5000/v3",
+            "export FOO=1 KEY_REPEAT=2",
+            "prev_pass=cur_pass",
+        ] {
+            assert!(!looks_secret(text), "{text}");
+        }
+    }
+
+    #[test]
+    fn passwords_inside_urls() {
+        for text in [
+            "export DATABASE_URL=postgres://admin:S3cretPass@db.internal:5432/prod",
+            "export REDIS_URL=redis://:p4ssw0rd@redis.example.com:6379/0",
+            "\turl = https://me:hunter2@git.example.com/org/repo",
+        ] {
+            assert_eq!(secret_rule(text), Some("url-credentials"), "{text}");
+        }
+        for text in [
+            "export DATABASE_URL=\"postgres://admin:$DB_PASS@db.internal/prod\"",
+            "url = https://me:${TOKEN}@git.example.com/org/repo",
+            "git clone ssh://git@github.com/org/repo",
+            "curl http://localhost:8080/a@b",
+            "proxy = http://<user>:<password>@proxy.example:3128",
+            "# proxy = http://user:password@proxy.example:3128",
+            "[[ \"${URL}\" =~ https://([[:alnum:]_:]+)@github.com/(.*)$ ]]",
+        ] {
+            assert!(!looks_secret(text), "{text}");
+        }
+    }
+
+    /// The rate each rule set finds random tokens under a plain name, so a
+    /// change to the rules shows here. Hex and short tokens are what the
+    /// entropy rule cannot see; `unsure` is what keeps them from being
+    /// published without a look.
+    #[test]
+    fn random_tokens_are_found_or_asked_about() {
+        struct Rng(u64);
+        impl Rng {
+            fn pick(&mut self, alphabet: &[u8], n: usize) -> String {
+                (0..n)
+                    .map(|_| {
+                        self.0 ^= self.0 << 13;
+                        self.0 ^= self.0 >> 7;
+                        self.0 ^= self.0 << 17;
+                        alphabet[(self.0 % alphabet.len() as u64) as usize] as char
+                    })
+                    .collect()
+            }
+        }
+        const HEX: &[u8] = b"0123456789abcdef";
+        const LOWER36: &[u8] = b"abcdefghijklmnopqrstuvwxyz0123456789";
+        const B62: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
+        // (alphabet, length, least share the rules call a secret, least share
+        // that is a secret or asked about), in percent.
+        for (alphabet, len, secret, held) in [
+            (HEX, 32, 0, 100),
+            (HEX, 40, 0, 100),
+            (LOWER36, 20, 15, 99),
+            (B62, 20, 60, 99),
+            (B62, 24, 90, 100),
+            (B62, 32, 100, 100),
+        ] {
+            let mut rng = Rng(0x9E3779B97F4A7C15 ^ (len as u64) << 8 ^ alphabet.len() as u64);
+            let (mut found, mut kept) = (0, 0);
+            const N: usize = 1000;
+            for _ in 0..N {
+                let line = format!("export SERVICE_ID={}", rng.pick(alphabet, len));
+                let is_secret = looks_secret(&line);
+                found += usize::from(is_secret);
+                kept += usize::from(is_secret || unsure(&line));
+            }
+            let size = alphabet.len();
+            assert!(found * 100 >= secret * N, "{size}/{len}: found {found}");
+            assert!(kept * 100 >= held * N, "{size}/{len}: kept {kept}");
+        }
+    }
+
+    #[test]
+    fn long_literals_that_are_not_words_are_asked_about() {
+        for text in [
+            "export SERVICE_ID=0123456789abcdef0123456789abcdef",
+            "export GIT_COMMIT=0123456789abcdef0123456789abcdef01234567",
+            "export UUID=123e4567-e89b-12d3-a456-426614174000",
+            "tool --id a1b2c3a1b2c3a1b2c3a1",
+        ] {
+            assert!(unsure(text) && !looks_secret(text), "{text}");
+        }
+        for text in [
+            "export EDITOR=nvim",
+            "export TERM=xterm-256color",
+            "export LANG=en_US.UTF-8",
+            "export CARGO_BUILD_TARGET=aarch64-apple-darwin",
+            "export RUSTUP_TARGET=x86_64-unknown-linux-musl",
+            "export BAT_THEME=\"Catppuccin-mocha\"",
+            "export HOSTNAME=Xinshous-MacBook-Pro",
+            "font-family = JetBrainsMonoNerdFontMono-Regular",
+            "theme = \"catppuccin-mocha-lavender-compact\"",
+            "plugins=(git zsh-autosuggestions zsh-syntax-highlighting)",
+            "export HOMEBREW_NO_INSTALL_CLEANUP_FORMULAE=1",
+            "unset ZSH_AUTOSUGGEST_HIGHLIGHT_STYLE",
+            "typeset -g POWERLEVEL9K_MULTILINE_FIRST_PROMPT_GAP_BACKGROUND=",
+            "  - \"NODE_OPTIONS=--max-old-space-size=4096\"",
+            "export FZF_DEFAULT_OPTS='--height 40% --layout=reverse --border'",
+            "eval \"$(/home/linuxbrew/.linuxbrew/bin/brew shellenv bash)\"",
+            "source ~/.orbstack/shell/init.zsh 2>/dev/null || :",
+            "zinit light romkatv/powerlevel10k/powerlevel10k.zsh-theme",
+            "ssh-add ~/.ssh/id_ed25519_github_personal_2024",
+            "export GOPRIVATE=github.com/OrgName/RepoName",
+            "docker run -e \"DATABASE_HOST=postgres.internal.example.com\" app",
+            "# Adopted from ~/.zshrc on xinshoutw-macbook-pro.",
+        ] {
+            assert!(!unsure(text), "{text}");
+        }
     }
 
     /// The pre-push scan reads module TOML, where `=` has spaces around it.

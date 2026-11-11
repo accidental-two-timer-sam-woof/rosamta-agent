@@ -344,6 +344,25 @@ fn adopt_policy_off_and_auto() {
 }
 
 #[test]
+fn auto_asks_about_a_literal_that_may_be_a_key() {
+    if !has("zsh") {
+        return;
+    }
+    let key = "0123456789abcdef0123456789abcdef";
+    let home = hooked(&[(".zshrc", &format!("{BUN}\nexport SERVICE_ID={key}\n"))]);
+    set_host(&home, "adopt", "\"auto\"");
+    let listing = run(&home, &["review"]);
+    assert!(listing.contains("service-id.toml"), "{listing}");
+    let zshrc = read(&home, ".zshrc");
+    assert!(
+        zshrc.contains(key) && !zshrc.contains("BUN_INSTALL"),
+        "{zshrc}"
+    );
+    assert_eq!(adopted(&home).len(), 1);
+    assert!(!repo_git(&home, &["log", "-p", "--all"]).contains(key));
+}
+
+#[test]
 fn reinstalled_content_is_removed_without_a_new_module() {
     if !has("zsh") {
         return;
