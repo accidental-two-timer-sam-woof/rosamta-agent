@@ -16,6 +16,7 @@ pub mod github;
 pub mod hooks;
 pub mod host;
 pub mod i18n;
+pub mod include;
 pub mod paths;
 mod process;
 pub mod render;

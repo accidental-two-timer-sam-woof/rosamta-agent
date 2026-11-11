@@ -5,6 +5,7 @@ mod dotfiles;
 mod externals;
 mod github;
 mod import;
+mod include;
 mod secrets;
 mod sync;
 
@@ -103,6 +104,20 @@ enum Command {
     Externals {
         #[command(subcommand)]
         action: ExternalsAction,
+    },
+    /// List what other hosts added that does not load here, newest first
+    Recent,
+    /// Add this host to modules and dotfiles other hosts added
+    Include {
+        /// Module names or dotfile paths, as `recent` lists them
+        #[arg(required_unless_present = "all", conflicts_with = "all")]
+        names: Vec<String>,
+        /// Everything `recent` lists
+        #[arg(long)]
+        all: bool,
+        /// Do not ask for confirmation
+        #[arg(long)]
+        yes: bool,
     },
     /// List changes waiting for a decision, or decide one
     Review {
@@ -313,6 +328,8 @@ fn run(cli: &Cli) -> Result<ExitCode> {
         Command::Unhook { shell } => commands::unhook(cli.json, *shell),
         Command::Eject { yes } => commands::eject(cli.json, *yes),
         Command::Adopt { yes } => adopt::adopt(cli.json, *yes),
+        Command::Recent => include::recent(cli.json),
+        Command::Include { names, all, yes } => include::include(cli.json, names, *all, *yes),
         Command::Review { action: None } => adopt::review(cli.json),
         Command::Review {
             action: Some(ReviewAction::Accept { id, scope }),

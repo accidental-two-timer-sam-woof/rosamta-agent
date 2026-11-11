@@ -38,6 +38,7 @@ rosamta 是跨 shell、跨主機的 dotfile 管理工具。設定宣告在 git r
 - 每次變更都是一個 commit，預設自動推送；背景服務定時拉取其他主機的變更
 - 推送前檢查 API key 與 token，發現時停止推送
 - 登入 GitHub 後可直接建立 private repo 作為遠端
+- 換到新主機時，列出其他主機新增的內容，一次加入這台主機
 
 ### 🛰️ **背景服務**
 - 登入後自動啟動：macOS 為登入項目，Linux 為 systemd 使用者服務
@@ -448,6 +449,18 @@ rsmt publish
 接管、還原，以及 `rsmt add`、`rsmt forget`、`rsmt review accept` 建立 commit 後會立即推送。在 `~/.config/rosamta/host.toml` 設定 `publish = "manual"` 時，只在執行 `rsmt publish` 或 `rsmt sync` 時推送。沒有網路時，commit 留在這台主機並通知一次；背景服務每分鐘重試，連上網路後推送。
 
 拉取時，這台主機還沒推送的 commit 會接在遠端的變更之後。兩台主機改到同一個檔案的同一處時，拉取會中止並列出這些檔案，repo 維持拉取前的狀態；在 repo 中用 git 合併後，再執行 `rsmt sync`。拉取到的 module 讓 shell 啟動時出現新的錯誤時，repo 保留新內容，shell 繼續使用原本的設定。
+
+#### 在新主機加入其他主機的內容
+
+接管的內容預設只套用到原本的主機。列出其他主機加入、這台主機還沒載入的 module 與設定檔，由新到舊：
+
+```sh
+rsmt recent
+rsmt include bun ~/.config/ghostty/config
+rsmt include --all
+```
+
+`include` 把這台主機（以及需要的 OS、架構與 shell）加進每一項的套用範圍，確認後建立一個 commit 並套用。只適用於其他 shell 的片段，或需要這台主機沒有的 tag 時，該項不會修改並顯示原因。
 
 #### 推送受阻
 
