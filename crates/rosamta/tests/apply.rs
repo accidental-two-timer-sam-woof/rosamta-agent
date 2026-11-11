@@ -423,6 +423,32 @@ fn a_background_job_does_not_hide_a_module_that_exits() {
     assert_eq!(fs::read_link(current(&home)).unwrap(), before);
 }
 
+/// A version check that fails once (a slow start, another PATH) keeps the
+/// shell's scripts; the next apply in a normal PATH picks the change up.
+#[test]
+fn a_shell_that_does_not_answer_keeps_its_scripts() {
+    use std::os::unix::fs::PermissionsExt;
+    if !has("zsh") {
+        return;
+    }
+    let home = set_up();
+    apply(&home);
+    let fake = home.root.join("fake-bin");
+    fs::create_dir_all(&fake).unwrap();
+    let zsh = fake.join("zsh");
+    fs::write(&zsh, "#!/bin/sh\nexit 1\n").unwrap();
+    fs::set_permissions(&zsh, fs::Permissions::from_mode(0o755)).unwrap();
+    let path = format!("{}:{}", fake.display(), std::env::var("PATH").unwrap());
+    home.write("modules/more.toml", "[env]\nMORE = \"1\"\n");
+    home.cmd("rsmt")
+        .arg("apply")
+        .env("PATH", path)
+        .assert()
+        .success();
+    let rc = fs::read_to_string(current(&home).join("zsh/env.zsh")).unwrap();
+    assert!(rc.contains("more-env"), "{rc}");
+}
+
 #[test]
 fn a_shell_below_the_minimum_version_is_skipped_with_a_warning() {
     use std::os::unix::fs::PermissionsExt;

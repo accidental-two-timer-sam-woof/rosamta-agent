@@ -208,7 +208,7 @@ pub fn plan(ctx: &Context) -> Result<Plan> {
 
     let installed = ctx.installed();
     let skipped = installed.iter().filter_map(Detected::unsupported).collect();
-    let shells: Vec<Shell> = installed
+    let mut shells: Vec<Shell> = installed
         .iter()
         .filter(|found| found.unsupported().is_none())
         .map(|found| found.shell)
@@ -216,14 +216,29 @@ pub fn plan(ctx: &Context) -> Result<Plan> {
 
     let generated_dir = ctx.paths.generated();
     let current = generated::current_id(&generated_dir);
-    // Render against the current version's paths, so unchanged modules compare equal.
-    let id = current.clone().unwrap_or_else(generated::new_version_id);
-    let layout = generated::layout(&generated_dir, ctx.paths.state(), &id);
-    let files = render::render(&modules, &shells, &layout);
     let old = match &current {
         Some(id) => generated::read_version(&generated_dir, id)?,
         None => BTreeMap::new(),
     };
+    // A shell not found this time, or whose version did not come back (another
+    // PATH, a slow start), keeps its scripts; its hooks and smoke test wait.
+    let detected = shells.clone();
+    let found = |shell: &Shell| detected.contains(shell);
+    let known = |shell: &Shell| {
+        installed
+            .iter()
+            .any(|found| found.shell == *shell && found.version.is_some())
+    };
+    shells.extend(
+        Shell::ALL
+            .into_iter()
+            .filter(|shell| !found(shell) && !known(shell))
+            .filter(|shell| old.keys().any(|rel| rel.starts_with(shell.name()))),
+    );
+    // Render against the current version's paths, so unchanged modules compare equal.
+    let id = current.clone().unwrap_or_else(generated::new_version_id);
+    let layout = generated::layout(&generated_dir, ctx.paths.state(), &id);
+    let files = render::render(&modules, &shells, &layout);
     let mut file_changes = Vec::new();
     for path in old
         .keys()
@@ -240,7 +255,10 @@ pub fn plan(ctx: &Context) -> Result<Plan> {
     let hook_env = ctx.hook_env(&installed);
     let unhooked = ctx.unhooked();
     let mut hook_changes = Vec::new();
-    for shell in shells.iter().filter(|shell| !unhooked.contains(shell)) {
+    for shell in shells
+        .iter()
+        .filter(|shell| found(shell) && !unhooked.contains(shell))
+    {
         hook_changes.extend(hooks::plan_install(*shell, &hook_env)?);
     }
     hook_changes.retain(|change| !change.is_noop());
@@ -414,7 +432,7 @@ fn check_and_smoke(
     for found in plan
         .installed
         .iter()
-        .filter(|found| plan.shells.contains(&found.shell))
+        .filter(|found| found.unsupported().is_none() && plan.shells.contains(&found.shell))
     {
         for rel in files
             .keys()
@@ -446,7 +464,7 @@ fn check_and_smoke(
     for found in plan
         .installed
         .iter()
-        .filter(|found| plan.shells.contains(&found.shell))
+        .filter(|found| found.unsupported().is_none() && plan.shells.contains(&found.shell))
     {
         if hooks::hooked_files(found.shell, hook_env)?.is_empty() {
             continue;
