@@ -13,7 +13,7 @@ pub enum Dialect {
     Fish,
 }
 
-/// One step of recognition. Providers (`add-providers-and-doctor`) register
+/// One step of recognition. Providers (`add-providers`) register
 /// their own ahead of the structured one.
 pub trait Recognizer {
     /// A module equivalent to `lines`, or `None` to let the next one try.
