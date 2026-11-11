@@ -30,6 +30,7 @@ rosamta 是跨 shell、跨主機的 dotfile 管理工具。設定宣告在 git r
 - 敏感的設定檔加密後存進 repo，私鑰以密碼保護
 - template 依主機產生不同內容，密碼與 token 在套用時從 Bitwarden 或自訂指令取得，不進 repo
 - oh-my-zsh、zsh 插件、字型等外部內容鎖定版本下載，每台主機都一樣
+- 新主機第一次套用就執行安裝腳本，之後只在腳本或 Brewfile 改變時再執行
 - 目標位置已有不同內容時不覆蓋，顯示差異讓你決定
 
 ### 🔄 **多主機同步**
@@ -366,6 +367,38 @@ rsmt externals update ~/.oh-my-zsh  # 只更新這一個
 - 只有 `git` 外部內容的裡面可以再放外部內容或設定檔，例如 oh-my-zsh 的插件。
 - 從 `externals.toml` 移除的內容留在原地，不再管理。
 - `rsmt apply`、拉取與背景服務都會下載與更新外部內容。沒有更新的內容（本機已修改、已有其他內容）每次 `rsmt apply` 都會列出；背景服務遇到的問題寫在 `daemon.log`。
+
+### 腳本
+
+需要在主機上執行的設定腳本宣告在 repo 的 `scripts.toml`：
+
+```toml
+[[script]]
+source = "scripts/install-tools.sh"
+run = "once"
+timing = "before"
+
+[[script]]
+source = "scripts/brew-bundle.sh"
+run = "onchange"
+watch = ["Brewfile"]
+when = { os = ["macos"] }
+```
+
+| 欄位 | 說明 |
+|---|---|
+| `source` | 腳本在 repo 中的位置，也是腳本的名稱 |
+| `run` | `once`：每台主機成功執行一次；`onchange`：腳本或 `watch` 的內容改變時再執行 |
+| `timing` | `before`：在 shell 與設定檔之前執行；`after`（預設）：在設定檔部署之後 |
+| `watch` | `onchange` 一併比對的 repo 路徑，可以是目錄 |
+| `when` | 套用範圍，寫法與 module 相同 |
+
+- 腳本以第一行 shebang 的直譯器執行，沒有 shebang 時用 `sh`，不需要執行權限。工作目錄是家目錄，環境變數另有 `ROSAMTA_REPO` 與 `ROSAMTA_HOST_ID`。
+- 失敗（結束碼不為 0）的腳本下次再執行；一個腳本失敗不影響其他腳本與設定檔。
+- 在終端機執行 `rsmt apply` 時，腳本直接執行並可以詢問輸入或 `sudo`。
+- 其他情況（背景服務、App、拉取、沒有終端機的 `rsmt apply`）依 `host.toml` 的 `scripts`：`ask`（預設）列在待處理清單並通知，`auto` 直接執行，失敗時列在待處理清單。
+- 待處理清單中的腳本：`accept` 執行列出時的版本，`ignore` 當作已執行。
+- 每次執行的輸出寫在 `$XDG_STATE_HOME/rosamta/scripts/<source>.log`，只有自己可讀，超過 1 MiB 的部分不記錄。
 
 ### 同步到其他主機
 

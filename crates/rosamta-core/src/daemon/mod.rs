@@ -442,17 +442,17 @@ impl Daemon {
             }
             Err(err) => self.log(&format!("dotfile deploy failed: {err}")),
         }
-        self.queue_dotfile_items();
+        self.queue_applied_items();
         self.report_problems();
     }
 
-    /// Batch dotfile review items not announced yet; deploying puts them in
-    /// the queue without a scan to report them.
-    fn queue_dotfile_items(&mut self) {
+    /// Batch dotfile and script review items not announced yet; applying
+    /// puts them in the queue without a scan to report them.
+    fn queue_applied_items(&mut self) {
         let Ok(queue) = adopt::queue(&self.ctx) else {
             return;
         };
-        for item in queue.iter().filter(|item| item.dotfile.is_some()) {
+        for item in queue.iter().filter(|item| !item.is_rc()) {
             if self.announced.insert(item.id) {
                 self.batch.push(item.id);
                 self.batch_since.get_or_insert_with(Instant::now);
@@ -550,7 +550,7 @@ impl Daemon {
             self.env = self.ctx.hook_env(&self.ctx.installed());
             self.rc_changed();
         }
-        self.queue_dotfile_items();
+        self.queue_applied_items();
     }
 
     fn apply_repo(&self) -> std::result::Result<(), (&'static str, String)> {
@@ -591,7 +591,7 @@ impl Daemon {
             Err(err) => self.log(&err.to_string()),
         }
         // A pull applies dotfiles too.
-        self.queue_dotfile_items();
+        self.queue_applied_items();
         self.report_problems();
     }
 
@@ -712,16 +712,20 @@ impl Daemon {
         let new: Vec<&QueueItem> = queue.iter().filter(|item| ids.contains(&item.id)).collect();
         // Waiting items need no answer; next to ones that do, the note is
         // about those alone, so its actions never reach a waiting item.
+        // Scripts too: running one needs the terminal or the app, not a note.
         let (waits, decisions): (Vec<&QueueItem>, Vec<&QueueItem>) =
             new.into_iter().partition(|item| {
-                item.dotfile
-                    .as_ref()
-                    .is_some_and(|dotfile| dotfile.waiting.is_some())
+                item.script.is_some()
+                    || item
+                        .dotfile
+                        .as_ref()
+                        .is_some_and(|dotfile| dotfile.waiting.is_some())
             });
         let view_only = decisions.is_empty();
         let items = if view_only { waits } else { decisions };
         let body = match items.as_slice() {
             [] => return,
+            [item] if item.script.is_some() => self.script_body(item),
             [item] if item.dotfile.is_some() => self.dotfile_body(item),
             [item] => {
                 let lines = item.end + 1 - item.start;
@@ -738,15 +742,28 @@ impl Daemon {
                     ],
                 )
             }
-            many => i18n::text(
-                self.lang,
-                if view_only {
-                    "review.waiting_many"
-                } else {
+            many => {
+                let failed = |item: &&QueueItem| {
+                    item.script
+                        .as_ref()
+                        .is_some_and(|script| script.why == crate::scripts::apply::Why::Failed)
+                };
+                let key = if !view_only {
                     "review.many"
-                },
-                &[("count", &many.len().to_string())],
-            ),
+                } else if many.iter().all(|item| item.script.is_none()) {
+                    "review.waiting_many"
+                } else if many.iter().all(failed) {
+                    "review.scripts_failed"
+                } else if many
+                    .iter()
+                    .all(|item| item.script.is_some() && !failed(item))
+                {
+                    "review.scripts_waiting"
+                } else {
+                    "review.items_waiting"
+                };
+                i18n::text(self.lang, key, &[("count", &many.len().to_string())])
+            }
         };
         self.log(&format!("notified: {body}"));
         self.notifier.show(&Note {
@@ -754,6 +771,19 @@ impl Daemon {
             items: items.iter().map(|item| item.id).collect(),
             view_only,
         });
+    }
+
+    /// What one script item is about, naming the script.
+    fn script_body(&self, item: &QueueItem) -> String {
+        let Some(script) = &item.script else {
+            return String::new();
+        };
+        let key = if script.why == crate::scripts::apply::Why::Failed {
+            "review.script_failed"
+        } else {
+            "review.script_waiting"
+        };
+        i18n::text(self.lang, key, &[("script", &script.source)])
     }
 
     /// What one dotfile item is about, naming the file.
