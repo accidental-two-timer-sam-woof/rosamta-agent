@@ -323,6 +323,9 @@ pub struct HostConfig {
     /// Print a one-line reminder in interactive shells when items await review.
     #[serde(default = "yes")]
     pub shell_notice: bool,
+    /// What applying outside a terminal does with scripts that need to run.
+    #[serde(default)]
+    pub scripts: ScriptPolicy,
     /// Values for `vars.*` in templates, only on this host.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub vars: BTreeMap<String, String>,
@@ -364,10 +367,21 @@ impl HostConfig {
             pull: SyncPolicy::default(),
             pull_interval: default_pull_interval(),
             shell_notice: true,
+            scripts: ScriptPolicy::default(),
             vars: BTreeMap::new(),
             secrets: SecretSettings::default(),
         }
     }
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
+#[serde(rename_all = "lowercase")]
+pub enum ScriptPolicy {
+    /// Run them without a terminal.
+    Auto,
+    /// List them in the review queue.
+    #[default]
+    Ask,
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]

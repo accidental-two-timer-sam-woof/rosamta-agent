@@ -491,7 +491,7 @@ rsmt restore --original
 
 ### 編輯器支援
 
-`rsmt schema` 輸出各種檔案的 JSON Schema，種類有 `repo`（`rosamta.toml`）、`module`、`host`（`host.toml`）、`dotfiles`（`dotfiles.toml`）、`externals`（`externals.toml`）與 `secrets`（`secrets.toml`）：
+`rsmt schema` 輸出各種檔案的 JSON Schema，種類有 `repo`（`rosamta.toml`）、`module`、`host`（`host.toml`）、`dotfiles`（`dotfiles.toml`）、`externals`（`externals.toml`）、`scripts`（`scripts.toml`）與 `secrets`（`secrets.toml`）：
 
 ```sh
 rsmt schema module > module.schema.json

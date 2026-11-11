@@ -175,6 +175,26 @@ pub fn validate(repo_dir: &Path) -> Result<Report> {
             Err(issue) => report.file(rel).errors.push(issue),
         }
     }
+    let path = repo_dir.join(crate::scripts::MANIFEST);
+    if path.is_file() {
+        let rel = PathBuf::from(crate::scripts::MANIFEST);
+        match read(&path)?.and_then(|text| parse::<crate::scripts::ScriptManifest>(&text)) {
+            Ok(manifest) => {
+                let problems = crate::scripts::check(&manifest, repo_dir);
+                let file = report.file(rel);
+                file.errors.extend(problems.into_iter().map(Issue::at));
+                for entry in &manifest.script {
+                    for host in entry.when.hosts.iter().filter(|host| !hosts.contains(host)) {
+                        file.warnings.push(Issue::at(format!(
+                            "script `{}`: host ID `{host}` is not in the host list in rosamta.toml",
+                            entry.source
+                        )));
+                    }
+                }
+            }
+            Err(issue) => report.file(rel).errors.push(issue),
+        }
+    }
     let path = repo_dir.join(crate::secrets::MANIFEST);
     if path.is_file() {
         let rel = PathBuf::from(crate::secrets::MANIFEST);

@@ -20,6 +20,7 @@ mod process;
 pub mod render;
 pub mod repo;
 pub mod schema;
+pub mod scripts;
 pub mod secrets;
 pub mod shells;
 pub mod snapshot;
