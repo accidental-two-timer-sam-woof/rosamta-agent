@@ -1518,21 +1518,26 @@ pub fn undo(ctx: &Context, plan: Undo) -> Result<()> {
         .find(|watched| watched.path == plan.adoption.file)
         .map_or_else(|| vec![plan.adoption.shell], |watched| watched.shells);
     if let Err(err) = apply::apply_after(ctx, &shells, write) {
-        // The lines stay in the rc file while a module edited since rosamta
-        // narrowed it cannot take them back; the module takes them only
-        // once the rc file gave them up.
-        let module = plan.module.as_ref().filter(|_| narrowed);
-        let module_free =
-            module.is_none_or(|(path, _)| unchanged(path, plan.module_after.as_deref()).is_ok());
+        // The rc file gives the lines up again only while the module still
+        // holds what rosamta left there, narrowed or, if that write was
+        // refused, as it was; the module takes them back only after that.
+        let module_holds = plan.module.as_ref().is_none_or(|(path, text)| {
+            let expected = match narrowed {
+                true => plan.module_after.as_deref(),
+                false => Some(text.as_str()),
+            };
+            unchanged(path, expected).is_ok()
+        });
         if written
-            && module_free
+            && module_holds
             && replace(
                 &plan.file.path,
                 plan.file.after.as_deref(),
                 plan.file.before.as_deref(),
             )
             .is_ok()
-            && let Some((path, text)) = module
+            && narrowed
+            && let Some((path, text)) = &plan.module
         {
             let _ = write_module(ctx, path, text);
         }
