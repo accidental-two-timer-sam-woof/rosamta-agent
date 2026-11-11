@@ -118,7 +118,15 @@ impl Snapshots {
                 }
             };
             let original = self.dir.join("original").join(&key);
-            if !original.exists() && !absent.contains(&key) && !meta.contains_key(&key) {
+            // Inside a path recorded already, that record is what was first
+            // found here: a folder that was not there, or a file.
+            let covered = key.ancestors().skip(1).any(|above| {
+                absent.iter().any(|key| key == above)
+                    || meta.contains_key(above)
+                    || self.dir.join("original").join(above).is_file()
+            });
+            if !covered && !original.exists() && !absent.contains(&key) && !meta.contains_key(&key)
+            {
                 if content.is_none() && link.is_none() {
                     absent.push(key.clone());
                 } else {
@@ -132,6 +140,17 @@ impl Snapshots {
                 }
             }
             let latest = self.dir.join("files").join(&key);
+            // A copy in the way, a file where a folder now is or the other
+            // way round, is kept by the history.
+            for above in key.ancestors().skip(1) {
+                let at = self.dir.join("files").join(above);
+                if at.is_file() {
+                    std::fs::remove_file(&at).map_err(Error::write(&at))?;
+                }
+            }
+            if latest.is_dir() {
+                std::fs::remove_dir_all(&latest).map_err(Error::write(&latest))?;
+            }
             match &content {
                 Some(content) => write(&latest, content)?,
                 None => {
