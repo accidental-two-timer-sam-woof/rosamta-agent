@@ -69,6 +69,13 @@ fn drain(
     let done = std::thread::spawn(move || {
         let mut chunk = [0; 8192];
         while let Ok(read @ 1..) = pipe.read(&mut chunk) {
+            // The result was returned: stop and close the pipe instead of
+            // buffering a background job's output for no one.
+            // shortcut: a job that keeps the pipe open but stays silent keeps
+            // this thread until it exits; read with poll(2) if those pile up.
+            if Arc::strong_count(&sink) == 1 {
+                break;
+            }
             sink.lock().unwrap().extend_from_slice(&chunk[..read]);
         }
     });
@@ -78,6 +85,19 @@ fn drain(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_reader_nobody_needs_stops_at_the_next_write() {
+        let (mut writer, reader) = std::os::unix::net::UnixStream::pair().unwrap();
+        let (buf, done) = drain(reader);
+        drop(buf);
+        std::io::Write::write_all(&mut writer, b"late\n").unwrap();
+        let until = Instant::now() + Duration::from_secs(5);
+        while !done.is_finished() && Instant::now() < until {
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        assert!(done.is_finished());
+    }
 
     #[test]
     fn a_grandchild_holding_the_pipes_cannot_outlast_the_deadline() {
