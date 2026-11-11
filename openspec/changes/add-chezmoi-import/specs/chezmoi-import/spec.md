@@ -7,7 +7,7 @@
 ## ADDED Requirements
 
 ### Requirement: Import command
-`rsmt import chezmoi [<source-dir>]` SHALL 讀取參數指定的 source，否則 `chezmoi source-path` 回報的位置，否則 `~/.local/share/chezmoi`，並遵循 `.chezmoiroot`。rosamta 的 repo 尚未初始化或找不到 source 時 SHALL 以 2 結束且不寫入任何東西。匯入 SHALL 不修改 chezmoi 的 source 與設定、不部署、不連網路。`--dry-run` SHALL 只顯示報告。匯入完成 SHALL 以一個 commit 記錄，commit 內容包含報告；有需要手動處理的項目時仍以 0 結束。
+`rsmt import chezmoi [<source-dir>]` SHALL 讀取參數指定的 source，否則 `chezmoi source-path` 回報的位置，否則 `~/.local/share/chezmoi`，並遵循 `.chezmoiroot`。rosamta 的 repo 尚未初始化、有尚未推送的變更或找不到 source 時 SHALL 以 2 結束且不寫入任何東西。source 中的 symlink SHALL 不被讀取，列為需要手動處理。匯入 SHALL 不修改 chezmoi 的 source 與設定、不部署、不連網路。`--dry-run` SHALL 只顯示報告。匯入完成 SHALL 以一個 commit 記錄，commit 內容包含報告；有需要手動處理的項目時仍以 0 結束。
 
 #### Scenario: Dry run
 - **WHEN** 使用者執行 `rsmt import chezmoi --dry-run`
@@ -18,7 +18,7 @@
 - **THEN** 以 2 結束並說明要先初始化
 
 ### Requirement: Same result as chezmoi
-匯入後在同一台主機執行 `rsmt apply`，每個匯入的目標 SHALL 與 `chezmoi apply` 的結果有相同的內容與權限，部署方式 SHALL 依 chezmoi 的 `mode`（預設複製，`symlink` 時連結）。內容只有空白且沒有 `empty_` 的檔案 SHALL 不匯入。轉換後的 template SHALL 以本機的值 render 並與 `chezmoi cat` 的結果比較，不同時列為需要手動處理。
+匯入後在同一台主機執行 `rsmt apply`，每個匯入的目標 SHALL 與 `chezmoi apply` 的結果有相同的內容與權限，部署方式 SHALL 依 chezmoi 的 `mode`（預設複製，`symlink` 時連結）。內容只有空白且沒有 `empty_` 的檔案 SHALL 不匯入。轉換後的 template SHALL 以本機的值 render 並與 chezmoi render 同一份 template 的結果比較，不同、或 chezmoi 的結果只有空白時列為需要手動處理。
 
 #### Scenario: Private file
 - **WHEN** source 有 `private_dot_netrc`

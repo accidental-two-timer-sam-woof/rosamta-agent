@@ -39,7 +39,7 @@ pub enum Reason {
     Encrypted,
     /// The platforms it applies on are not one `when`.
     Scope,
-    /// Renders differently from `chezmoi cat` on this host.
+    /// Renders differently from chezmoi on this host.
     Differs,
     Modify,
     Remove,
