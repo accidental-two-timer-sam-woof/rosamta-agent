@@ -14,6 +14,18 @@ const FOREGROUND: [&str; 4] = [
     "maintenance.autoDetach=false",
 ];
 
+/// Set when rosamta runs from a git hook; each would point git at that
+/// repository instead of the one `-C` names.
+const REPO_VARS: [&str; 7] = [
+    "GIT_DIR",
+    "GIT_WORK_TREE",
+    "GIT_INDEX_FILE",
+    "GIT_OBJECT_DIRECTORY",
+    "GIT_ALTERNATE_OBJECT_DIRECTORIES",
+    "GIT_COMMON_DIR",
+    "GIT_NAMESPACE",
+];
+
 fn git() -> Command {
     let mut cmd = Command::new("git");
     cmd.args(FOREGROUND)
@@ -21,11 +33,37 @@ fn git() -> Command {
         .env("GIT_TERMINAL_PROMPT", "0")
         // English messages, so failures can be told apart.
         .env("LC_ALL", "C");
+    for var in REPO_VARS {
+        cmd.env_remove(var);
+    }
     cmd
 }
 
 pub(crate) fn run(dir: &Path, args: &[&str]) -> Result<String> {
     let output = git().arg("-C").arg(dir).args(args).output();
+    check(args, output)
+}
+
+/// `run` for a repository the repo only names, such as an external: plain
+/// transports only, nothing that clone's own config could run, and a
+/// stalled transfer gives up.
+pub(crate) fn run_foreign(dir: &Path, args: &[&str]) -> Result<String> {
+    let output = git()
+        .env("GIT_ALLOW_PROTOCOL", "https:http:ssh:git:file")
+        .args([
+            "-c",
+            "core.fsmonitor=false",
+            "-c",
+            "core.hooksPath=/dev/null",
+            "-c",
+            "http.lowSpeedLimit=1000",
+            "-c",
+            "http.lowSpeedTime=60",
+        ])
+        .arg("-C")
+        .arg(dir)
+        .args(args)
+        .output();
     check(args, output)
 }
 

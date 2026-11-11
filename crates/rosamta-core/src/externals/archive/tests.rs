@@ -82,13 +82,29 @@ fn entries_outside_the_target_fail() {
         vec![("/abs", EntryType::Regular, &b"x"[..], "")],
         vec![("a", EntryType::Symlink, &b""[..], "../../x")],
         vec![("a", EntryType::Symlink, &b""[..], "/etc/passwd")],
+        // Each fine counted alone; together `M` climbs above the target.
+        vec![
+            ("d1/d2/d3/L", EntryType::Symlink, &b""[..], "../../.."),
+            ("M", EntryType::Symlink, &b""[..], "d1/d2/d3/L/../.."),
+        ],
+        // A link placed through another link lands wherever that one points.
+        vec![
+            ("M", EntryType::Symlink, &b""[..], "d"),
+            ("M/x", EntryType::Symlink, &b""[..], "y"),
+        ],
         vec![("a", EntryType::Link, &b""[..], "b")],
         vec![("a", EntryType::Fifo, &b""[..], "")],
     ] {
         let (dir, result) = unpack(&tar(&entries), 0);
         let err = result.unwrap_err().to_string();
         assert!(
-            err.contains("outside the target") || err.contains("hard link or special"),
+            [
+                "outside the target",
+                "hard link or special",
+                "through another link"
+            ]
+            .iter()
+            .any(|reason| err.contains(reason)),
             "{entries:?}: {err}"
         );
         assert!(!dir.path().join("evil").exists());

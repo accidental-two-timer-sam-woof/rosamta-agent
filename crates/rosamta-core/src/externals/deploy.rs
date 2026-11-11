@@ -46,8 +46,9 @@ enum Work {
     /// Fetch and check out in place, first pointing `origin` at the
     /// declared URL when it changed.
     Checkout(External, bool),
-    /// Replace an unchanged archive with the new version.
-    Replace(External),
+    /// Replace an archive with the new version while it still holds the
+    /// recorded content.
+    Replace(External, Option<String>),
     /// Take over a clone that is already at `rev`.
     Record(External),
     Drop,
@@ -86,7 +87,7 @@ pub fn apply(ctx: &Context) -> Result<Vec<Step>> {
         let mut step = item.step;
         let target = ctx.home.join(&step.path);
         // Parents sort first; one that is not there holds back what goes inside.
-        let waiting = matches!(item.work, Work::Download(_) | Work::Replace(_))
+        let waiting = matches!(item.work, Work::Download(_) | Work::Replace(..))
             .then(|| missing_parent(ctx, &gits, &step.path))
             .flatten();
         if let Some(outer) = waiting {
@@ -96,9 +97,10 @@ pub fn apply(ctx: &Context) -> Result<Vec<Step>> {
             step.action = Action::Failed;
             step.reason = Some(err.to_string());
         }
+        // Saved each time: an apply cut short still knows what it placed.
+        state::save(ctx.paths.state(), &records)?;
         steps.push(step);
     }
-    state::save(ctx.paths.state(), &records)?;
     Ok(steps)
 }
 
@@ -199,7 +201,12 @@ fn plan_one(
             return Ok(planned(path, Action::Unchanged, None, Work::Nothing));
         }
         return Ok(if tree::hash(target)? == record.tree {
-            planned(path, Action::Updated, None, Work::Replace(entry.clone()))
+            planned(
+                path,
+                Action::Updated,
+                None,
+                Work::Replace(entry.clone(), record.tree.clone()),
+            )
         } else {
             planned(
                 path,
@@ -278,22 +285,45 @@ fn run(target: &Path, path: &Path, work: Work, records: &mut Downloaded) -> Resu
         Work::Download(entry) => {
             let new = Aside::new(target, "new")?;
             fetch_into(&entry, new.path())?;
+            let tree = archive_tree(&entry, new.path())?;
             std::fs::rename(new.path(), target).map_err(Error::write(target))?;
-            entry
+            record(records, path, &entry, tree);
+            return Ok(());
         }
-        Work::Replace(entry) => {
+        Work::Replace(entry, before) => {
             let new = Aside::new(target, "new")?;
             fetch_into(&entry, new.path())?;
+            let tree = archive_tree(&entry, new.path())?;
+            // The download can take minutes; an edit made meanwhile stays.
+            if tree::hash(target)? != before {
+                return Err(Error::External(
+                    "changed on this host while downloading".into(),
+                ));
+            }
             let old = Aside::new(target, "old")?;
             std::fs::rename(target, old.path()).map_err(Error::write(target))?;
-            std::fs::rename(new.path(), target).map_err(Error::write(target))?;
-            entry
+            if let Err(err) = std::fs::rename(new.path(), target) {
+                let _ = std::fs::rename(old.path(), target);
+                return Err(Error::write(target)(err));
+            }
+            record(records, path, &entry, tree);
+            return Ok(());
         }
     };
-    let tree = match entry.kind() {
-        Some(Kind::Archive) => tree::hash(target)?,
-        _ => None,
-    };
+    let tree = archive_tree(&entry, target)?;
+    record(records, path, &entry, tree);
+    Ok(())
+}
+
+/// An archive's content, hashed where it was extracted.
+fn archive_tree(entry: &External, at: &Path) -> Result<Option<String>> {
+    match entry.kind() {
+        Some(Kind::Archive) => tree::hash(at),
+        _ => Ok(None),
+    }
+}
+
+fn record(records: &mut Downloaded, path: &Path, entry: &External, tree: Option<String>) {
     records.entries.insert(
         path.to_path_buf(),
         Record {
@@ -302,7 +332,6 @@ fn run(target: &Path, path: &Path, work: Work, records: &mut Downloaded) -> Resu
             tree,
         },
     );
-    Ok(())
 }
 
 /// Download `entry` into `into`, which does not exist yet.
