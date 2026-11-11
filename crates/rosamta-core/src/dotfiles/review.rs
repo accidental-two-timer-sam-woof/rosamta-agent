@@ -98,13 +98,17 @@ pub(crate) fn sync_queue(ctx: &Context, waiting: Vec<DotfileItem>) -> Result<()>
     queue.next_id = queue.next_id.max(1);
     for item in waiting {
         // What it waits for may come and go, as a tool locks and unlocks;
-        // the item is the same while the path and both sides are.
+        // the item is the same while the path and both sides are. One that
+        // stops waiting and needs a decision is new, so it is announced.
+        let decided = |reason: &Reason| *reason != Reason::Waiting;
         let kept = old
             .iter()
             .find(|old| {
-                old.dotfile
-                    .as_ref()
-                    .is_some_and(|old| old.path == item.path && old.sides == item.sides)
+                old.dotfile.as_ref().is_some_and(|old| {
+                    old.path == item.path
+                        && old.sides == item.sides
+                        && (decided(&old.reason) || !decided(&item.reason))
+                })
             })
             .map(|old| (old.id, old.detected_at));
         let (id, detected_at) = kept.unwrap_or_else(|| {
@@ -404,4 +408,49 @@ fn contents(root: &Path) -> Result<BTreeMap<PathBuf, Vec<u8>>> {
         out.insert(rel, bytes);
     }
     Ok(out)
+}
+
+#[cfg(test)]
+mod tests {
+    use std::ffi::OsString;
+
+    use super::*;
+    use crate::paths::Paths;
+
+    #[test]
+    fn an_item_that_stops_waiting_for_a_decision_is_new() {
+        let dir = tempfile::tempdir().unwrap();
+        let ctx = Context {
+            paths: Paths::from_vars(|name| (name == "HOME").then(|| OsString::from(dir.path())))
+                .unwrap(),
+            home: dir.path().to_path_buf(),
+            path_var: String::new(),
+            interactive: false,
+            session: Default::default(),
+        };
+        let host = ctx.paths.host_config();
+        std::fs::create_dir_all(host.parent().unwrap()).unwrap();
+        std::fs::write(&host, "id = \"test\"\n").unwrap();
+        let item = |reason| DotfileItem {
+            path: PathBuf::from(".npmrc"),
+            reason,
+            sides: Sides::default(),
+            waiting: None,
+        };
+        let ids = || -> Vec<u32> {
+            adopt::queue(&ctx)
+                .unwrap()
+                .iter()
+                .map(|item| item.id)
+                .collect()
+        };
+        sync_queue(&ctx, vec![item(Reason::Waiting)]).unwrap();
+        let waiting = ids();
+        sync_queue(&ctx, vec![item(Reason::Conflict)]).unwrap();
+        let conflict = ids();
+        assert_ne!(conflict, waiting);
+        // Waiting again (the tool locked) is the same decision still open.
+        sync_queue(&ctx, vec![item(Reason::Waiting)]).unwrap();
+        assert_eq!(ids(), conflict);
+    }
 }
