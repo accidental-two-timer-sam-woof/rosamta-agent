@@ -488,7 +488,7 @@ impl Daemon {
     /// Watched rc files that exist, named as file events name them: the
     /// directory resolved, not the file, which may be a symlink.
     fn rc_files(&self) -> Vec<PathBuf> {
-        adopt::watched_files(&self.env)
+        let mut files: Vec<PathBuf> = adopt::watched_files(&self.env)
             .into_iter()
             .map(
                 |watched| match (watched.path.parent(), watched.path.file_name()) {
@@ -496,7 +496,10 @@ impl Daemon {
                     _ => watched.path,
                 },
             )
-            .collect()
+            .collect();
+        // Nothing is adopted from it, but fish stops loading rosamta without it.
+        files.push(real(&self.env.fish_config.join("conf.d")).join("rosamta.fish"));
+        files
     }
 
     /// Scan rc files and act on the adopt policy; announce new review items.
@@ -944,9 +947,14 @@ impl Daemon {
     /// if it comes back.
     fn report_problems(&mut self) {
         let mut problems: Vec<(&'static str, String)> = self.repo_problem.iter().cloned().collect();
-        if let Ok(missing) = apply::missing_hooks(&self.ctx, &self.env)
-            && !missing.is_empty()
-        {
+        let mut missing = apply::missing_hooks(&self.ctx, &self.env);
+        if !missing.is_empty() {
+            // The shells may have moved their startup files since this
+            // layout was found.
+            self.env = self.ctx.hook_env(&self.ctx.installed());
+            missing = apply::missing_hooks(&self.ctx, &self.env);
+        }
+        if !missing.is_empty() {
             let files: Vec<String> = missing
                 .iter()
                 .map(|path| adopt::display(path, &self.ctx.home))

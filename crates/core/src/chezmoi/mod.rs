@@ -104,9 +104,9 @@ impl Chezmoi {
     }
 }
 
-/// Which of `paths` chezmoi manages: its next apply writes over them. None
-/// when chezmoi is not on PATH or does not answer.
-pub fn managed(ctx: &Context, paths: &[PathBuf]) -> Vec<PathBuf> {
+/// Which of `paths` the next `chezmoi apply` writes without rosamta's
+/// block. None when chezmoi is not on PATH or does not answer.
+pub fn drops_block(ctx: &Context, paths: &[PathBuf]) -> Vec<PathBuf> {
     let Some(chezmoi) = Chezmoi::find(ctx) else {
         return Vec::new();
     };
@@ -116,11 +116,7 @@ pub fn managed(ctx: &Context, paths: &[PathBuf]) -> Vec<PathBuf> {
         terminal: false,
         ..chezmoi
     };
-    let Ok(out) = chezmoi.output(&[
-        "managed",
-        "--include=files,symlinks",
-        "--path-style=absolute",
-    ]) else {
+    let Ok(out) = chezmoi.output(&["managed", "--include=files", "--path-style=absolute"]) else {
         return Vec::new();
     };
     let out = String::from_utf8_lossy(&out);
@@ -128,6 +124,15 @@ pub fn managed(ctx: &Context, paths: &[PathBuf]) -> Vec<PathBuf> {
     paths
         .iter()
         .filter(|path| managed.contains(&path.as_path()))
+        // What apply writes: a source that holds the block, a `create_`
+        // target that exists or a `modify_` script that keeps it are fine.
+        .filter(|path| {
+            chezmoi
+                .output(&["cat", &path.display().to_string()])
+                .is_ok_and(|target| {
+                    crate::hooks::find_block(&String::from_utf8_lossy(&target)).is_none()
+                })
+        })
         .cloned()
         .collect()
 }

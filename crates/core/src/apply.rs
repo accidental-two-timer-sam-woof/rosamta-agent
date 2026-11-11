@@ -66,11 +66,11 @@ impl Context {
         Snapshots::new(self.paths.state(), &self.home)
     }
 
-    pub fn installed(&self) -> Vec<Detected> {
+    pub(crate) fn installed(&self) -> Vec<Detected> {
         shells::detect(&self.path_var, &self.paths.state().join("shells.toml"))
     }
 
-    pub fn hook_env(&self, installed: &[Detected]) -> HookEnv {
+    pub(crate) fn hook_env(&self, installed: &[Detected]) -> HookEnv {
         let exe = |shell| {
             installed
                 .iter()
@@ -1091,12 +1091,16 @@ pub struct ShellStatus {
     pub version: Option<(u32, u32)>,
     /// Startup files holding rosamta's block.
     pub hooked: Vec<PathBuf>,
+    /// Startup files that lost the block apply keeps there, so this shell
+    /// no longer loads rosamta.
+    pub missing: Vec<PathBuf>,
 }
 
 /// Every supported shell: whether it is installed and where it is hooked.
 pub fn shells(ctx: &Context) -> Result<Vec<ShellStatus>> {
     let installed = ctx.installed();
     let env = ctx.hook_env(&installed);
+    let kept = kept_hooked(ctx, &installed);
     Shell::ALL
         .iter()
         .map(|&shell| {
@@ -1106,29 +1110,41 @@ pub fn shells(ctx: &Context) -> Result<Vec<ShellStatus>> {
                 installed: found.is_some(),
                 version: found.and_then(|found| found.version),
                 hooked: hooks::hooked_files(shell, &env)?,
+                missing: match kept.contains(&shell) {
+                    true => hooks::missing(shell, &env).unwrap_or_default(),
+                    false => Vec::new(),
+                },
             })
         })
         .collect()
 }
 
-/// Startup files that lost the block of a shell the current version serves:
-/// those shells no longer load rosamta.
-pub fn missing_hooks(ctx: &Context, env: &HookEnv) -> Result<Vec<PathBuf>> {
+/// [`ShellStatus::missing`] of every shell, for the layout in `env`.
+pub fn missing_hooks(ctx: &Context, env: &HookEnv) -> Vec<PathBuf> {
+    kept_hooked(ctx, &ctx.installed())
+        .into_iter()
+        // A file whose markers do not pair up is apply's to report.
+        .flat_map(|shell| hooks::missing(shell, env).unwrap_or_default())
+        .collect()
+}
+
+/// Shells apply keeps hooked: installed and supported, served by the
+/// current version, and not unhooked.
+fn kept_hooked(ctx: &Context, installed: &[Detected]) -> Vec<Shell> {
     let generated_dir = ctx.paths.generated();
     let Some(id) = generated::current_id(&generated_dir) else {
-        return Ok(Vec::new());
+        return Vec::new();
     };
     let unhooked = ctx.unhooked();
-    let mut out = Vec::new();
-    for found in ctx.installed() {
-        if found.unsupported().is_none()
-            && !unhooked.contains(&found.shell)
-            && generated_dir.join(&id).join(found.shell.name()).is_dir()
-        {
-            out.extend(hooks::missing(found.shell, env)?);
-        }
-    }
-    Ok(out)
+    installed
+        .iter()
+        .filter(|found| {
+            found.unsupported().is_none()
+                && !unhooked.contains(&found.shell)
+                && generated_dir.join(&id).join(found.shell.name()).is_dir()
+        })
+        .map(|found| found.shell)
+        .collect()
 }
 
 /// Today's UTC date as YYYY-MM-DD.

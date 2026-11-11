@@ -263,6 +263,9 @@ fn print_step(ctx: &Context, step: &Step) {
 /// An rc file chezmoi also manages loses rosamta's block at the next
 /// `chezmoi apply`.
 fn warn_chezmoi(ctx: &Context) {
+    if rosamta_core::chezmoi::Chezmoi::find(ctx).is_none() {
+        return;
+    }
     let Ok(shells) = apply::shells(ctx) else {
         return;
     };
@@ -270,7 +273,7 @@ fn warn_chezmoi(ctx: &Context) {
         .into_iter()
         .flat_map(|status| status.hooked)
         .collect();
-    for path in rosamta_core::chezmoi::managed(ctx, &hooked) {
+    for path in rosamta_core::chezmoi::drops_block(ctx, &hooked) {
         let path = adopt::display(&path, &ctx.home);
         eprintln!(
             "warning: chezmoi also manages {path}, so `chezmoi apply` will remove rosamta's block; run `chezmoi forget {path}`, or move everything over with `rsmt import chezmoi`"
