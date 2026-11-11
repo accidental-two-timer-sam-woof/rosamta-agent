@@ -125,7 +125,7 @@ jobs:
           RUSTFLAGS: -C link-arg=-Wl,--allow-shlib-undefined
       - run: cargo deb --no-build -p rosamta --target "${TARGET}" -o dist/
       # rpm versions cannot contain "-"; "~" sorts a prerelease before its release.
-      - run: cargo generate-rpm -p crates/rosamta --target "${TARGET}" -o dist/ -s "version = \"$(printf '%s' "${VERSION}" | tr - '~')\""
+      - run: cargo generate-rpm -p crates/cli --target "${TARGET}" -o dist/ -s "version = \"$(printf '%s' "${VERSION}" | tr - '~')\""
       - name: Tarball
         run: |
           dir="rosamta-${VERSION}-linux-${{ matrix.arch }}"

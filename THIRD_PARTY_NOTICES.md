@@ -12416,7 +12416,7 @@ the following restrictions:
 
 ## gitleaks rules
 
-`crates/rosamta-core/rules/gitleaks.toml` is the default rule set of [gitleaks](https://github.com/gitleaks/gitleaks) v8.30.1, MIT License.
+`crates/core/rules/gitleaks.toml` is the default rule set of [gitleaks](https://github.com/gitleaks/gitleaks) v8.30.1, MIT License.
 
 ```
 MIT License
