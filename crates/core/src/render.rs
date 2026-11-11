@@ -367,6 +367,7 @@ fn loader(shell: Shell, stage: Stage, frags: &[&Fragment], dir: &Path, layout: &
         )
         .unwrap();
         if stage == Stage::Env {
+            out.push_str(&again(shell, &layout.version_id, frags, &file));
             out.push_str(end_guard);
         } else {
             let notice = fish_quote(&layout.notice.display().to_string());
@@ -413,6 +414,7 @@ fn loader(shell: Shell, stage: Stage, frags: &[&Fragment], dir: &Path, layout: &
     }
     out.push_str("  :\nfi\n");
     if stage == Stage::Env {
+        out.push_str(&again(shell, &layout.version_id, frags, &file));
         out.push_str(end_guard);
     } else {
         // A builtin read, so the reminder costs no process start.
@@ -426,6 +428,52 @@ fn loader(shell: Shell, stage: Stage, frags: &[&Fragment], dir: &Path, layout: &
     out
 }
 
+/// The branch of the env guard for a shell started from one that ran env
+/// already. Exported values came down to it; what the snippets set without
+/// exporting (options, functions, plain variables) did not, so they run
+/// again, once per process.
+fn again(
+    shell: Shell,
+    version_id: &str,
+    frags: &[&Fragment],
+    file: &dyn Fn(&Fragment) -> String,
+) -> String {
+    let snippets: Vec<String> = frags
+        .iter()
+        .filter(|frag| frag.is_raw())
+        .map(|frag| file(frag))
+        .collect();
+    if snippets.is_empty() {
+        return String::new();
+    }
+    let id = format!("{version_id}:{}", shell.name());
+    let mut out = String::new();
+    if shell == Shell::Fish {
+        writeln!(
+            out,
+            "set -g __rosamta_env {id}\nelse if test \"$__rosamta_env\" != {id}\nset -g __rosamta_env {id}"
+        )
+        .unwrap();
+        for path in snippets {
+            writeln!(out, "source {}", fish_quote(&path)).unwrap();
+        }
+        return out;
+    }
+    let not_bash = match shell {
+        Shell::Sh => format!(" && {NOT_BASH}"),
+        _ => String::new(),
+    };
+    writeln!(
+        out,
+        "_rosamta_env={id}\nelif [ \"${{_rosamta_env-}}\" != {id} ]{not_bash}; then\n_rosamta_env={id}"
+    )
+    .unwrap();
+    for path in snippets {
+        writeln!(out, ". {}", posix_quote(&path)).unwrap();
+    }
+    out
+}
+
 fn stage_name(stage: Stage) -> &'static str {
     match stage {
         Stage::Env => "env",
@@ -434,8 +482,8 @@ fn stage_name(stage: Stage) -> &'static str {
 }
 
 /// The lines around the env stage that run it once per process tree, and
-/// the line that closes them. The marker is per shell: a bash started from
-/// sh still needs its own env.
+/// the line that closes them; [`again`] adds what every process still needs.
+/// The marker is per shell: a bash started from sh still needs its own env.
 pub(crate) fn env_guard(shell: Shell, version_id: &str) -> (String, &'static str) {
     let id = format!("{version_id}:{}", shell.name());
     match shell {

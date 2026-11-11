@@ -32,11 +32,9 @@
 
 `.profile` 的片段只產生在 `sh/files/profile.sh`。bash 沒有 `.bash_profile` 時讀 `.profile`，zsh 以 `emulate sh` 讀 `.profile`，都會經過 `.profile` 的 hook，所以不需要 `NOT_BASH`，也不需要 `profile_readers`。
 
-### 3. 拿掉 `ROSAMTA_ENV`
+### 3. `ROSAMTA_ENV` 只留給結構化的內容
 
-結構化內容重複載入沒有副作用：環境變數是覆寫，PATH 的 prepend 已經會跳過既有的項目，alias 是重新定義。片段則應該是檔案被讀幾次就執行幾次。兩者都不需要跨程序的防重複。
-
-代價：巢狀 shell 會重新套用結構化的環境變數，蓋掉使用者在外層 shell 手動改過的值。這和沒有 rosamta 時 rc 檔的行為相同。
+原本打算整個拿掉。實作時發現結構化的環境變數並不都能重複套用：`CNT = "x$CNT"` 或 `MANPATH = "$HOME/man:$MANPATH"` 這種引用自己的值，每多一層 shell 就多疊一次。所以匯出的環境變數維持「每個程序樹一次」；片段則在每個程序各執行一次，因為它設定的選項、函式與沒有匯出的變數不會傳給子程序（#35）。這一項已經先做完。
 
 ### 4. 接線留在檔案裡，rosamta 不替使用者加
 
