@@ -48,8 +48,16 @@ repo 裡要部署到 host 家目錄的檔案或目錄，例如 nvim、ghostty �
 _Avoid_: target, managed file
 
 **Deploy mode**（部署方式）:
-dotfile 放到 host 上的方式：link（symlink 回 repo）、copy（複製）或 template（render 成實體檔案）。
+dotfile 放到 host 上的方式：link（symlink 回 repo）、copy（複製）、template（render 成實體檔案）或 create（不存在時才建立，之後不再管理）。
 _Avoid_: install mode, strategy
+
+**External**（外部內容）:
+repo 裡宣告、從外部下載到 host 家目錄的 git repo 或壓縮檔，例如 oh-my-zsh 或 zsh 插件。所有 host 使用同一個鎖定的版本。
+_Avoid_: dependency, vendor, plugin
+
+**Script**（腳本）:
+repo 裡宣告、在 host 上執行的設定腳本，只執行一次，或在內容改變時才執行。
+_Avoid_: hook, task, job
 
 **Condition**（套用範圍）:
 決定一個 module 或 dotfile 套用到哪些 host 的條件，依據 OS、架構、host ID 與 tag。
@@ -90,7 +98,7 @@ _Avoid_: capture, import, re-add, 收錄
 _Avoid_: capture policy, auto-sync
 
 **Review queue**（待處理）:
-等待使用者決定要不要接管的項目。詢問模式下的項目，以及無法發出通知的 host 上的項目，都放在這裡。
+等待使用者處理的項目：要不要接管的內容、與 repo 不同的 dotfile、等待執行的腳本。詢問模式下的項目，以及無法發出通知的 host 上的項目，都放在這裡。
 _Avoid_: inbox, pending list
 
 **Snapshot**（快照）:

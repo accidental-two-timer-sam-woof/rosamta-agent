@@ -26,6 +26,10 @@
 
 - `dotfile-deploy`: 新增 `create` 部署方式。
 - `apply`: 套用流程加入 externals 與 scripts 的步驟。
+- `host-config`: 新增 `scripts` 偏好。
+- `review-queue`: 新增腳本項目。
+- `daemon`: 背景服務的 externals 與腳本。
+- `notifications`: 腳本項目的通知。
 
 ## Impact
 
