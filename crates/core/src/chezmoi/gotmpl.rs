@@ -56,6 +56,9 @@ enum Piece {
     Action(Action),
 }
 
+/// The white space Go's trim markers remove: not the rest of Unicode's.
+const SPACE: [char; 4] = [' ', '\t', '\n', '\r'];
+
 /// Text and actions, the trim markers applied.
 fn split(source: &str) -> Parsed<Vec<Piece>> {
     let mut pieces = Vec::new();
@@ -65,12 +68,12 @@ fn split(source: &str) -> Parsed<Vec<Piece>> {
     while let Some(start) = rest.find("{{") {
         let mut text = &rest[..start];
         if trim_next {
-            text = text.trim_start();
+            text = text.trim_start_matches(SPACE);
         }
         let after = &rest[start + 2..];
-        let trim_before = after.starts_with('-') && after[1..].starts_with([' ', '\t', '\n', '\r']);
+        let trim_before = after.starts_with('-') && after[1..].starts_with(SPACE);
         if trim_before {
-            text = text.trim_end();
+            text = text.trim_end_matches(SPACE);
         }
         line += rest[..start].matches('\n').count();
         let inner_start = if trim_before { 1 } else { 0 };
@@ -79,21 +82,25 @@ fn split(source: &str) -> Parsed<Vec<Piece>> {
         };
         let inner = &after[inner_start..inner_start + end];
         let (body, trim_after) = match inner.strip_suffix('-') {
-            Some(body) if body.ends_with([' ', '\t', '\n', '\r']) => (body, true),
+            Some(body) if body.ends_with(SPACE) => (body, true),
             _ => (inner, false),
         };
         if !text.is_empty() {
             pieces.push(Piece::Text(text.to_string()));
         }
         pieces.push(Piece::Action(Action {
-            body: body.trim().to_string(),
+            body: body.trim_matches(SPACE).to_string(),
             line,
         }));
         line += inner.matches('\n').count();
         rest = &after[inner_start + end + 2..];
         trim_next = trim_after;
     }
-    let text = if trim_next { rest.trim_start() } else { rest };
+    let text = if trim_next {
+        rest.trim_start_matches(SPACE)
+    } else {
+        rest
+    };
     if !text.is_empty() {
         pieces.push(Piece::Text(text.to_string()));
     }
@@ -433,6 +440,22 @@ mod tests {
                     line: 3
                 },
                 Node::Text("\n".into()),
+            ]
+        );
+        // Go trims only ASCII space, tab and line ends, as chezmoi 2.74 does.
+        assert_eq!(
+            parse("a\u{3000}{{- \"x\" -}}\u{a0}b\u{c}{{- .y }}").unwrap(),
+            [
+                Node::Text("a\u{3000}".into()),
+                Node::Output {
+                    expr: Expr::Str("x".into()),
+                    line: 1
+                },
+                Node::Text("\u{a0}b\u{c}".into()),
+                Node::Output {
+                    expr: field("y"),
+                    line: 1
+                },
             ]
         );
         // `{{-3}}` is the number -3, not a trim marker.
