@@ -946,6 +946,7 @@ limitations under the License.
 - rosamta 0.1.0-rc.1
 - rosamta-core 0.1.0-rc.1
 - rosamta-gui 0.1.0-rc.1
+- constant_time_eq 0.6.1
 - gpui-kit-assets 0.9.1
 - gpui-kit 0.9.1
 - rpassword 7.5.4
@@ -3847,6 +3848,7 @@ DEALINGS IN THE SOFTWARE.
 - backtrace 0.3.77
 - cc 1.11.1
 - cfg-if 1.0.5
+- filetime 0.2.29
 - find-msvc-tools 0.1.15
 - openssl-probe 0.2.2
 - pkg-config 0.3.34
@@ -8091,6 +8093,39 @@ DEALINGS IN THE SOFTWARE.
 
 ## MIT License
 
+- tar 0.4.46
+
+```
+Copyright (c) The tar-rs Project Contributors
+
+Permission is hereby granted, free of charge, to any
+person obtaining a copy of this software and associated
+documentation files (the "Software"), to deal in the
+Software without restriction, including without
+limitation the rights to use, copy, modify, merge,
+publish, distribute, sublicense, and/or sell copies of
+the Software, and to permit persons to whom the Software
+is furnished to do so, subject to the following
+conditions:
+
+The above copyright notice and this permission notice
+shall be included in all copies or substantial portions
+of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF
+ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED
+TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A
+PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT
+SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY
+CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION
+OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR
+IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
+DEALINGS IN THE SOFTWARE.
+
+```
+
+## MIT License
+
 - arrayvec 0.7.8
 
 ```
@@ -10008,6 +10043,7 @@ DEALINGS IN THE SOFTWARE.
 - thiserror-impl 2.0.21
 - thiserror 1.0.69
 - thiserror 2.0.21
+- typed-path 0.13.0
 - unic-langid-impl 0.9.6
 - unic-langid 0.9.6
 - unicode-ident 1.0.27
@@ -10221,6 +10257,7 @@ SOFTWARE.
 ## MIT License
 
 - tracing-core 0.1.36
+- zip 9.5.1
 
 ```
 The MIT License (MIT)
@@ -10386,6 +10423,35 @@ THE SOFTWARE.
 The MIT License (MIT)
 
 Copyright (c) 2015 Andrew Gallant
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in
+all copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
+THE SOFTWARE.
+
+```
+
+## MIT License
+
+- nix 0.31.3
+
+```
+The MIT License (MIT)
+
+Copyright (c) 2015 Carl Lerche + nix-rust Authors
 
 Permission is hereby granted, free of charge, to any person obtaining a copy
 of this software and associated documentation files (the "Software"), to deal
