@@ -367,7 +367,11 @@ pub fn include(ctx: &Context, items: &[Item], changes: &[FileChange]) -> Result<
         }
         written = true;
         for change in changes {
-            crate::edit::write_atomic(&change.path, change.after.as_deref().unwrap_or_default())?;
+            crate::adopt::replace(
+                &change.path,
+                change.before.as_deref(),
+                Some(change.after.as_deref().unwrap_or_default()),
+            )?;
         }
         Ok(())
     };
@@ -389,9 +393,10 @@ pub fn include(ctx: &Context, items: &[Item], changes: &[FileChange]) -> Result<
     if let Err(err) = apply::apply_after(ctx, &shells, write) {
         if written {
             for change in changes {
-                let _ = crate::edit::write_atomic(
+                let _ = crate::adopt::replace(
                     &change.path,
-                    change.before.as_deref().unwrap_or_default(),
+                    Some(change.after.as_deref().unwrap_or_default()),
+                    Some(change.before.as_deref().unwrap_or_default()),
                 );
             }
         }

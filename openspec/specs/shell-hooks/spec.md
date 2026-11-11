@@ -21,7 +21,7 @@ rosamta SHALL 在下列位置安裝 hook：sh 為 `~/.profile`；bash 為 `~/.ba
 - **THEN** rosamta 建立 `conf.d/rosamta.fish`，不修改 `config.fish`
 
 ### Requirement: Marked block only
-hook SHALL 是以 `# >>> rosamta >>>` 與 `# <<< rosamta <<<` 包住的區塊。rosamta 安裝或更新 hook 時 SHALL 只改動這個區塊，重複安裝 SHALL 不產生第二個區塊。檔案中的開始與結束標記不成對時，rosamta SHALL 不修改該檔，並指出該檔。
+hook SHALL 是以 `# >>> rosamta >>>` 與 `# <<< rosamta <<<` 包住的區塊。rosamta 安裝或更新 hook 時 SHALL 只改動這個區塊，重複安裝 SHALL 不產生第二個區塊。檔案中的開始與結束標記不成對時，rosamta SHALL 不修改該檔，並指出該檔。寫入 rc 檔的最後一刻，rosamta SHALL 再確認檔案仍是先前讀到的內容；內容已不同時 SHALL 不寫入，並指出該檔。
 
 #### Scenario: Install twice
 - **WHEN** 使用者連續執行兩次 hook 安裝
@@ -30,6 +30,10 @@ hook SHALL 是以 `# >>> rosamta >>>` 與 `# <<< rosamta <<<` 包住的區塊。
 #### Scenario: End marker deleted
 - **WHEN** 使用者刪掉 `# <<< rosamta <<<` 這一行後執行 `rsmt apply`
 - **THEN** `rsmt apply` 以 2 結束並指出該檔，檔案內容不變
+
+#### Scenario: Installer appends during the write
+- **WHEN** 安裝程式在 rosamta 寫入 `~/.zshrc` 的同時附加一行
+- **THEN** 該行保留在 `~/.zshrc`，rosamta 不寫入並指出該檔
 
 ### Requirement: bash login and non-login shells
 bash 的 login 互動 shell 與非 login 互動 shell SHALL 都載入完整的設定。rosamta 需要新建 `~/.bash_profile` 時 SHALL 讓它同時載入 `~/.profile` 與 `~/.bashrc`，避免遮蔽原本的設定。
