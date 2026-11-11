@@ -231,7 +231,6 @@ fn check(files: &[Added], hosts: &[String], allowed: &Allowed) -> Vec<Hit> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::adopt::secret_rule;
 
     #[test]
     fn changed_ciphertext_is_not_a_secret() {
