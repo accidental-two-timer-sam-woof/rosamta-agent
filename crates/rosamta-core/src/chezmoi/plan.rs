@@ -131,16 +131,26 @@ fn join(dir: &str, name: &str) -> String {
     }
 }
 
-fn names(dir: &Path) -> Result<Vec<(String, bool)>> {
+/// The names in `dir`, sorted, with whether each is a directory and whether
+/// it is a symlink (never followed).
+fn names(dir: &Path) -> Result<Vec<(String, bool, bool)>> {
     let mut names = Vec::new();
     for entry in std::fs::read_dir(dir).map_err(Error::read(dir))? {
         let entry = entry.map_err(Error::read(dir))?;
         let name = entry.file_name().to_string_lossy().into_owned();
-        let is_dir = entry.file_type().map_err(Error::read(dir))?.is_dir();
-        names.push((name, is_dir));
+        let kind = entry.file_type().map_err(Error::read(dir))?;
+        names.push((name, kind.is_dir(), kind.is_symlink()));
     }
     names.sort();
     Ok(names)
+}
+
+/// chezmoi refuses a source whose names make `.`, `..` or nothing.
+fn valid(name: &str, source: &str) -> Result<()> {
+    if matches!(name, "" | "." | "..") {
+        return Err(Error::Usage(format!("{source}: invalid name")));
+    }
+    Ok(())
 }
 
 /// Every item under `source` (relative to the root), in chezmoi's order.
@@ -153,20 +163,31 @@ fn collect(
     out: &mut Vec<Entry>,
 ) -> Result<bool> {
     let mut managed = false;
-    for (name, is_dir) in names(&root.join(source))? {
+    for (name, is_dir, is_link) in names(&root.join(source))? {
         let source_path = join(source, &name);
-        if name.starts_with('.') && !external {
+        let special = name.starts_with('.') && !external;
+        // Its content is outside the source: not read, not copied.
+        if is_link && !special {
+            out.push(Entry::Special {
+                source: source_path,
+                reason: Reason::Link,
+            });
+            managed = true;
+            continue;
+        }
+        if special {
             match (name.as_str(), is_dir) {
                 (".chezmoiscripts", true) => {
-                    managed |= collect(root, &source_path, target, false, suffix, out)?;
+                    let scripts = join(target, ".chezmoiscripts");
+                    managed |= collect(root, &source_path, &scripts, false, suffix, out)?;
                 }
                 (".chezmoiignore", false) => out.push(Entry::Ignore {
                     source: source_path,
                     target_dir: target.to_string(),
                 }),
                 (".chezmoiexternals", true) => {
-                    for (file, is_dir) in names(&root.join(&source_path))? {
-                        if !is_dir {
+                    for (file, is_dir, is_link) in names(&root.join(&source_path))? {
+                        if !is_dir && !is_link {
                             out.push(Entry::Externals {
                                 source: join(&source_path, &file),
                                 target_dir: target.to_string(),
@@ -194,6 +215,7 @@ fn collect(
             } else {
                 attrs::parse_dir(&name)
             };
+            valid(&name, &source_path)?;
             let dir_target = join(target, &name);
             let has_keep = root.join(&source_path).join(".keep").exists();
             let inner = collect(
@@ -227,6 +249,7 @@ fn collect(
         } else {
             attrs::parse_file(&name, suffix)
         };
+        valid(&name, &source_path)?;
         managed = true;
         out.push(Entry::File {
             source: source_path,
@@ -240,21 +263,26 @@ fn collect(
 /// `.chezmoidata.toml`/`.json` and `.chezmoidata/`; other formats are
 /// reported.
 fn shared_data(root: &Path, report: &mut Report) -> Result<Map<String, Value>> {
-    let mut files: Vec<String> = names(root)?
+    let mut files: Vec<(String, bool)> = names(root)?
         .into_iter()
-        .filter(|(name, is_dir)| !is_dir && name.starts_with(".chezmoidata."))
-        .map(|(name, _)| name)
+        .filter(|(name, is_dir, _)| !is_dir && name.starts_with(".chezmoidata."))
+        .map(|(name, _, is_link)| (name, is_link))
         .collect();
     if root.join(".chezmoidata").is_dir() {
         files.extend(
             names(&root.join(".chezmoidata"))?
                 .into_iter()
-                .filter(|(_, is_dir)| !is_dir)
-                .map(|(name, _)| format!(".chezmoidata/{name}")),
+                .filter(|(_, is_dir, _)| !is_dir)
+                .map(|(name, _, is_link)| (format!(".chezmoidata/{name}"), is_link)),
         );
     }
     let mut data = Map::new();
-    for file in files {
+    for (file, is_link) in files {
+        // Its values could end up in the repo.
+        if is_link {
+            report.push(&file, None, Outcome::Manual, Reason::Link, None);
+            continue;
+        }
         match read_data(&root.join(&file))? {
             Some(Value::Object(map)) => data.extend(map),
             _ => report.push(&file, None, Outcome::Manual, Reason::Format, None),
@@ -457,8 +485,18 @@ impl Planner<'_> {
             .push(source, target, outcome, reason, detail);
     }
 
-    /// Not imported: keep the source in the repo for the user to convert.
+    /// Not imported: keep the source in the repo for the user to convert,
+    /// unless it looks like a secret.
     fn aside(&mut self, source: &str, target: &str, reason: Reason, detail: Option<String>) {
+        let secret = self
+            .read(source)
+            .ok()
+            .and_then(|bytes| crate::adopt::secret_rule(&String::from_utf8_lossy(&bytes)));
+        if let Some(rule) = secret {
+            let rule = Some(rule.to_string());
+            self.report(source, Some(target), Outcome::Manual, Reason::Secret, rule);
+            return;
+        }
         self.report(source, Some(target), Outcome::Manual, reason, detail);
         self.plan.aside.push(source.to_string());
     }
@@ -583,10 +621,15 @@ impl Planner<'_> {
                 return Ok(());
             };
             match convert::file(&text, &self.machine) {
+                // chezmoi writes an `empty_` file where its condition does not hold.
+                Ok(converted) if attrs.empty && converted.scope != Scope::default() => {
+                    self.aside(source, target, Reason::Scope, None);
+                    return Ok(());
+                }
                 Ok(converted) => {
                     scope = scope.and(&converted.scope);
                     bytes = converted.text.clone().into_bytes();
-                    template = Some(converted);
+                    template = Some((text, converted));
                 }
                 Err(err) => {
                     let detail = format!("line {}: {}", err.line, err.what);
@@ -597,7 +640,7 @@ impl Planner<'_> {
         }
         let still_template = template
             .as_ref()
-            .is_some_and(|converted| converted.template);
+            .is_some_and(|(_, converted)| converted.template);
         if scope.is_empty() || (!attrs.empty && !still_template && bytes.trim_ascii().is_empty()) {
             self.report(source, Some(target), Outcome::Skipped, Reason::Empty, None);
             return Ok(());
@@ -620,9 +663,9 @@ impl Planner<'_> {
         };
         let when = when.unwrap_or_default();
         let entry = self.entry(target, attrs, still_template, when);
-        if let Some(converted) = &template {
-            if still_template && !self.same_as_chezmoi(source, target, &entry, converted)? {
-                self.aside(source, target, Reason::Differs, None);
+        if let Some((original, converted)) = &template {
+            if let Some(reason) = self.compare(original, &entry, attrs.empty, converted)? {
+                self.aside(source, target, reason, None);
                 return Ok(());
             }
             self.used(source, target, converted);
@@ -661,7 +704,7 @@ impl Planner<'_> {
         } else if self.inputs.config.symlink
             && !attrs.encrypted
             && !attrs.private
-            && !attrs.readonly
+            && !attrs.executable
         {
             Deploy::Link
         } else {
@@ -712,8 +755,7 @@ impl Planner<'_> {
                 Some(detail),
             );
         }
-        let text = without_tags(&converted.text);
-        if converted.template && text.trim().is_empty() {
+        if converted.may_be_empty {
             self.report(
                 source,
                 Some(target),
@@ -724,18 +766,18 @@ impl Planner<'_> {
         }
     }
 
-    /// Whether the converted template renders here as `chezmoi cat` does.
-    /// Templates that read secrets are not rendered, nor ones that do not
-    /// apply here.
-    fn same_as_chezmoi(
+    /// Where the converted template does not give what chezmoi gives here:
+    /// `Differs`, or `MayBeEmpty` where chezmoi writes no file. Templates
+    /// that read secrets are not rendered, nor ones that do not apply here.
+    fn compare(
         &self,
-        source: &str,
-        target: &str,
+        original: &str,
         entry: &Dotfile,
+        empty: bool,
         converted: &Converted,
-    ) -> Result<bool> {
+    ) -> Result<Option<Reason>> {
         let (Some(chezmoi), false) = (self.inputs.chezmoi, converted.uses.secrets) else {
-            return Ok(true);
+            return Ok(None);
         };
         let mut host = self.inputs.host.clone();
         for name in &converted.uses.vars {
@@ -747,46 +789,26 @@ impl Planner<'_> {
             }
         }
         if !entry.when.matches(&HostFacts::current(&host)) {
-            return Ok(true);
+            return Ok(None);
         }
-        let ctx = self.inputs.ctx;
-        let secrets = ctx.secrets(&host)?;
-        let Ok(ours) = crate::template::render(source, &converted.text, &host, &ctx.home, &secrets)
-        else {
-            return Ok(false);
+        // Only this text: chezmoi reads no other template or external.
+        let Ok(theirs) = chezmoi.render(original.as_bytes()) else {
+            return Ok(Some(Reason::Differs));
         };
-        let theirs = chezmoi.cat(&ctx.home.join(target))?;
-        Ok(ours.as_bytes() == theirs.as_slice())
-    }
-}
-
-/// The text outside tags, to tell a template that may render nothing.
-fn without_tags(text: &str) -> String {
-    let mut out = String::new();
-    let mut rest = text;
-    while let Some(start) = rest.find(['{']) {
-        out.push_str(&rest[..start]);
-        let tail = &rest[start..];
-        if let Some(raw) = tail.strip_prefix("{% raw %}") {
-            let end = raw.find("{% endraw %}").unwrap_or(raw.len());
-            out.push_str(&raw[..end]);
-            rest = raw.get(end + "{% endraw %}".len()..).unwrap_or_default();
-            continue;
+        if !empty && theirs.trim_ascii().is_empty() {
+            return Ok(Some(Reason::MayBeEmpty));
         }
-        let close = if tail.starts_with("{%") {
-            "%}"
-        } else if tail.starts_with("{{") {
-            "}}"
+        let ours = if converted.template {
+            let ctx = self.inputs.ctx;
+            let secrets = ctx.secrets(&host)?;
+            match crate::template::render(&entry.path, &converted.text, &host, &ctx.home, &secrets)
+            {
+                Ok(text) => text,
+                Err(_) => return Ok(Some(Reason::Differs)),
+            }
         } else {
-            out.push('{');
-            rest = &tail[1..];
-            continue;
+            converted.text.clone()
         };
-        match tail.find(close) {
-            Some(end) => rest = &tail[end + 2..],
-            None => return out,
-        }
+        Ok((ours.as_bytes() != theirs.as_slice()).then_some(Reason::Differs))
     }
-    out.push_str(rest);
-    out
 }

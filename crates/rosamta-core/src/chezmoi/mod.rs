@@ -1,6 +1,7 @@
 //! Importing a chezmoi source directory: its files, templates, scripts and
 //! externals become rosamta declarations.
 
+use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
@@ -40,14 +41,31 @@ impl Chezmoi {
     }
 
     fn output(&self, args: &[&str]) -> Result<Vec<u8>> {
+        self.run(args, None)
+    }
+
+    fn run(&self, args: &[&str], input: Option<&[u8]>) -> Result<Vec<u8>> {
         let mut cmd = Command::new(&self.program);
-        cmd.args(&self.args).args(args).stderr(Stdio::piped());
-        if !self.terminal {
+        cmd.args(&self.args)
+            .args(args)
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped());
+        if input.is_some() {
+            cmd.stdin(Stdio::piped());
+        } else if !self.terminal {
             cmd.stdin(Stdio::null());
         }
-        let out = cmd
-            .output()
-            .map_err(|err| Error::Usage(format!("cannot run chezmoi: {err}")))?;
+        let cannot = |err: std::io::Error| Error::Usage(format!("cannot run chezmoi: {err}"));
+        let mut child = cmd.spawn().map_err(cannot)?;
+        let stdin = child.stdin.take();
+        // Written alongside reading, so a large output cannot block it.
+        let out = std::thread::scope(|scope| {
+            if let (Some(mut stdin), Some(input)) = (stdin, input) {
+                scope.spawn(move || stdin.write_all(input));
+            }
+            child.wait_with_output()
+        })
+        .map_err(cannot)?;
         if !out.status.success() {
             let stderr = String::from_utf8_lossy(&out.stderr);
             return Err(Error::Usage(format!(
@@ -73,8 +91,9 @@ impl Chezmoi {
         self.output(&["decrypt", &file.display().to_string()])
     }
 
-    fn cat(&self, target: &Path) -> Result<Vec<u8>> {
-        self.output(&["cat", &target.display().to_string()])
+    /// `text` rendered as chezmoi renders a template.
+    fn render(&self, text: &[u8]) -> Result<Vec<u8>> {
+        self.run(&["execute-template"], Some(text))
     }
 }
 
@@ -98,11 +117,22 @@ pub fn source_dir(ctx: &Context, options: &Options) -> Result<PathBuf> {
             dir.display()
         )));
     }
-    let root = dir.join(".chezmoiroot");
-    Ok(match std::fs::read_to_string(&root) {
-        Ok(sub) => dir.join(sub.trim()),
-        Err(_) => dir,
-    })
+    let Ok(sub) = std::fs::read_to_string(dir.join(".chezmoiroot")) else {
+        return Ok(dir);
+    };
+    // As chezmoi: a relative path inside the source.
+    let sub = Path::new(sub.trim());
+    let inside = sub
+        .components()
+        .all(|part| matches!(part, std::path::Component::Normal(_)));
+    let root = dir.join(sub);
+    if !inside || !root.is_dir() || root.is_symlink() {
+        return Err(Error::Usage(format!(
+            "{}: .chezmoiroot must name a directory inside the source",
+            dir.display()
+        )));
+    }
+    Ok(root)
 }
 
 /// Whether importing `source` would need the repo's key: some files are
@@ -116,7 +146,8 @@ pub fn needs_key(source: &Path) -> Result<bool> {
             if name.starts_with('.') {
                 continue;
             }
-            if entry.path().is_dir() {
+            // Symlinks are not followed, as the import does not follow them.
+            if entry.file_type().map_err(Error::read(&dir))?.is_dir() {
                 stack.push(entry.path());
             } else if name.contains("encrypted_") {
                 return Ok(true);

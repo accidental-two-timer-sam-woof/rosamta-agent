@@ -152,7 +152,7 @@ pub fn parse_file(name: &str, suffix: &str) -> (String, FileAttrs) {
         }
         attrs.executable = name.take("executable_");
     }
-    let dot = !matches!(kind, FileKind::Script(_)) && name.take("dot_");
+    let dot = name.take("dot_");
     // The encryption suffix comes off before the others.
     let mut rest = name.name;
     if attrs.encrypted {
@@ -261,8 +261,9 @@ mod tests {
                 before: false
             })
         );
-        // A script keeps a name that looks like an attribute.
-        assert_eq!(target("run_once_dot_a.sh"), "dot_a.sh");
+        // A script takes `dot_` and keeps names that look like other attributes.
+        assert_eq!(target("run_once_dot_a.sh"), ".a.sh");
+        assert_eq!(target("run_once_private_a.sh"), "private_a.sh");
     }
 
     #[test]
