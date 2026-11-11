@@ -29,22 +29,24 @@ fn known_format(text: &str) -> Option<&'static str> {
 }
 
 /// `NAME=literal` (POSIX), `NAME = "literal"` (TOML, key maybe quoted) or
-/// `set ... NAME literal` (fish): a value with no expansion in it, which a
+/// `set ... NAME literal` (fish): a value with no expansion in it (an
+/// escaped `\$` is none), which a
 /// secret-looking name makes suspicious. With spaces around `=` only a
 /// quoted value counts, so INI lines such as `signingkey = ABCD` do not.
 fn literal_assignments() -> &'static [Regex; 2] {
     static RULES: OnceLock<[Regex; 2]> = OnceLock::new();
     RULES.get_or_init(|| {
-        let quoted = r#"(?:'[^']+'|"[^"$`\\]+")"#;
-        let value = format!(r#"(?:{quoted}|[^\s'"$`\\;()]+)"#);
+        let quoted = r#"(?:'[^']+'|"(?:[^"$`\\]|\\.)+")"#;
+        let value = format!(r#"(?:{quoted}|(?:[^\s'"$`\\;()]|\\.)+)"#);
+        let start = r"(?m)^\s*";
         let end = r"\s*(?:;|#|$)";
         [
             Regex::new(&format!(
-                r#"(?m)^\s*(?:export\s+)?["']?([A-Za-z_][A-Za-z0-9_]*)["']?(?:={value}|\s*=\s*{quoted}){end}"#
+                r#"{start}(?:export\s+)?["']?([A-Za-z_][A-Za-z0-9_]*)["']?(?:={value}|\s*=\s*{quoted}){end}"#
             ))
             .unwrap(),
             Regex::new(&format!(
-                r"(?m)^\s*set\s+(?:-{{1,2}}[A-Za-z]+\s+)*([A-Za-z_][A-Za-z0-9_]*)\s+{value}{end}"
+                r"{start}set\s+(?:-{{1,2}}[A-Za-z]+\s+)*([A-Za-z_][A-Za-z0-9_]*)\s+{value}{end}"
             ))
             .unwrap(),
         ]
@@ -55,6 +57,10 @@ const SECRET_NAMES: [&str; 4] = ["KEY", "TOKEN", "SECRET", "PASSWORD"];
 /// Shannon entropy above this, over at least `MIN_LEN` characters, is suspicious.
 const MIN_ENTROPY: f64 = 4.0;
 const MIN_LEN: usize = 20;
+/// Paths hold `/` too, so a token with one must look more random: base64
+/// keys do, words joined by `/` stay below.
+const MIN_SLASHED_ENTROPY: f64 = 4.5;
+const MIN_SLASHED_LEN: usize = 32;
 
 /// Whether `text` holds what looks like a secret.
 pub fn looks_secret(text: &str) -> bool {
@@ -69,18 +75,54 @@ pub fn secret_rule(text: &str) -> Option<&'static str> {
 }
 
 fn secret_name(text: &str) -> bool {
-    literal_assignments().iter().any(|rule| {
-        rule.captures_iter(text).any(|caps| {
-            let name = caps[1].to_ascii_uppercase();
-            SECRET_NAMES.iter().any(|word| name.contains(word))
+    // A command after `;`, `&&` or `||` is checked as a line of its own too.
+    let commands = text
+        .lines()
+        .flat_map(|line| line.split(';'))
+        .flat_map(|part| part.split("&&"))
+        .flat_map(|part| part.split("||"));
+    std::iter::once(text).chain(commands).any(|text| {
+        literal_assignments().iter().any(|rule| {
+            rule.captures_iter(text).any(|caps| {
+                let name = caps[1].to_ascii_uppercase();
+                SECRET_NAMES.iter().any(|word| name.contains(word))
+            })
         })
     })
 }
 
 fn high_entropy(text: &str) -> bool {
     text.split(|c: char| !(c.is_ascii_alphanumeric() || "+/=_-.".contains(c)))
-        .filter(|token| token.len() >= MIN_LEN && !token.contains('/'))
-        .any(|token| entropy(token) > MIN_ENTROPY)
+        .filter(|token| token.len() >= MIN_LEN)
+        .any(|token| match token.contains('/') {
+            false => entropy(token) > MIN_ENTROPY,
+            true => {
+                // `NAME=value` is judged by its value.
+                let value = match token.split_once('=') {
+                    Some((name, value))
+                        if !name.is_empty()
+                            && name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_') =>
+                    {
+                        value
+                    }
+                    _ => token,
+                };
+                !path_like(value)
+                    && value.len() >= MIN_SLASHED_LEN
+                    && entropy(value) > MIN_SLASHED_ENTROPY
+            }
+        })
+}
+
+/// `/usr/bin`, `~/.cargo`, `HOME/.local/share` (what `$HOME/...` leaves):
+/// a path, whatever its letters.
+fn path_like(token: &str) -> bool {
+    let first = token.split('/').next().unwrap_or_default();
+    token.starts_with(['/', '~', '.'])
+        || first
+            .chars()
+            .all(|c| c.is_ascii_uppercase() || c.is_ascii_digit() || c == '_')
+        || token.split('/').any(|part| part.starts_with('.'))
 }
 
 fn entropy(token: &str) -> f64 {
@@ -130,6 +172,10 @@ mod tests {
         assert!(looks_secret("export MY_API_KEY=abc123"));
         assert!(looks_secret("export DB_PASSWORD='hunter2'"));
         assert!(looks_secret("set -gx SERVICE_TOKEN abc"));
+        assert!(looks_secret("cd ~; export API_TOKEN=abc123"));
+        assert!(looks_secret("export A=1; export API_TOKEN=abc123"));
+        assert!(looks_secret("true && set -gx SERVICE_TOKEN abc"));
+        assert!(looks_secret(r#"export DB_PASSWORD="S3cure\$Pass!2024""#));
         assert!(!looks_secret(
             "export GITHUB_TOKEN=\"$(cat ~/.config/gh/token)\""
         ));
@@ -162,6 +208,9 @@ mod tests {
     #[test]
     fn high_entropy_literals() {
         assert!(looks_secret("export X=Zk3q9LmP2vR8tY6wB1nC4xJ7"));
+        assert!(looks_secret(
+            "aws_secret_access_key = wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY"
+        ));
         assert!(!looks_secret(
             "export PATH=\"$HOME/.local/share/pnpm:$PATH\""
         ));
@@ -177,6 +226,10 @@ mod tests {
             "eval \"$(/home/linuxbrew/.linuxbrew/bin/brew shellenv bash)\"",
             "export NVM_DIR=\"$HOME/.nvm\"",
             "source ~/.orbstack/shell/init.zsh 2>/dev/null || :",
+            "export PROJECT=~/Code/TheProjectName/SubModule/Thing",
+            "zinit light romkatv/powerlevel10k/powerlevel10k.zsh-theme",
+            "export GOPRIVATE=github.com/OrgName/RepoName",
+            "export ANDROID_HOME=$HOME/Library/Android/sdk",
         ] {
             assert!(!looks_secret(text), "{text}");
         }
