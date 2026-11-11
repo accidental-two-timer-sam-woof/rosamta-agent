@@ -9,7 +9,10 @@ use assert_cmd::Command;
 
 /// Variables that would point rosamta, a shell or git outside this HOME;
 /// git sets the last ones for a hook that runs tests.
-const OUTSIDE: [&str; 20] = [
+const OUTSIDE: [&str; 22] = [
+    // No session bus: the daemon under test never reaches a real notification service.
+    "DBUS_SESSION_BUS_ADDRESS",
+    "XDG_RUNTIME_DIR",
     "XDG_CONFIG_HOME",
     "XDG_DATA_HOME",
     "XDG_STATE_HOME",

@@ -41,7 +41,10 @@ pub fn run() -> Result<ExitCode> {
         notify::run_app();
     }
     #[cfg(target_os = "linux")]
-    let notifier: Box<dyn Notifier> = Box::new(notify::Desktop::new(lang, events.clone()));
+    let notifier: Box<dyn Notifier> = match notify::session_bus() {
+        true => Box::new(notify::Desktop::new(lang, events.clone())),
+        false => Box::new(notify::Silent),
+    };
     #[cfg(not(target_os = "linux"))]
     let notifier: Box<dyn Notifier> = {
         let _ = lang;
