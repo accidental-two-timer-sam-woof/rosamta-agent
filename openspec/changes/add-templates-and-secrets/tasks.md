@@ -28,4 +28,4 @@
 ## 5. 驗證
 
 - [x] 5.1 以假的 rbw、bw、bws 與秘密指令（PATH 中的腳本）做整合測試，涵蓋鎖住、非互動與背景服務的情況
-- [ ] 5.2 跑完 fmt、clippy、全部測試、8 個 Linux distro 與 `cargo deny`，更新 THIRD_PARTY_NOTICES 與 README，列出所有使用者看得到的文字供審閱
+- [x] 5.2 跑完 fmt、clippy、全部測試、8 個 Linux distro 與 `cargo deny`，更新 THIRD_PARTY_NOTICES 與 README，列出所有使用者看得到的文字供審閱

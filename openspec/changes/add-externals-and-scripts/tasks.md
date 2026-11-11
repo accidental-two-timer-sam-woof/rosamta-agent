@@ -26,7 +26,7 @@
 
 ## 5. 驗證
 
-- [ ] 5.1 跑完 fmt、clippy、全部測試、8 個 Linux distro 與 `cargo deny`，更新 THIRD_PARTY_NOTICES、GLOSSARY，列出所有使用者看得到的文字供審閱
+- [x] 5.1 跑完 fmt、clippy、全部測試、8 個 Linux distro 與 `cargo deny`，更新 THIRD_PARTY_NOTICES、GLOSSARY，列出所有使用者看得到的文字供審閱
 
 ## Workflow follow-up
 
