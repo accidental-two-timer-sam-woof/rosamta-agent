@@ -52,6 +52,22 @@ pub struct Module {
     pub raw: Raw,
 }
 
+impl Module {
+    /// The shells it loads in: those listed (every shell when none are),
+    /// and for raw code alone only the shells it is written for.
+    pub fn reaches(&self) -> Vec<Shell> {
+        let structured = !self.env.is_empty()
+            || !self.path.prepend.is_empty()
+            || !self.path.append.is_empty()
+            || !self.aliases.is_empty();
+        Shell::ALL
+            .into_iter()
+            .filter(|&shell| self.shells.is_empty() || self.shells.contains(&shell))
+            .filter(|&shell| structured || self.raw.get(shell).is_some())
+            .collect()
+    }
+}
+
 #[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct PathEntries {

@@ -371,20 +371,21 @@ pub fn include(ctx: &Context, items: &[Item], changes: &[FileChange]) -> Result<
         }
         Ok(())
     };
-    // Only modules reach shell scripts; one limited to no shell loads in all.
-    let modules: Vec<&Item> = items
+    // Only modules reach shell scripts.
+    let loaded = apply::load_modules(&ctx.paths.repo())?;
+    let shells: Vec<Shell> = items
         .iter()
         .filter(|item| item.kind == Kind::Module)
+        .flat_map(|item| {
+            let reached = match loaded.iter().find(|(name, _)| *name == item.name) {
+                Some((_, module)) => module.reaches(),
+                None => Shell::ALL.to_vec(),
+            };
+            reached
+                .into_iter()
+                .chain(item.widening.shells.iter().copied())
+        })
         .collect();
-    let shells: Vec<Shell> = if modules.iter().any(|item| item.shells.is_empty()) {
-        Shell::ALL.to_vec()
-    } else {
-        modules
-            .iter()
-            .flat_map(|item| item.shells.iter().chain(&item.widening.shells))
-            .copied()
-            .collect()
-    };
     if let Err(err) = apply::apply_after(ctx, &shells, write) {
         if written {
             for change in changes {
