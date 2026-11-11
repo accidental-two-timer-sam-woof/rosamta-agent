@@ -59,9 +59,10 @@ fn literal_assignments() -> &'static [Regex; 2] {
 }
 
 /// A quoted literal (`$'...'` too), and a quoted or bare one: no expansion
-/// inside.
-const QUOTED: &str = r#"(?:\$?'[^']+'|"(?:[^"$`\\]|\\.)+")"#;
-const VALUE: &str = r#"(?:\$?'[^']+'|"(?:[^"$`\\]|\\.)+"|(?:[^\s'"$`\\;()]|\\.)+)"#;
+/// inside. In double quotes a `$` expands only before a name, `{`, `(` or a
+/// special parameter; `"Summer2024$"` is a literal.
+const QUOTED: &str = r#"(?:\$?'[^']+'|"(?:[^"$`\\]|\\.|\$[^A-Za-z0-9_{(?!#@*$"\\`=^~+-])+\$?")"#;
+const VALUE: &str = r#"(?:\$?'[^']+'|"(?:[^"$`\\]|\\.|\$[^A-Za-z0-9_{(?!#@*$"\\`=^~+-])+\$?"|(?:[^\s'"$`\\;()]|\\.)+)"#;
 
 /// Every `NAME=literal` word in `command` with its value, as in
 /// `export A=1 TOKEN=x` or `local -r KEY=x`.
@@ -203,7 +204,7 @@ fn secret_name(text: &str) -> bool {
             .filter_map(|caps| Some((caps.get(1)?, caps.get(2).or(caps.get(3))?)))
             .any(|(name, value)| {
                 let upper = name.as_str().to_ascii_uppercase();
-                !plain(value.as_str())
+                !plain(name.as_str(), value.as_str())
                     && (SECRET_NAMES.iter().any(|word| upper.contains(word))
                         || ends_secret(name.as_str()))
             });
@@ -214,7 +215,7 @@ fn secret_name(text: &str) -> bool {
                 && assigned_words(text).any(|(name, value)| {
                     name.bytes()
                         .all(|b| b.is_ascii_uppercase() || b.is_ascii_digit() || b == b'_')
-                        && !plain(value)
+                        && !plain(name, value)
                         && (name.split('_').any(|part| SECRET_NAMES.contains(&part))
                             || ends_secret(name))
                 })
@@ -229,22 +230,32 @@ fn ends_secret(name: &str) -> bool {
         .is_some_and(|part| SECRET_ENDINGS.contains(&part))
 }
 
-/// A value no secret has, whatever its name: a short number, a switch or
-/// a path (`KEYTIMEOUT=1`, `TOKENIZERS_PARALLELISM=false`,
-/// `PASSWORD_STORE_DIR=~/.password-store`).
-fn plain(value: &str) -> bool {
+/// A value no secret has: a switch or a path whatever the name
+/// (`TOKENIZERS_PARALLELISM=false`, `PASSWORD_STORE_DIR=~/.password-store`),
+/// and a short number (`KEYTIMEOUT=1`), of four digits or more only when
+/// the name does not end in the secret's word (`DB_PASSWORD=482913`).
+fn plain(name: &str, value: &str) -> bool {
     let value = value.strip_prefix('$').unwrap_or(value);
     let value = value
         .strip_prefix(['\'', '"'])
         .and_then(|rest| rest.strip_suffix(['\'', '"']))
         .unwrap_or(value);
-    let number = value.len() <= 6 && value.bytes().all(|b| b.is_ascii_digit());
+    let upper = name.to_ascii_uppercase();
+    let last = upper.rsplit('_').next().unwrap_or_default();
+    let names_it = SECRET_NAMES
+        .iter()
+        .chain(&SECRET_ENDINGS)
+        .any(|word| last.ends_with(word));
+    let number =
+        value.len() <= if names_it { 3 } else { 6 } && value.bytes().all(|b| b.is_ascii_digit());
     let switch =
         ["true", "false", "yes", "no", "on", "off"].contains(&value.to_ascii_lowercase().as_str());
+    // Base64 starts with `/` now and then.
     let path = value == "~"
-        || ["/", "~/", "./", "../"]
+        || ["~/", "./", "../"]
             .iter()
-            .any(|start| value.starts_with(start));
+            .any(|start| value.starts_with(start))
+        || value.starts_with('/') && !keyish(value);
     number || switch || path
 }
 
@@ -272,15 +283,18 @@ pub fn unsure(text: &str) -> bool {
                 && !known_name(token)
                 && match token.contains('/') {
                     false => !token.split(['-', '_', '.', '=', '+']).all(wordish),
-                    // Base64 has no `-`, `_` or `.`; with one of them, or as
-                    // a path, the token is a file or a repo, not a key.
-                    true => {
-                        !path_like(token)
-                            && !token.contains(['-', '_', '.'])
-                            && !token.split(['/', '=', '+']).all(named)
-                    }
+                    true => !path_like(token) && keyish(token),
                 }
         })
+}
+
+/// Whether a token with a `/` could be base64: it has no `-`, `_` or `.`,
+/// which a file or a repo would, and is not made of names.
+fn keyish(token: &str) -> bool {
+    token
+        .bytes()
+        .all(|b| b.is_ascii_alphanumeric() || b"+/=".contains(&b))
+        && !token.split(['/', '=', '+']).all(named)
 }
 
 /// [`wordish`], or a word with a short number inside it (`powerlevel10k`,
@@ -536,6 +550,33 @@ mod tests {
             "export OS_AUTH_URL=https://keystone.example.com:5000/v3",
             "export FOO=1 KEY_REPEAT=2",
             "prev_pass=cur_pass",
+        ] {
+            assert!(!looks_secret(text), "{text}");
+        }
+    }
+
+    /// What the name rule lets pass by its value is still held when the value
+    /// is the secret: a PIN, base64 that starts with `/`, a `$` that stays.
+    #[test]
+    fn values_that_only_look_plain() {
+        for text in [
+            "export DB_PASSWORD=482913",
+            "export MYSQL_PWD=0042",
+            "export AWS_SECRET_ACCESS_KEY=/k7FAKEfake+bPxRfiCYFAKEKEYwJalrXUtnFAKE",
+            "export DB_PASSWORD=\"Summer2024$\"",
+            "export DB_PASSWORD=\"pa$%word1\"",
+        ] {
+            assert_eq!(secret_rule(text), Some("secret-name"), "{text}");
+        }
+        for text in [
+            "export KEYTIMEOUT=1000",
+            "export PASSWORD_STORE_CLIP_TIME=45",
+            "export DB_PASSWORD=1",
+            "export GIT_ASKPASS=/usr/bin/ksshaskpass",
+            "export SSH_KEY=/Users/me/Keys/MacBookPro",
+            "export API_TOKEN=\"$OTHER_TOKEN\"",
+            "export API_TOKEN=\"prefix-${USER}\"",
+            "export API_TOKEN=\"$(pass show api)\"",
         ] {
             assert!(!looks_secret(text), "{text}");
         }
