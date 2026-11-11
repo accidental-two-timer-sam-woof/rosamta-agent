@@ -909,7 +909,7 @@ fn changed(path: &Path) -> Error {
 
 /// Fails when `path` no longer holds `before`, so an edit made since the
 /// plan is never overwritten.
-fn unchanged(path: &Path, before: Option<&str>) -> Result<()> {
+pub(crate) fn unchanged(path: &Path, before: Option<&str>) -> Result<()> {
     let now = match std::fs::read(path) {
         Ok(bytes) => Some(bytes),
         Err(err) if err.kind() == std::io::ErrorKind::NotFound => None,

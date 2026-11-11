@@ -346,6 +346,10 @@ pub fn plan_remove(shell: Shell, env: &HookEnv) -> Result<Vec<FileChange>> {
 /// Snapshot, then write every change that does something.
 pub fn commit(changes: &[FileChange], snapshots: &Snapshots, reason: &str) -> Result<()> {
     let real: Vec<&FileChange> = changes.iter().filter(|change| !change.is_noop()).collect();
+    // An edit made after the plan (while a prompt waited) is never overwritten.
+    for change in &real {
+        crate::adopt::unchanged(&change.path, change.before.as_deref())?;
+    }
     snapshots.save(
         &real
             .iter()
@@ -370,6 +374,25 @@ pub fn commit(changes: &[FileChange], snapshots: &Snapshots, reason: &str) -> Re
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn an_edit_after_the_plan_is_kept() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join(".zshrc");
+        std::fs::write(&path, "planned\n").unwrap();
+        let change = FileChange {
+            path: path.clone(),
+            before: Some("planned\n".into()),
+            after: Some("written\n".into()),
+        };
+        std::fs::write(&path, "edited meanwhile\n").unwrap();
+        let snapshots = Snapshots::new(&dir.path().join("state"), dir.path());
+        assert!(commit(std::slice::from_ref(&change), &snapshots, "test").is_err());
+        assert_eq!(
+            std::fs::read_to_string(&path).unwrap(),
+            "edited meanwhile\n"
+        );
+    }
 
     #[test]
     fn upsert_and_strip() {
