@@ -170,6 +170,28 @@ fn git_externals_follow_the_lock_and_keep_local_edits() {
     assert_eq!(git(&omz, &["rev-parse", "HEAD"]), b);
 }
 
+/// A server that refuses commits it did not advertise leaves `--unshallow`
+/// as the way to an older locked commit past the shallow edge.
+#[test]
+fn an_older_commit_past_the_shallow_edge_is_unshallowed() {
+    let home = Home::new();
+    let (upstream, a) = home.upstream("omz", "v1\n");
+    let b = commit(&upstream, "v2\n");
+    let omz = home.at(".oh-my-zsh");
+    home.declare(&git_external(".oh-my-zsh", &upstream, &b));
+    assert_eq!(home.apply(), one(".oh-my-zsh", Action::Downloaded));
+    assert_eq!(git(&omz, &["rev-parse", "--is-shallow-repository"]), "true");
+    // Protocol v0 asks only for advertised tips: `a` alone is refused.
+    git(&omz, &["config", "protocol.version", "0"]);
+    home.declare(&git_external(".oh-my-zsh", &upstream, &a));
+    assert_eq!(home.apply(), one(".oh-my-zsh", Action::Updated));
+    assert_eq!(git(&omz, &["rev-parse", "HEAD"]), a);
+    assert_eq!(
+        git(&omz, &["rev-parse", "--is-shallow-repository"]),
+        "false"
+    );
+}
+
 #[test]
 fn existing_clones_and_strangers() {
     let home = Home::new();
