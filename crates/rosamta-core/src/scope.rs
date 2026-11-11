@@ -55,22 +55,44 @@ pub(crate) fn widen(item: &mut dyn TableLike, widening: &Widening) {
     }
 }
 
-/// Take `host` out of `hosts`. When it was the only one, the module is
-/// turned off instead, since an empty list would mean every host.
-pub(crate) fn remove_host(module: &mut dyn TableLike, host: &str) {
+/// Take `host` out of `hosts`, if another host is listed; `false` when
+/// none is, so no other host uses the module.
+pub(crate) fn remove_host(module: &mut dyn TableLike, host: &str) -> bool {
     let Some(hosts) = module
         .get_mut("when")
         .and_then(Item::as_table_like_mut)
         .and_then(|when| when.get_mut("hosts"))
         .and_then(Item::as_array_mut)
     else {
-        return;
+        return false;
     };
     if hosts.iter().all(|value| value.as_str() == Some(host)) {
-        crate::edit::set_value(module.entry("enabled").or_insert(Item::None), false);
-        return;
+        return false;
     }
     hosts.retain(|value| value.as_str() != Some(host));
+    // The new first value keeps the space it had after a comma.
+    if let Some(first) = hosts.get_mut(0) {
+        first.decor_mut().set_prefix("");
+    }
+    true
+}
+
+/// Put back the host and OS limits `every_host` dropped.
+pub(crate) fn limit(item: &mut dyn TableLike, hosts: &[String], os: &[Os]) {
+    let Some(when) = item
+        .entry("when")
+        .or_insert(toml_edit::table())
+        .as_table_like_mut()
+    else {
+        return;
+    };
+    let os: Vec<String> = os.iter().map(name).collect();
+    for (key, values) in [("hosts", hosts), ("os", os.as_slice())] {
+        if !values.is_empty() {
+            let array: toml_edit::Array = values.iter().map(String::as_str).collect();
+            when.insert(key, toml_edit::value(array));
+        }
+    }
 }
 
 /// Drop the host and OS limits, for content every host should load.
@@ -138,16 +160,28 @@ mod tests {
     }
 
     #[test]
-    fn removing_the_last_host_turns_the_module_off() {
+    fn removing_a_host_leaves_the_others() {
         let two = "[when]\nhosts = [\"mbp\", \"box\"]\n";
         assert_eq!(
-            edit(two, |doc| remove_host(doc, "box")),
+            edit(two, |doc| assert!(remove_host(doc, "box"))),
             "[when]\nhosts = [\"mbp\"]\n"
         );
-        let one = "[when]\nhosts = [\"box\"]\n";
         assert_eq!(
-            edit(one, |doc| remove_host(doc, "box")),
-            "enabled = false\n[when]\nhosts = [\"box\"]\n"
+            edit(two, |doc| assert!(remove_host(doc, "mbp"))),
+            "[when]\nhosts = [\"box\"]\n"
+        );
+        for alone in ["[when]\nhosts = [\"box\"]\n", "[env]\nA = \"1\"\n"] {
+            assert_eq!(edit(alone, |doc| assert!(!remove_host(doc, "box"))), alone);
+        }
+    }
+
+    #[test]
+    fn limits_come_back_after_every_host() {
+        let text = "[when]\nhosts = [\"mbp\"]\nos = [\"macos\"]\n";
+        let open = edit(text, every_host);
+        assert_eq!(
+            edit(&open, |doc| limit(doc, &["mbp".into()], &[Os::Macos])),
+            text
         );
     }
 

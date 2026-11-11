@@ -3,22 +3,25 @@
 
 use crate::config::{HostFacts, Module};
 
-/// The name of the repo module that does exactly what `new` does but only
-/// for other hosts, if adding this host to it makes it load here.
+/// The repo module that does exactly what `new` does but only for other
+/// hosts, if adding this host to it makes it load here. Its order must come
+/// after `after` within the same file, so the file's content keeps running
+/// in the order it is written.
 pub(super) fn find<'a>(
     repo: &'a [(String, Module)],
     new: &Module,
     facts: &HostFacts,
-) -> Option<&'a str> {
-    repo.iter()
-        .find(|(_, old)| {
-            old.enabled
-                && !old.when.hosts.is_empty()
-                && !old.when.hosts.contains(&facts.id)
-                && loads_with_this_host(old, facts)
-                && same(old, new)
-        })
-        .map(|(name, _)| name.as_str())
+    after: u32,
+) -> Option<&'a (String, Module)> {
+    repo.iter().find(|(_, old)| {
+        old.enabled
+            && old.order > after
+            && old.order / 1000 == after / 1000
+            && !old.when.hosts.is_empty()
+            && !old.when.hosts.contains(&facts.id)
+            && loads_with_this_host(old, facts)
+            && same(old, new)
+    })
 }
 
 fn loads_with_this_host(old: &Module, facts: &HostFacts) -> bool {
@@ -75,7 +78,7 @@ mod tests {
         }
     }
 
-    const BUN: &str = "shells = [\"zsh\"]\n[when]\nhosts = [\"mbp\"]\nos = [\"macos\"]\n[env]\nBUN_INSTALL = \"$HOME/.bun\"\n[path]\nprepend = [\"$BUN_INSTALL/bin\"]\n";
+    const BUN: &str = "order = 7001\nshells = [\"zsh\"]\n[when]\nhosts = [\"mbp\"]\nos = [\"macos\"]\n[env]\nBUN_INSTALL = \"$HOME/.bun\"\n[path]\nprepend = [\"$BUN_INSTALL/bin\"]\n";
 
     #[test]
     fn the_same_content_from_another_host_is_found() {
@@ -83,7 +86,11 @@ mod tests {
         let new = module(
             "shells = [\"zsh\"]\n[path]\nprepend = [\"$BUN_INSTALL/bin\"]\n[env]\nBUN_INSTALL = \"$HOME/.bun\"\n",
         );
-        assert_eq!(find(&repo, &new, &facts()), Some("bun"));
+        assert_eq!(name(find(&repo, &new, &facts(), 7000)), Some("bun"));
+    }
+
+    fn name(found: Option<&(String, Module)>) -> Option<&str> {
+        found.map(|(name, _)| name.as_str())
     }
 
     #[test]
@@ -101,15 +108,22 @@ mod tests {
             format!("enabled = false\n{BUN}"),
         ] {
             let repo = vec![("bun".to_string(), module(&old))];
-            assert_eq!(find(&repo, &new, &facts()), None, "{old}");
+            assert_eq!(name(find(&repo, &new, &facts(), 7000)), None, "{old}");
         }
+        // Content this host adopted from later in the file would run first.
+        let repo = vec![("bun".to_string(), module(BUN))];
+        assert_eq!(name(find(&repo, &new, &facts(), 7001)), None);
+        assert_eq!(name(find(&repo, &new, &facts(), 6000)), None);
     }
 
     #[test]
     fn snippets_compare_without_comments() {
-        let old = "shells = [\"zsh\"]\n[when]\nhosts = [\"mbp\"]\n[raw]\nzsh = '''\n# Added by OrbStack\nsource ~/.orbstack/shell/init.zsh  \n'''\n";
+        let old = "order = 7001\nshells = [\"zsh\"]\n[when]\nhosts = [\"mbp\"]\n[raw]\nzsh = '''\n# Added by OrbStack\nsource ~/.orbstack/shell/init.zsh  \n'''\n";
         let new = "shells = [\"zsh\"]\n[raw]\nzsh = '''\n# OrbStack: command-line tools\nsource ~/.orbstack/shell/init.zsh\n'''\n";
         let repo = vec![("orbstack".to_string(), module(old))];
-        assert_eq!(find(&repo, &module(new), &facts()), Some("orbstack"));
+        assert_eq!(
+            name(find(&repo, &module(new), &facts(), 7000)),
+            Some("orbstack")
+        );
     }
 }

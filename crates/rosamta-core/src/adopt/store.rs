@@ -38,6 +38,15 @@ pub struct Adoption {
     /// This host was added to another host's module rather than a new one.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub include: bool,
+    /// The module's host and OS limits before joining it for every host.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub limits: Option<Limits>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Limits {
+    pub hosts: Vec<String>,
+    pub os: Vec<crate::config::Os>,
 }
 
 #[derive(Debug, Default, Serialize, Deserialize)]
@@ -60,6 +69,9 @@ pub struct QueueItem {
     pub module: Option<PathBuf>,
     /// Secrets stay on this host.
     pub local: bool,
+    /// Accepting adds this host to another host's module.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub include: bool,
     /// Set for a dotfile that differs from the repo; the fields above that
     /// describe rc file lines are then empty.
     #[serde(default, skip_serializing_if = "Option::is_none")]

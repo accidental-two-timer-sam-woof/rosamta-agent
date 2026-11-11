@@ -150,8 +150,7 @@ fn item_line(ctx: &Context, item: &QueueItem) -> String {
         Some(module) if item.local => {
             format!("{} (this host only)", adopt::display(module, &ctx.home))
         }
-        // Only a module another host adopted exists before accepting.
-        Some(module) if ctx.paths.repo().join(module).exists() => {
+        Some(module) if item.include => {
             format!("{} (adds this host)", adopt::display(module, &ctx.home))
         }
         Some(module) => adopt::display(module, &ctx.home),

@@ -35,4 +35,5 @@
 - `adopt` 的掃描、計畫與還原，`config::Module` 的寫出格式。
 - 新增 `rsmt recent`、`rsmt include`。
 - 背景服務的同步排程與問題通知。
+- 接管偏好也決定複製部署的 dotfile 在本機被修改時是否自動寫回 repo；預設改為自動後，新主機上的這類修改也會自動寫回，不再列入待處理清單（寫回的 commit 仍會檢查秘密）。已在 `host.toml` 寫明偏好的主機不受影響。
 - `add-providers` 的接管規則建立在這裡的合併規則上。

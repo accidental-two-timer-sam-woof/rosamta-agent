@@ -313,6 +313,7 @@ fn review_lists_accepts_and_ignores() {
     run(&home, &["review", "accept", &bun, "--scope", "all"]);
     let module = read(&home, ".local/share/rosamta/repo/modules/adopted/bun.toml");
     assert!(!module.contains("[when]"), "{module}");
+    assert!(module.contains("shells = [\"zsh\"]"), "{module}");
     assert!(!read(&home, ".zshrc").contains("BUN_INSTALL"));
 
     run(&home, &["review", "ignore", &foo]);
@@ -617,16 +618,98 @@ fn the_same_lines_on_a_second_host_join_its_module() {
         "adopt(zsh): include bun from ~/.zshrc on test"
     );
 
-    let id = out
-        .lines()
-        .find_map(|line| line.strip_prefix("Adopted "))
-        .and_then(|rest| rest.split(':').next())
-        .unwrap()
-        .to_string();
-    run(&home, &["restore", &id, "--yes"]);
+    run(&home, &["restore", &adopted_id(&out), "--yes"]);
     assert!(read(&home, ".zshrc").contains("BUN_INSTALL"));
     let module = bun();
     assert!(module.contains("hosts = [\"mbp\"]\n"), "{module}");
+}
+
+/// The id `rsmt adopt` printed for its only adoption.
+fn adopted_id(out: &str) -> String {
+    out.lines()
+        .find_map(|line| line.strip_prefix("Adopted "))
+        .and_then(|rest| rest.split(':').next())
+        .unwrap()
+        .to_string()
+}
+
+const BUN_MODULE: &str = ".local/share/rosamta/repo/modules/adopted/bun.toml";
+
+#[test]
+fn restoring_keeps_a_module_another_host_joined() {
+    if !has("zsh") {
+        return;
+    }
+    let home = hooked(&[(".zshrc", BUN)]);
+    let out = run(&home, &["adopt", "--yes"]);
+    let joined = read(&home, BUN_MODULE).replace("[\"test\"]", "[\"test\", \"box\"]");
+    write(&home, BUN_MODULE, &joined);
+    run(&home, &["restore", &adopted_id(&out), "--yes"]);
+    let module = read(&home, BUN_MODULE);
+    assert!(module.contains("hosts = [\"box\"]\n"), "{module}");
+}
+
+#[test]
+fn joining_for_every_host_comes_undone() {
+    if !has("zsh") {
+        return;
+    }
+    let home = hooked(&[(".zshrc", BUN)]);
+    home.write(
+        "modules/adopted/bun.toml",
+        &bun_from_mbp(OTHER_OS, "\"zsh\""),
+    );
+    set_host(&home, "adopt_original", "\"comment\"");
+    let item = review(&home).remove(0);
+    assert_eq!(item["include"], true, "{item}");
+    run(
+        &home,
+        &[
+            "review",
+            "accept",
+            &item["id"].to_string(),
+            "--scope",
+            "all",
+        ],
+    );
+    let module = read(&home, BUN_MODULE);
+    assert!(
+        !module.contains("hosts") && !module.contains("os ="),
+        "{module}"
+    );
+    let zshrc = read(&home, ".zshrc");
+    assert!(
+        zshrc.contains("# rosamta: adopted → modules/adopted/bun.toml\n"),
+        "{zshrc}"
+    );
+    let adoptions: serde_json::Value = serde_json::from_str(&adoptions_json(&home)).unwrap();
+    let id = adoptions["adoptions"][0]["id"].to_string();
+    run(&home, &["restore", &id, "--yes"]);
+    let module = read(&home, BUN_MODULE);
+    assert!(
+        module.contains(&format!("hosts = [\"mbp\"]\nos = [\"{OTHER_OS}\"]")),
+        "{module}"
+    );
+}
+
+#[test]
+fn secrets_never_join_another_hosts_module() {
+    if !has("zsh") {
+        return;
+    }
+    let secret = "sk-proj-Zk3q9LmP2vR8tY6wB1nC4xJ7aa";
+    let home = hooked(&[(".zshrc", &format!("export OPENAI_API_KEY={secret}\n"))]);
+    home.write(
+        "modules/adopted/openai.toml",
+        &format!(
+            "order = 7001\nshells = [\"zsh\"]\n\n[when]\nhosts = [\"mbp\"]\n\n[env]\nOPENAI_API_KEY = \"{secret}\"\n"
+        ),
+    );
+    let item = review(&home).remove(0);
+    assert!(
+        item["local"] == true && item.get("include").is_none(),
+        "{item}"
+    );
 }
 
 #[test]
@@ -682,7 +765,10 @@ fn modules_that_do_not_load_here_replace_nothing() {
         "modules/adopted/bar.toml",
         "enabled = false\n\n[env]\nBAR = \"1\"\n",
     );
-    assert_eq!(review(&home).len(), 2);
+    let items = review(&home);
+    assert_eq!(items.len(), 2);
+    // A module from before `shells` was recorded is never joined.
+    assert!(items.iter().all(|item| item.get("include").is_none()));
     let zshrc = read(&home, ".zshrc");
     assert!(zshrc.contains("FOO") && zshrc.contains("BAR"), "{zshrc}");
 }
