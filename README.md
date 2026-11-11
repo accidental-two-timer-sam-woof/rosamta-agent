@@ -638,7 +638,7 @@ cargo test --workspace --locked
 ```
 rosamta-agent/
 ├── crates/
-│   ├── rosamta-core/             # 核心邏輯，命令列程式、App 與背景服務共用
+│   ├── core/                     # 核心邏輯，命令列程式、App 與背景服務共用
 │   │   ├── locales/              # 背景服務與 App 的文字（繁體中文、英文）
 │   │   └── src/
 │   │       ├── adopt/            # 接管 shell 設定檔、待處理清單、秘密偵測
@@ -651,8 +651,8 @@ rosamta-agent/
 │   │       ├── hooks.rs          # shell 設定檔中的 rosamta 區塊
 │   │       ├── snapshot.rs       # 修改前的快照與還原
 │   │       └── validate.rs       # 檢查 repo 中的 TOML 檔
-│   ├── rosamta/                  # 命令列程式（rosamta / rsmt）
-│   └── rosamta-gui/              # 桌面 App（GPUI）
+│   ├── cli/                      # 命令列程式（rosamta / rsmt）
+│   └── gui/                      # 桌面 App（GPUI）
 │       └── src/pages/            # 總覽、待處理、模組、設定檔、歷史、設定
 ├── assets/                       # App 圖示
 ├── packaging/                    # macOS App bundle、Homebrew、AUR
