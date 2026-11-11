@@ -94,12 +94,15 @@ fn secret_name(text: &str) -> bool {
 fn high_entropy(text: &str) -> bool {
     text.split(|c: char| !(c.is_ascii_alphanumeric() || "+/=_-.".contains(c)))
         .any(|whole| {
-            // Inside quotes a token is a value, never `NAME=value`.
+            // `X="…"`, `X = '…'`, `key: "…"`: a quoted value is judged whole,
+            // never as `NAME=value` or a name; `env 'NAME=value'` is split.
             let start = whole.as_ptr() as usize - text.as_ptr() as usize;
-            let quoted = matches!(text[..start].chars().next_back(), Some('"' | '\''));
-            let token = if quoted { whole } else { value(whole) };
+            let quoted_value = text[..start]
+                .strip_suffix(['"', '\''])
+                .is_some_and(|before| before.trim_end().ends_with(['=', ':']));
+            let token = if quoted_value { whole } else { value(whole) };
             // A known name passes as a name, never as an assignment's value.
-            let name = token.len() == whole.len() && known_name(token);
+            let name = !quoted_value && token.len() == whole.len() && known_name(token);
             match token.contains('/') {
                 false => {
                     token.len() >= MIN_LEN && !words(token) && !name && entropy(token) > MIN_ENTROPY
@@ -275,6 +278,10 @@ mod tests {
         assert!(looks_secret("export X=\"K7Q2M9X4P8R3T6W1Z5N0+=abc\""));
         assert!(looks_secret("export X='K7Q2M9X4P8R3T6W1Z5N0=abc'"));
         assert!(looks_secret(
+            "export X=\"POWERLEVEL9K_QWERTYUIOPASDFGHJZXCVBNM\""
+        ));
+        assert!(looks_secret("X = \"P9K_QWERTYUIOPASDFGHJZXCVBNM\""));
+        assert!(looks_secret(
             "aws_secret_access_key = wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY"
         ));
         assert!(!looks_secret(
@@ -307,6 +314,7 @@ mod tests {
             "  typeset -g POWERLEVEL9K_XPLR_VISUAL_IDENTIFIER_EXPANSION=",
             "  POWERLEVEL9K_CONTEXT_TEMPLATE+=foo",
             "  POWERLEVEL9K_KUBECONTEXT_DEFAULT_CONTENT_EXPANSION+='${P9K_KUBECONTEXT_NAME}'",
+            "env 'POWERLEVEL9K_MULTILINE_FIRST_PROMPT_GAP_BACKGROUND=red' zsh",
         ] {
             assert!(!looks_secret(text), "{text}");
         }
