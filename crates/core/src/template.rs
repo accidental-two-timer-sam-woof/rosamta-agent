@@ -21,6 +21,9 @@ fn environment() -> Environment<'static> {
     let mut env = Environment::new();
     env.set_undefined_behavior(UndefinedBehavior::Strict);
     env.set_fuel(Some(FUEL));
+    // A dotfile is not a web page: a target named `.xml` or `.html` gets the
+    // value as written, not escaped.
+    env.set_auto_escape_callback(|_| minijinja::AutoEscape::None);
     // A dotfile ends with a newline like any text file.
     env.set_syntax(
         minijinja::syntax::SyntaxConfig::builder()
@@ -225,6 +228,20 @@ mod tests {
                 render("t", text, &host(&[], &[]), Path::new("/h"), &none()).is_err(),
                 "{text}"
             );
+        }
+    }
+
+    #[test]
+    fn values_are_written_as_they_are_whatever_the_file_is_called() {
+        let host = host(&[], &[("v", "/a & <b> \"c\"")]);
+        for name in [
+            "home/.m2/settings.xml",
+            "home/page.html",
+            "home/data.json",
+            "home/.npmrc",
+        ] {
+            let out = render(name, "{{ vars.v }}\n", &host, Path::new("/h"), &none()).unwrap();
+            assert_eq!(out, "/a & <b> \"c\"\n", "{name}");
         }
     }
 
