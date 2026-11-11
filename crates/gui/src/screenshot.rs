@@ -9,15 +9,39 @@ use std::time::Duration;
 use gpui_kit::component::{Theme, ThemeMode};
 use gpui_kit::*;
 
-use crate::app::{Page, Rosamta};
+use crate::app::{HistoryTab, LibraryTab, Page, Rosamta, Selection};
 
-const PAGES: [(Page, &str); 6] = [
-    (Page::Overview, "overview"),
-    (Page::Review, "review"),
-    (Page::Modules, "modules"),
-    (Page::Dotfiles, "dotfiles"),
-    (Page::History, "history"),
-    (Page::Settings, "settings"),
+const PAGES: [(Page, LibraryTab, HistoryTab, &str); 5] = [
+    (
+        Page::Review,
+        LibraryTab::Modules,
+        HistoryTab::Changes,
+        "review",
+    ),
+    (
+        Page::Library,
+        LibraryTab::Modules,
+        HistoryTab::Changes,
+        "modules",
+    ),
+    (
+        Page::Library,
+        LibraryTab::Dotfiles,
+        HistoryTab::Changes,
+        "dotfiles",
+    ),
+    (
+        Page::History,
+        LibraryTab::Modules,
+        HistoryTab::Changes,
+        "history",
+    ),
+    (
+        Page::History,
+        LibraryTab::Modules,
+        HistoryTab::Snapshots,
+        "snapshots",
+    ),
 ];
 
 pub fn start(window: AnyWindowHandle, view: Entity<Rosamta>, cx: &mut App) {
@@ -46,7 +70,7 @@ pub fn start(window: AnyWindowHandle, view: Entity<Rosamta>, cx: &mut App) {
             }
         }
         wait(1000).await;
-        let save = |name: &str, cx: &mut AsyncApp| {
+        let save_window = |window: AnyWindowHandle, name: &str, cx: &mut AsyncApp| {
             let path = dir.join(format!("{name}{suffix}.png"));
             let saved = cx.update_window(window, |_, window, cx| {
                 // Draw here: a locked screen stops the display link.
@@ -55,6 +79,7 @@ pub fn start(window: AnyWindowHandle, view: Entity<Rosamta>, cx: &mut App) {
             });
             eprintln!("{}: {saved:?}", path.display());
         };
+        let save = |name: &str, cx: &mut AsyncApp| save_window(window, name, cx);
         // A home without a repo: the setup page, and importing from chezmoi.
         if !view.read_with(cx, |view, _| view.snap.ready) {
             save("setup", cx);
@@ -65,7 +90,8 @@ pub fn start(window: AnyWindowHandle, view: Entity<Rosamta>, cx: &mut App) {
                 .ok();
                 for _ in 0..40 {
                     wait(500).await;
-                    if view.read_with(cx, |view, _| view.imported.is_some() && !view.busy) {
+                    if view.read_with(cx, |view, _| view.imported.is_some() && view.busy.is_none())
+                    {
                         break;
                     }
                 }
@@ -77,13 +103,34 @@ pub fn start(window: AnyWindowHandle, view: Entity<Rosamta>, cx: &mut App) {
                 });
             }
         }
-        for (page, name) in PAGES {
+        // The first item, where a problem would be shown first.
+        view.update(cx, |view, cx| {
+            if let Some(item) = view.snap.queue.first() {
+                view.select(Selection::Item(item.id), cx);
+            }
+        });
+        wait(800).await;
+        for (page, library, history, name) in PAGES {
             view.update(cx, |view, cx| {
-                view.page = page;
+                (view.page, view.library, view.history) = (page, library, history);
                 cx.notify();
             });
             wait(800).await;
             save(name, cx);
+        }
+        // A problem, when there is one, beside the item shown above.
+        let problem = view.read_with(cx, |view, _| {
+            view.snap.problems.first().map(|one| one.key())
+        });
+        if let Some(key) = problem {
+            view.update(cx, |view, cx| view.select(Selection::Problem(key), cx));
+            wait(800).await;
+            save("problem", cx);
+        }
+        cx.update(|cx| crate::pages::settings::open(&view, cx));
+        wait(800).await;
+        if let Some(settings) = view.read_with(cx, |view, _| view.settings) {
+            save_window(settings, "settings", cx);
         }
         cx.update(|cx| cx.quit());
     })

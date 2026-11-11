@@ -1,14 +1,22 @@
-//! Colors and spacing from the confirmed preview, in light and dark.
+//! Colors, sizes and motion from the confirmed preview, in light and dark.
 
+use std::time::Duration;
+
+use gpui_kit::base::{Easing, Spring};
 use gpui_kit::component::{ActiveTheme, Theme, ThemeRegistry};
 use gpui_kit::*;
 
-/// The preview's tokens. gpui-component's theme carries the same colors for
-/// its own controls; these are for the app's lists, badges and panels.
+/// The preview's tokens. gpui-component's theme (`theme.json`) carries the
+/// same colors for its own controls; these are for the app's own surfaces.
 #[derive(Clone, Copy)]
 pub struct Palette {
+    /// The content area.
     pub bg: Hsla,
+    /// The sidebar.
     pub panel: Hsla,
+    /// Recessed areas: the review list's column, card headers, the settings window.
+    pub well: Hsla,
+    /// Boxes of rows.
     pub surface: Hsla,
     pub line: Hsla,
     pub line_strong: Hsla,
@@ -20,29 +28,36 @@ pub struct Palette {
     pub ok_soft: Hsla,
     pub warn: Hsla,
     pub warn_soft: Hsla,
-    pub code: Hsla,
+    pub danger: Hsla,
+    pub danger_soft: Hsla,
+    /// Neutral badges and tags.
+    pub chip: Hsla,
 }
 
 const LIGHT: Palette = Palette {
-    bg: hex(0xFBFBFA),
-    panel: hex(0xF2F2EF),
+    bg: hex(0xFFFFFF),
+    panel: hex(0xF1F1F4),
+    well: hex(0xF6F6F8),
     surface: hex(0xFFFFFF),
-    line: hex(0xE2E1DC),
-    line_strong: hex(0xCBCAC4),
-    text: hex(0x1C1B19),
-    muted: hex(0x5C5A54),
+    line: hex(0xE1E1E6),
+    line_strong: hex(0xC9C9CF),
+    text: hex(0x1D1D1F),
+    muted: hex(0x5F5F64),
     accent: hex(0x2B57C9),
-    accent_soft: hex(0xE7EDFB),
-    ok: hex(0x1E6E46),
-    ok_soft: hex(0xE2F1E8),
-    warn: hex(0x8A5300),
-    warn_soft: hex(0xFAEFD9),
-    code: hex(0xF6F6F4),
+    accent_soft: hex(0xE4EAFB),
+    ok: hex(0x175C34),
+    ok_soft: hex(0xE3F3EA),
+    warn: hex(0x7A4700),
+    warn_soft: hex(0xFBEFD9),
+    danger: hex(0x8C1D18),
+    danger_soft: hex(0xFBE9E7),
+    chip: hex(0xEDEDF0),
 };
 
 const DARK: Palette = Palette {
     bg: hex(0x17171A),
     panel: hex(0x1E1E22),
+    well: hex(0x1B1B1F),
     surface: hex(0x232328),
     line: hex(0x34343B),
     line_strong: hex(0x4A4A52),
@@ -54,7 +69,9 @@ const DARK: Palette = Palette {
     ok_soft: hex(0x173326),
     warn: hex(0xE9B865),
     warn_soft: hex(0x3A2D15),
-    code: hex(0x1B1B1F),
+    danger: hex(0xF0958C),
+    danger_soft: hex(0x3C1B18),
+    chip: hex(0x2C2C32),
 };
 
 const fn hex(rgb: u32) -> Hsla {
@@ -112,6 +129,7 @@ pub fn palette(cx: &App) -> Palette {
 
 /// Spacing, on the 4 px scale the proposal allows.
 pub mod space {
+    pub const S2: f32 = 2.;
     pub const S4: f32 = 4.;
     pub const S8: f32 = 8.;
     pub const S12: f32 = 12.;
@@ -120,8 +138,41 @@ pub mod space {
     pub const S24: f32 = 24.;
     pub const S32: f32 = 32.;
     pub const S40: f32 = 40.;
-    pub const S48: f32 = 48.;
 }
+
+/// Text sizes: one per role.
+pub mod font {
+    /// Toolbar and detail titles.
+    pub const TITLE: f32 = 17.;
+    /// Rows, labels and buttons.
+    pub const BODY: f32 = 13.;
+    /// Times, counts and badges.
+    pub const CAPTION: f32 = 11.;
+    /// Paths, code and diffs.
+    pub const MONO: f32 = 12.;
+}
+
+/// Corner radii, concentric: a row inside a box is the box's less its inset.
+pub mod radius {
+    pub const BOX: f32 = 12.;
+    pub const ROW: f32 = 8.;
+}
+
+/// Fixed sizes of the window's parts.
+pub mod size {
+    pub const TOOLBAR: f32 = 52.;
+    pub const SIDEBAR: f32 = 200.;
+    pub const LIST: f32 = 340.;
+}
+
+/// The sidebar lets the desktop show through, blurred, where the system can
+/// do that; screenshots are opaque so they come out the same everywhere.
+pub const TRANSLUCENT: bool = cfg!(all(target_os = "macos", not(feature = "screenshot")));
+
+/// What moves, moves this long, easing in and out.
+pub const MOVE: Duration = Duration::from_millis(200);
+/// What appears, fades in this long.
+pub const FADE: Duration = Duration::from_millis(150);
 
 /// Register the light and dark themes and follow the system's appearance.
 pub fn init(window: &mut Window, cx: &mut App) {
@@ -136,6 +187,9 @@ pub fn init(window: &mut Window, cx: &mut App) {
     let theme = Theme::global_mut(cx);
     theme.light_theme = light;
     theme.dark_theme = dark;
+    // Switches and segmented controls slide without overshoot.
+    theme.motion.spring_move = Spring::new(MOVE);
+    theme.motion.easing_move = Easing::EaseInOut;
     Theme::sync_system_appearance(Some(window), cx);
     window
         .observe_window_appearance(|window, cx| Theme::sync_system_appearance(Some(window), cx))
