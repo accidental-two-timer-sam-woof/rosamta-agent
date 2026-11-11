@@ -166,6 +166,9 @@ pub struct Plan {
     pub hook_changes: Vec<FileChange>,
     /// Shells that get scripts.
     pub shells: Vec<Shell>,
+    /// Shells that keep the scripts they had, since they could not be checked.
+    #[serde(skip)]
+    pub kept: Vec<Shell>,
     /// Shells that are installed but too old, with the reason.
     pub skipped: Vec<String>,
     pub current: Option<String>,
@@ -208,7 +211,7 @@ pub fn plan(ctx: &Context) -> Result<Plan> {
 
     let installed = ctx.installed();
     let skipped = installed.iter().filter_map(Detected::unsupported).collect();
-    let mut shells: Vec<Shell> = installed
+    let shells: Vec<Shell> = installed
         .iter()
         .filter(|found| found.unsupported().is_none())
         .map(|found| found.shell)
@@ -221,24 +224,22 @@ pub fn plan(ctx: &Context) -> Result<Plan> {
         None => BTreeMap::new(),
     };
     // A shell not found this time, or whose version did not come back (another
-    // PATH, a slow start), keeps its scripts; its hooks and smoke test wait.
-    let detected = shells.clone();
-    let found = |shell: &Shell| detected.contains(shell);
+    // PATH, a slow start), keeps its last checked scripts until it can be checked.
     let known = |shell: &Shell| {
         installed
             .iter()
             .any(|found| found.shell == *shell && found.version.is_some())
     };
-    shells.extend(
-        Shell::ALL
-            .into_iter()
-            .filter(|shell| !found(shell) && !known(shell))
-            .filter(|shell| old.keys().any(|rel| rel.starts_with(shell.name()))),
-    );
+    let kept: Vec<Shell> = Shell::ALL
+        .into_iter()
+        .filter(|shell| !shells.contains(shell) && !known(shell))
+        .filter(|shell| old.keys().any(|rel| rel.starts_with(shell.name())))
+        .collect();
     // Render against the current version's paths, so unchanged modules compare equal.
     let id = current.clone().unwrap_or_else(generated::new_version_id);
     let layout = generated::layout(&generated_dir, ctx.paths.state(), &id);
-    let files = render::render(&modules, &shells, &layout);
+    let mut files = render::render(&modules, &shells, &layout);
+    files.extend(carried(&old, &kept));
     let mut file_changes = Vec::new();
     for path in old
         .keys()
@@ -255,10 +256,7 @@ pub fn plan(ctx: &Context) -> Result<Plan> {
     let hook_env = ctx.hook_env(&installed);
     let unhooked = ctx.unhooked();
     let mut hook_changes = Vec::new();
-    for shell in shells
-        .iter()
-        .filter(|shell| found(shell) && !unhooked.contains(shell))
-    {
+    for shell in shells.iter().filter(|shell| !unhooked.contains(shell)) {
         hook_changes.extend(hooks::plan_install(*shell, &hook_env)?);
     }
     hook_changes.retain(|change| !change.is_noop());
@@ -268,6 +266,7 @@ pub fn plan(ctx: &Context) -> Result<Plan> {
         file_changes,
         hook_changes,
         shells,
+        kept,
         skipped,
         current,
         installed,
@@ -430,7 +429,16 @@ fn finish(ctx: &Context, baselines: &[(Shell, Vec<Smoke>)]) -> Result<Applied> {
     let layout = generated::layout(&generated_dir, ctx.paths.state(), &id);
     let facts = host_facts(&ctx.paths)?;
     let modules = render::select(all_modules(&ctx.paths)?, &facts);
-    let files = render::render(&modules, &plan.shells, &layout);
+    let mut files = render::render(&modules, &plan.shells, &layout);
+    if let Some(old_id) = &plan.current {
+        let old = generated::read_version(&generated_dir, old_id)?;
+        // They name their version's folder, which is now this one.
+        files.extend(
+            carried(&old, &plan.kept)
+                .into_iter()
+                .map(|(rel, text)| (rel, text.replace(old_id.as_str(), &id))),
+        );
+    }
     generated::write_version(&layout, &files)?;
 
     let result = check_and_smoke(ctx, &plan, &layout, &files, baselines);
@@ -442,6 +450,15 @@ fn finish(ctx: &Context, baselines: &[(Shell, Vec<Smoke>)]) -> Result<Applied> {
     generated::prune(&generated_dir)?;
     applied.version = Some(id);
     Ok(applied)
+}
+
+/// The files of `kept` shells in a version.
+fn carried(version: &BTreeMap<PathBuf, String>, kept: &[Shell]) -> BTreeMap<PathBuf, String> {
+    version
+        .iter()
+        .filter(|(rel, _)| kept.iter().any(|shell| rel.starts_with(shell.name())))
+        .map(|(rel, text)| (rel.clone(), text.clone()))
+        .collect()
 }
 
 fn check_and_smoke(
@@ -457,7 +474,7 @@ fn check_and_smoke(
     for found in plan
         .installed
         .iter()
-        .filter(|found| found.unsupported().is_none() && plan.shells.contains(&found.shell))
+        .filter(|found| plan.shells.contains(&found.shell))
     {
         for rel in files
             .keys()
@@ -489,7 +506,7 @@ fn check_and_smoke(
     for found in plan
         .installed
         .iter()
-        .filter(|found| found.unsupported().is_none() && plan.shells.contains(&found.shell))
+        .filter(|found| plan.shells.contains(&found.shell))
     {
         if hooks::hooked_files(found.shell, hook_env)?.is_empty() {
             continue;

@@ -435,7 +435,7 @@ fn a_background_job_does_not_hide_a_module_that_exits() {
 }
 
 /// A version check that fails once (a slow start, another PATH) keeps the
-/// shell's scripts; the next apply in a normal PATH picks the change up.
+/// shell's last checked scripts; the next apply in a normal PATH updates them.
 #[test]
 fn a_shell_that_does_not_answer_keeps_its_scripts() {
     use std::os::unix::fs::PermissionsExt;
@@ -456,8 +456,16 @@ fn a_shell_that_does_not_answer_keeps_its_scripts() {
         .env("PATH", path)
         .assert()
         .success();
+    // The new module waits for zsh to be checked; the old scripts stay.
+    let version = fs::read_link(current(&home)).unwrap();
     let rc = fs::read_to_string(current(&home).join("zsh/env.zsh")).unwrap();
-    assert!(rc.contains("more-env"), "{rc}");
+    assert!(!rc.contains("more-env"), "{rc}");
+    assert!(rc.contains(&*version.to_string_lossy()), "{rc}");
+    assert!(
+        fs::read_to_string(current(&home).join("bash/env.bash"))
+            .unwrap()
+            .contains("more-env")
+    );
 }
 
 #[test]
