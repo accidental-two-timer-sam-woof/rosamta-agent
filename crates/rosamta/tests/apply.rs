@@ -339,6 +339,23 @@ fn a_module_that_prints_errors_is_rolled_back() {
     assert_eq!(fs::read_link(current(&home)).unwrap(), before);
 }
 
+/// `exit` prints nothing, but new shells would close at once.
+#[test]
+fn a_module_that_exits_the_shell_is_rolled_back() {
+    let home = set_up();
+    apply(&home);
+    let before = fs::read_link(current(&home)).unwrap();
+    home.write(
+        "modules/quits.toml",
+        "[raw]\nsh = 'exit 0'\nbash = 'exit 0'\nzsh = 'exit 0'\nfish = 'exit 0'\n",
+    );
+    home.cmd("rsmt").arg("apply").assert().code(1).stderr(
+        predicate::str::contains("module quits")
+            .and(predicate::str::contains("exited before startup finished")),
+    );
+    assert_eq!(fs::read_link(current(&home)).unwrap(), before);
+}
+
 #[test]
 fn a_login_snippet_that_prints_errors_is_rolled_back() {
     if !has("zsh") {

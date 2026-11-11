@@ -476,6 +476,16 @@ fn check_and_smoke(
         for (before, after) in before.into_iter().zip(after) {
             let lines = match after {
                 Smoke::Stderr(lines) => lines,
+                Smoke::Stopped(lines) => {
+                    // A shell that already stopped early (`exec tmux`) is not this apply's doing.
+                    if !matches!(before, Smoke::Stopped(_)) {
+                        failures.push(format!(
+                            "{} ({suspects}): exited before startup finished",
+                            found.shell
+                        ));
+                    }
+                    lines
+                }
                 // Slow before this apply too, so not this apply's doing.
                 Smoke::TimedOut if matches!(before, Smoke::TimedOut) => continue,
                 Smoke::TimedOut => {
@@ -488,7 +498,7 @@ fn check_and_smoke(
                 }
             };
             let mut known = match before {
-                Smoke::Stderr(lines) => lines,
+                Smoke::Stderr(lines) | Smoke::Stopped(lines) => lines,
                 Smoke::TimedOut => Vec::new(),
             };
             for line in lines {
@@ -584,9 +594,16 @@ fn first_line(text: &str) -> &str {
     text.lines().next().unwrap_or(text)
 }
 
+/// What a smoke test runs once startup is done, printing `SMOKE_MARK`.
+const SMOKE_COMMAND: &str = "echo rosamta-smoke-reached";
+const SMOKE_MARK: &str = "rosamta-smoke-reached";
+
 #[derive(Clone)]
 enum Smoke {
+    /// Started and ran the command; the error lines.
     Stderr(Vec<String>),
+    /// Ended before the command, as after an `exit` in a module; the error lines.
+    Stopped(Vec<String>),
     TimedOut,
 }
 
@@ -594,9 +611,12 @@ enum Smoke {
 /// way, as bash and zsh read other files as login shells.
 fn smoke(ctx: &Context, found: &Detected, dir: &Path) -> Vec<Smoke> {
     let ways: &[&[&str]] = match found.shell {
-        Shell::Sh => &[&["-l", "-c", "exit"]],
-        Shell::Bash | Shell::Zsh => &[&["-i", "-c", "exit"], &["-l", "-i", "-c", "exit"]],
-        Shell::Fish => &[&["-i", "-c", "exit"]],
+        Shell::Sh => &[&["-l", "-c", SMOKE_COMMAND]],
+        Shell::Bash | Shell::Zsh => &[
+            &["-i", "-c", SMOKE_COMMAND],
+            &["-l", "-i", "-c", SMOKE_COMMAND],
+        ],
+        Shell::Fish => &[&["-i", "-c", SMOKE_COMMAND]],
     };
     ways.iter()
         .map(|args| {
@@ -608,13 +628,21 @@ fn smoke(ctx: &Context, found: &Detected, dir: &Path) -> Vec<Smoke> {
                 .env_remove("ROSAMTA_ENV")
                 .env_remove("ROSAMTA_PROFILE");
             match output_with_timeout(&mut cmd, SMOKE_TIMEOUT) {
-                Ok(Some(output)) => Smoke::Stderr(
-                    String::from_utf8_lossy(&output.stderr)
+                Ok(Some(output)) => {
+                    let lines = String::from_utf8_lossy(&output.stderr)
                         .lines()
                         .map(str::to_string)
                         .filter(|line| !line.is_empty())
-                        .collect(),
-                ),
+                        .collect();
+                    let reached = String::from_utf8_lossy(&output.stdout)
+                        .lines()
+                        .any(|line| line.trim() == SMOKE_MARK);
+                    if reached {
+                        Smoke::Stderr(lines)
+                    } else {
+                        Smoke::Stopped(lines)
+                    }
+                }
                 Ok(None) => Smoke::TimedOut,
                 Err(err) => Smoke::Stderr(vec![format!(
                     "could not start {}: {err}",
