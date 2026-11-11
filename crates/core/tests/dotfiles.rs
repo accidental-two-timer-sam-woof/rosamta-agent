@@ -577,6 +577,46 @@ fn restore_original_puts_targets_back_without_touching_the_repo() {
     assert_eq!(read(&home.repo().join("home/.vimrc")), "repo\n");
 }
 
+/// A copied folder that was not there before rosamta, updated since: what
+/// rosamta wrote inside it is no original.
+#[test]
+fn restore_original_removes_a_copied_folder_rosamta_created() {
+    let home = Home::new("ask");
+    home.repo_write("home/.config/nvim/init.lua", "v1\n");
+    home.repo_write(
+        "dotfiles.toml",
+        "[[dotfile]]\npath = \".config/nvim\"\ndeploy = \"copy\"\n",
+    );
+    assert_eq!(home.deploy(), one(".config/nvim", Action::Copied));
+    home.repo_write("home/.config/nvim/init.lua", "v2\n");
+    assert_eq!(home.deploy(), one(".config/nvim", Action::Updated));
+
+    rosamta_core::apply::restore_original(&home.ctx).unwrap();
+
+    assert!(home.at(".config/nvim").symlink_metadata().is_err());
+}
+
+/// A file that became a folder: snapshots keep working, and the original
+/// file comes back.
+#[test]
+fn snapshots_follow_a_file_that_became_a_folder() {
+    let home = Home::new("ask");
+    let snapshots = rosamta_core::snapshot::Snapshots::new(home.ctx.paths.state(), &home.ctx.home);
+    let foo = home.at(".config/foo");
+    write(&foo, "file\n");
+    snapshots.save(std::slice::from_ref(&foo), "test").unwrap();
+    fs::remove_file(&foo).unwrap();
+    write(&foo.join("bar"), "inner\n");
+    snapshots.save(&[foo.join("bar")], "test").unwrap();
+    fs::remove_dir_all(&foo).unwrap();
+    write(&foo, "file again\n");
+    snapshots.save(std::slice::from_ref(&foo), "test").unwrap();
+
+    rosamta_core::apply::restore_original(&home.ctx).unwrap();
+
+    assert_eq!(read(&foo), "file\n");
+}
+
 mod review {
     use super::*;
     use rosamta_core::adopt::{self, Scope};
