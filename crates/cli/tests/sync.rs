@@ -178,7 +178,8 @@ fn what_allow_toml_lists_is_published() {
         .arg("publish")
         .assert()
         .failure()
-        .stderr(predicate::str::contains("allow.toml"));
+        .stderr(predicate::str::contains("allow.toml"))
+        .stderr(predicate::str::contains("allow.toml: unknown field `line`"));
 
     hosts
         .a
