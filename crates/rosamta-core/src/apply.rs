@@ -313,6 +313,31 @@ pub struct Applied {
     pub scripts: Vec<crate::scripts::apply::Step>,
 }
 
+impl Applied {
+    /// `what: why` for each dotfile, external or script that failed.
+    pub fn failures(&self) -> Vec<String> {
+        let line = |what: String, reason: &Option<String>| {
+            format!("{what}: {}", reason.as_deref().unwrap_or("failed"))
+        };
+        let dotfiles = self
+            .dotfiles
+            .iter()
+            .filter(|step| step.action == crate::dotfiles::Action::Failed)
+            .map(|step| line(step.path.display().to_string(), &step.reason));
+        let externals = self
+            .externals
+            .iter()
+            .filter(|step| step.action == crate::externals::Action::Failed)
+            .map(|step| line(step.path.display().to_string(), &step.reason));
+        let scripts = self
+            .scripts
+            .iter()
+            .filter(|step| step.action == crate::scripts::apply::Action::Failed)
+            .map(|step| line(step.source.clone(), &step.reason));
+        dotfiles.chain(externals).chain(scripts).collect()
+    }
+}
+
 /// Download externals and run `before` scripts; render, smoke-test, then
 /// switch; then deploy dotfiles and run `after` scripts. If the shells fail
 /// their check, the current version stays and no dotfile is touched. The
