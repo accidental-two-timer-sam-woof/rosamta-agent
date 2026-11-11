@@ -998,7 +998,7 @@ mod manage {
             "[[dotfile]]\npath = \".config/ghostty\"\n\n\
              [[dotfile]]\npath = \".config/ghostty-work/config\"\nsource = \"home/.config/ghostty/config\"\n\n\
              [[dotfile]]\npath = \".gitconfig\"\n\n\
-             [[dotfile]]\npath = \".gitconfig-work\"\nsource = \"home/.gitconfig\"\n",
+             [[dotfile]]\npath = \".gitconfig-work\"\nsource = \"./home/.gitconfig\"\n",
         );
         git(&home.repo(), &["add", "-A"]);
         git(
