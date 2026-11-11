@@ -17,7 +17,7 @@
 
 - 接管來的片段 module 以 `file` 記錄來源檔（例如 `file = ".zprofile"`），取代 `phase`。它只從那個檔的 hook 載入，順序與原本在檔案中的順序相同。
 - 每個 watched file 都有自己的 hook，包含 `.zlogin` 與 `.bash_login`。
-- 拿掉 `ROSAMTA_ENV`。結構化的內容（環境變數、PATH、alias）本來就可以重複載入，不需要防重複；片段則是檔案被讀幾次就執行幾次，和接管前一樣。
+- `ROSAMTA_ENV` 只擋結構化的環境變數（引用自己的值不能重複套用）；片段在每個 shell 程序都執行，和接管前一樣。
 - `.profile` 的片段只產生在 sh 的 script 中，由 `.profile` 的 hook 載入；bash 與 zsh 讀 `.profile` 時自然會載入，不再各自複製一份。
 - 執行其他啟動檔的那幾行（例如 `. ~/.bashrc`、`. ~/.profile`）不接管，留在原處。
 - **BREAKING** rosamta 不再替既有的 `.bash_profile` 加上執行 `.bashrc` 的那一行。login bash 的互動設定改由 `.bash_profile` 的 hook 直接載入 rosamta 自己的互動 script；使用者原本的 `.bashrc` 是否在 login bash 執行，維持接管前的樣子。
@@ -29,14 +29,14 @@
 
 - `adopt`: 片段依來源檔載入；接線的那幾行不接管。
 - `shell-hooks`: 每個 watched file 一個 hook；不再修改使用者的接線。
-- `shell-loader`: 拿掉「env 階段只執行一次」。
+- `shell-loader`: 巢狀 shell 重新執行 env 階段的片段（已完成）。
 - `shell-render`: 片段 module 的 `file` 欄位與對應的 generated script。
 - `config-repo`: 格式 2 與 migration。
 
 ## Impact
 
 - `crates/core/src/adopt/segment.rs`、`adopt/mod.rs`：來源檔取代階段；`profile_readers` 的靜態分析可以刪除。
-- `crates/core/src/render.rs`、`generated.rs`：每個來源檔一份 script；刪除 env guard。
+- `crates/core/src/render.rs`、`generated.rs`：每個來源檔一份 script。
 - `crates/core/src/hooks.rs`：hook 的位置與內容。
 - `crates/core/src/config.rs`、`repo.rs`：`file` 欄位、格式 2、migration。
 - 你自己的 Mac 有 36 個接管的 module，升級時會被 migration 改寫一次，並產生一個 commit。

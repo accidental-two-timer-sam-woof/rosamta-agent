@@ -789,6 +789,28 @@ fn ejected_bashrc_parses_without_interactive_code() {
     }
 }
 
+/// What a startup file gave every shell (options, functions, variables it
+/// did not export) reaches a shell started from another one too; exported
+/// values came down already and are not built up a second time.
+#[test]
+fn a_nested_shell_runs_env_snippets_again_but_not_the_exports() {
+    let home = Home::new();
+    home.cmd("rsmt").arg("init").assert().success();
+    home.write(
+        "modules/opts.toml",
+        "phase = \"env\"\n[env]\nCNT = \"x$CNT\"\n[raw]\nbash = 'LOCAL=1'\nzsh = 'LOCAL=1'\n",
+    );
+    apply(&home);
+    for shell in ["bash", "zsh"] {
+        if !has(shell) {
+            continue;
+        }
+        let script = format!("{shell} -i -c 'echo \"${{LOCAL-unset}} $CNT\"'");
+        let out = home.shell(&[shell, "-i", "-c", &script].map(String::from));
+        assert_eq!(String::from_utf8_lossy(&out.stdout), "1 x\n", "{shell}");
+    }
+}
+
 #[test]
 fn ejected_code_keeps_return_local_and_env_once() {
     let home = Home::new();
