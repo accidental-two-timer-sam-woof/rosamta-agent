@@ -949,7 +949,8 @@ pub fn plan_restore(ctx: &Context) -> Result<Vec<FileChange>> {
             }
         };
         // A link or mode that differs is a change even when the bytes match.
-        let kind_differs = std::fs::read_link(&original.path).ok() != original.link
+        let kind_differs = (!legacy(&original)
+            && std::fs::read_link(&original.path).ok() != original.link)
             || original.mode.is_some_and(|mode| {
                 std::fs::symlink_metadata(&original.path)
                     .is_ok_and(|meta| meta.permissions().mode() & 0o7777 != mode)
@@ -994,6 +995,12 @@ pub fn restore_original(ctx: &Context) -> Result<Vec<PathBuf>> {
     Ok(paths)
 }
 
+/// Taken before snapshots kept links and modes: its bytes are written
+/// through whatever link is there, as they were then.
+fn legacy(original: &crate::snapshot::Original) -> bool {
+    original.content.is_some() && original.mode.is_none() && original.link.is_none()
+}
+
 /// One original: its link, then its bytes, written through the link only
 /// when the link was there before rosamta.
 fn put_back(original: &crate::snapshot::Original) -> Result<()> {
@@ -1001,7 +1008,7 @@ fn put_back(original: &crate::snapshot::Original) -> Result<()> {
     let now_link = std::fs::read_link(path).ok();
     if original.link.is_some() && now_link != original.link {
         crate::dotfiles::tree::remove(path)?;
-    } else if original.link.is_none() && now_link.is_some() {
+    } else if original.link.is_none() && now_link.is_some() && !legacy(original) {
         std::fs::remove_file(path).map_err(Error::write(path))?;
     }
     if (original.link.is_some() || original.content.is_some())
