@@ -34,6 +34,14 @@ const PATCH: [&str; 8] = [
 ];
 
 const ARMOR: &str = "-----BEGIN AGE ENCRYPTED FILE-----";
+const ARMOR_END: &str = "-----END AGE ENCRYPTED FILE-----";
+
+/// An encrypted dotfile: one armored block and nothing else.
+fn armored(text: &str) -> bool {
+    text.starts_with(ARMOR)
+        && text.trim_end().ends_with(ARMOR_END)
+        && text.matches(ARMOR).count() == 1
+}
 
 /// Lines added by each commit in `range` (arguments to `git log`), with
 /// their line numbers in that commit's version of the file.
@@ -43,6 +51,8 @@ pub(crate) fn scan(repo: &Path, range: &[&str]) -> Result<Vec<Hit>> {
         "core.quotePath=false",
         "log",
         "--patch",
+        // The first commit's diff too, whatever `log.showRoot` says.
+        "--root",
         "--reverse",
         "--format=commit %H",
         "--no-show-signature",
@@ -85,7 +95,7 @@ fn unencrypted(repo: &Path, hits: Vec<Hit>) -> Vec<Hit> {
     hits.into_iter()
         .filter(|hit| {
             let blob = format!("{}:{}", hit.commit, hit.file);
-            !git::run(repo, &["cat-file", "blob", &blob]).is_ok_and(|text| text.starts_with(ARMOR))
+            !git::run(repo, &["cat-file", "blob", &blob]).is_ok_and(|text| armored(&text))
         })
         .collect()
 }
@@ -159,17 +169,15 @@ fn check(files: &[Added], hosts: &[String]) -> Vec<Hit> {
     let matched = |text: &str| secret_rule(&without_host_ids(text, hosts));
     files
         .iter()
-        // A new encrypted dotfile is ciphertext from its first line, which
-        // looks like a key to the rules; an armored block lower down is not.
-        .filter(|added| {
-            !added
-                .lines
-                .first()
-                .is_some_and(|(line, text)| *line == 1 && text == ARMOR)
-        })
         .filter_map(|added| {
             let text: Vec<&str> = added.lines.iter().map(|(_, text)| text.as_str()).collect();
-            let rule = matched(&text.join("\n"))?;
+            let text = text.join("\n");
+            // A new encrypted dotfile is ciphertext, which looks like a key to
+            // the rules; an armored block in a plain file is not one.
+            if added.lines.first().is_some_and(|(line, _)| *line == 1) && armored(&text) {
+                return None;
+            }
+            let rule = matched(&text)?;
             let line = added
                 .lines
                 .iter()
@@ -227,6 +235,37 @@ mod tests {
         let hits = staged(repo, &[]).unwrap();
         assert_eq!(hits.len(), 1, "{hits:?}");
         assert_eq!(hits[0].file, "notes");
+        crate::git::run(repo, &["reset", "--quiet"]).unwrap();
+
+        // So is one that starts with an armored block, new or added to.
+        let token = "export GITHUB_TOKEN=ghp_0123456789abcdefghijABCDEFGHIJ012345\n";
+        let block = armored("YWdlLWVuY3J5cHRpb24ub3JnL3YxCi0+IFgyNTUxOSBhYmNk");
+        std::fs::write(repo.join("tail"), format!("{block}{token}")).unwrap();
+        crate::git::run(repo, &["add", "tail"]).unwrap();
+        assert_eq!(staged(repo, &["tail"]).unwrap().len(), 1);
+        std::fs::write(repo.join("tail"), &block).unwrap();
+        crate::git::run(repo, &["add", "tail"]).unwrap();
+        crate::git::run(repo, &["commit", "--quiet", "--no-verify", "-m", "v3"]).unwrap();
+        std::fs::write(repo.join("tail"), format!("{block}{token}")).unwrap();
+        crate::git::run(repo, &["add", "tail"]).unwrap();
+        crate::git::run(repo, &["commit", "--quiet", "--no-verify", "-m", "v4"]).unwrap();
+        let hits = scan(repo, &["HEAD~1..HEAD"]).unwrap();
+        assert_eq!(hits.len(), 1, "{hits:?}");
+    }
+
+    /// The first commit is scanned whatever the user's `log.showRoot`.
+    #[test]
+    fn the_first_commit_is_scanned() {
+        crate::git::tests::isolate();
+        let dir = tempfile::tempdir().unwrap();
+        let repo = dir.path();
+        crate::git::run(repo, &["init", "--quiet"]).unwrap();
+        crate::git::run(repo, &["config", "log.showRoot", "false"]).unwrap();
+        let token = "export GITHUB_TOKEN=ghp_0123456789abcdefghijABCDEFGHIJ012345\n";
+        std::fs::write(repo.join("env"), token).unwrap();
+        crate::git::run(repo, &["add", "env"]).unwrap();
+        crate::git::run(repo, &["commit", "--quiet", "--no-verify", "-m", "root"]).unwrap();
+        assert_eq!(scan(repo, &["HEAD"]).unwrap().len(), 1);
     }
 
     /// A host named by a random-looking hostname is not a secret.
