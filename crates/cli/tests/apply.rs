@@ -972,26 +972,33 @@ fn conflicts_wait_in_the_review_queue() {
 }
 
 #[test]
-fn apply_warns_when_chezmoi_manages_a_hooked_file() {
+fn apply_warns_when_chezmoi_would_drop_the_block() {
     use std::os::unix::fs::PermissionsExt;
     let home = set_up();
     let bin = home.root.join("bin");
     fs::create_dir_all(&bin).unwrap();
     let chezmoi = bin.join("chezmoi");
+    // chezmoi manages ~/.profile; `cat` prints what its apply would write.
     fs::write(
         &chezmoi,
-        "#!/bin/sh\ncase \"$*\" in *managed*) printf '%s\\n' \"$HOME/.profile\" \"$HOME/.gitconfig\" ;; esac\n",
+        "#!/bin/sh\ncase \"$*\" in\n*managed*) printf '%s\\n' \"$HOME/.profile\" \"$HOME/.gitconfig\" ;;\n*cat*) cat \"$HOME/target\" ;;\nesac\n",
     )
     .unwrap();
     fs::set_permissions(&chezmoi, fs::Permissions::from_mode(0o755)).unwrap();
     let path = format!("{}:{}", bin.display(), std::env::var("PATH").unwrap());
-    home.cmd("rsmt")
-        .arg("apply")
-        .env("PATH", path)
-        .assert()
-        .success()
-        .stderr(
-            predicate::str::contains("warning: chezmoi also manages ~/.profile, so")
-                .and(predicate::str::contains(".gitconfig").not()),
-        );
+    let apply = |target: &str| {
+        fs::write(home.root.join("target"), target).unwrap();
+        let out = home.cmd("rsmt").arg("apply").env("PATH", &path).output().unwrap();
+        assert!(out.status.success());
+        String::from_utf8(out.stderr).unwrap()
+    };
+    let stderr = apply("export A=1\n");
+    assert!(
+        stderr.contains("warning: chezmoi also manages ~/.profile, so"),
+        "{stderr}"
+    );
+    assert!(!stderr.contains(".gitconfig"), "{stderr}");
+    // A source that holds the block (`chezmoi re-add`) keeps it.
+    let stderr = apply(&format!("export A=1\n{BEGIN}\n# <<< rosamta <<<\n"));
+    assert!(!stderr.contains("chezmoi"), "{stderr}");
 }
