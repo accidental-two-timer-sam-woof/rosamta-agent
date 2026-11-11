@@ -24,11 +24,15 @@
 - **THEN** 遠端收到接管的 commit，`modules/zoxide.toml` 的修改仍未 commit
 
 ### Requirement: Pull
-`rsmt pull` SHALL 取得遠端的變更並以 rebase 合併本機尚未推送的 commit，成功後依 `apply` 的流程套用到本機。
+`rsmt pull` SHALL 取得遠端的變更並以 rebase 合併本機尚未推送的 commit，成功後依 `apply` 的流程套用到本機。拉取到的內容不改變本機 shell 載入的 script 時，SHALL 不啟動任何 shell。
 
 #### Scenario: Another host added a module
 - **WHEN** 另一台 host 推送了一個套用到所有主機的 module，使用者在本機執行 `rsmt pull`
 - **THEN** 本機 repo 包含該 module，新開的 shell 已載入它
+
+#### Scenario: Only another host's module came in
+- **WHEN** 另一台 host 推送了一個只套用到它自己的 module，本機執行 `rsmt pull`
+- **THEN** 本機 repo 包含該 module，過程中沒有啟動任何 shell
 
 #### Scenario: Host that has never applied
 - **WHEN** 使用者以 `rsmt init <url>` 加入 repo 後尚未執行 `rsmt apply`，接著執行 `rsmt pull`
