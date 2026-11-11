@@ -278,10 +278,15 @@ pub fn forget(ctx: &Context, path: &Path) -> Result<PathBuf> {
     let mut changed = vec![MANIFEST.to_string()];
     for entry in &entries {
         let source = entry.source();
-        // Another declaration may show the same source, or a folder around or inside it.
+        // Another declaration may show the same source, or a folder around or
+        // inside it, however it spells the path; one that is unclear is kept.
         let shared = others.iter().any(|other| {
-            let other = other.source();
-            Path::new(&other).starts_with(&source) || Path::new(&source).starts_with(&other)
+            match (super::clean(&source), super::clean(&other.source())) {
+                (Some(mine), Some(theirs)) => {
+                    theirs.starts_with(&mine) || mine.starts_with(&theirs)
+                }
+                _ => true,
+            }
         });
         if !shared {
             tree::remove(&repo.join(&source))?;
