@@ -135,8 +135,14 @@ fn added_lines(log: &str) -> Vec<Added> {
 fn check(files: &[Added]) -> Vec<Hit> {
     files
         .iter()
-        // Encrypted dotfiles are ciphertext, which looks like a key to the rules.
-        .filter(|added| !added.lines.iter().any(|(_, text)| text == ARMOR))
+        // A new encrypted dotfile is ciphertext from its first line, which
+        // looks like a key to the rules; an armored block lower down is not.
+        .filter(|added| {
+            !added
+                .lines
+                .first()
+                .is_some_and(|(line, text)| *line == 1 && text == ARMOR)
+        })
         .filter_map(|added| {
             let text: Vec<&str> = added.lines.iter().map(|(_, text)| text.as_str()).collect();
             let rule = secret_rule(&text.join("\n"))?;
@@ -186,6 +192,17 @@ mod tests {
         assert_eq!(staged(repo, &[]).unwrap(), []);
         crate::git::run(repo, &["commit", "--quiet", "--no-verify", "-m", "v2"]).unwrap();
         assert_eq!(scan(repo, &["HEAD~1..HEAD"]).unwrap(), []);
+
+        // A plain file holding an armored block is still scanned.
+        let notes = format!(
+            "# notes\n{}export GITHUB_TOKEN=ghp_0123456789abcdefghijABCDEFGHIJ012345\n",
+            armored("YWdlLWVuY3J5cHRpb24ub3JnL3YxCi0+IFgyNTUxOSBhYmNk")
+        );
+        std::fs::write(repo.join("notes"), notes).unwrap();
+        crate::git::run(repo, &["add", "notes"]).unwrap();
+        let hits = staged(repo, &[]).unwrap();
+        assert_eq!(hits.len(), 1, "{hits:?}");
+        assert_eq!(hits[0].file, "notes");
     }
 
     const LOG: &str = "commit 1111
