@@ -197,7 +197,7 @@ rsmt review accept <編號>
 rsmt review ignore <編號>
 ```
 
-`accept` 接管該項，預設只套用到這台主機（記錄主機、OS 與 shell），加上 `--scope all` 則去掉主機與 OS 的限制。`ignore` 讓內容留在設定檔，內容改變前不再列出。清單不是空的時候，開啟互動 shell 會顯示一行提醒。
+`accept` 接管該項，預設只套用到這台主機（記錄主機、OS 與 shell），加上 `--scope all` 則去掉主機與 OS 的限制。其他主機已經從同一種 shell 的設定檔接管過完全相同的內容時，不會另建 module，而是把這台主機加進那個 module 的 `hosts`（以及 `os`）；還原時再把這台主機移除。`ignore` 讓內容留在設定檔，內容改變前不再列出。清單不是空的時候，開啟互動 shell 會顯示一行提醒。
 
 接管方式寫在 `~/.config/rosamta/host.toml`：
 

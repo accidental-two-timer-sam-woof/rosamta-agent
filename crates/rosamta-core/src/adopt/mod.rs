@@ -5,6 +5,7 @@
 mod recognize;
 mod secret;
 mod segment;
+mod shared;
 pub(crate) mod store;
 
 use std::fmt::Write as _;
@@ -40,6 +41,8 @@ pub enum Kind {
     Comment,
     /// Adopted before (an installer wrote it again): removed, no new module.
     Duplicate,
+    /// What another host's module does: this host joins that module.
+    Include,
 }
 
 /// Which hosts a new module applies to.
@@ -127,13 +130,6 @@ pub(crate) fn host_config(ctx: &Context) -> Result<HostConfig> {
     host::load(&path)
 }
 
-/// Every module in the repo and on this host only, by name.
-fn existing_modules(ctx: &Context) -> Result<Vec<(String, Module)>> {
-    let mut out = apply::load_modules(&ctx.paths.repo())?;
-    out.extend(apply::load_local_modules(&ctx.paths)?);
-    Ok(out)
-}
-
 /// Content outside the hook in every watched file whose shell is hooked.
 pub fn scan(ctx: &Context) -> Result<Vec<Candidate>> {
     let installed = ctx.installed();
@@ -141,10 +137,14 @@ pub fn scan(ctx: &Context) -> Result<Vec<Candidate>> {
     let store = Store::new(ctx.paths.state());
     let adoptions = store.adoptions()?;
     let ignored = store.ignored()?;
-    let existing = existing_modules(ctx)?;
+    let repo_modules = apply::load_modules(&ctx.paths.repo())?;
+    let mut existing = repo_modules.clone();
+    existing.extend(apply::load_local_modules(&ctx.paths)?);
     let mut taken: Vec<String> = existing.iter().map(|(name, _)| name.clone()).collect();
+    let facts = HostFacts::current(&host_config(ctx)?);
     // Only modules that load on this host stand in for its lines.
-    let loaded = render::select(existing, &HostFacts::current(&host_config(ctx)?));
+    let loaded = render::select(existing, &facts);
+    let module_files = repo::module_files(&ctx.paths.repo())?;
     let recognizers = recognizers();
     let mut out = Vec::new();
     for watched in segment::watched_files(&env) {
@@ -269,10 +269,22 @@ pub fn scan(ctx: &Context) -> Result<Vec<Candidate>> {
             };
             // Only the shells that read the file ran it before.
             module.shells = shells.to_vec();
+            let local = secret::looks_secret(&text);
+            if let Some(name) = shared::find(&repo_modules, &module, &facts).filter(|_| !local) {
+                candidate.kind = Kind::Include;
+                candidate.module = module_files
+                    .iter()
+                    .find(|path| repo::module_name(path) == name)
+                    .and_then(|path| path.strip_prefix(ctx.paths.repo()).ok())
+                    .map(Path::to_path_buf);
+                candidate.name = Some(name.to_string());
+                out.push(candidate);
+                continue;
+            }
             order += 1;
             let name = derive_name(&segment, &watched, &module, &ctx.home);
             let name = unique(&name, &mut taken);
-            candidate.local = secret::looks_secret(&text);
+            candidate.local = local;
             candidate.module = Some(if candidate.local {
                 local_dir(ctx).join(format!("{name}.toml"))
             } else {
@@ -635,6 +647,8 @@ pub struct Plan {
     pub files: Vec<FileChange>,
     /// New module files: absolute path and content.
     pub modules: Vec<(PathBuf, String)>,
+    /// Other hosts' modules this host joins.
+    pub edits: Vec<FileChange>,
     #[serde(skip)]
     records: Vec<Adoption>,
     #[serde(skip)]
@@ -658,7 +672,19 @@ pub fn plan(ctx: &Context, candidates: &[Candidate], scope: Scope) -> Result<Pla
         });
         plan.records.extend(records);
     }
+    let facts = HostFacts::current(&host);
     for candidate in candidates {
+        if candidate.kind == Kind::Include
+            && let Some(module) = &candidate.module
+        {
+            join(
+                &mut plan.edits,
+                &ctx.paths.repo().join(module),
+                &facts,
+                scope,
+            )?;
+            continue;
+        }
         let (Some(content), Some(module)) = (&candidate.content, &candidate.module) else {
             continue;
         };
@@ -666,7 +692,7 @@ pub fn plan(ctx: &Context, candidates: &[Candidate], scope: Scope) -> Result<Pla
         content.order = candidate.order;
         if scope == Scope::Host {
             content.when.hosts = vec![host.id.clone()];
-            content.when.os = vec![HostFacts::current(&host).os];
+            content.when.os = vec![facts.os];
         }
         let origin = format!("{} on {}", display(&candidate.file, &ctx.home), host.id);
         let path = if candidate.local {
@@ -678,6 +704,50 @@ pub fn plan(ctx: &Context, candidates: &[Candidate], scope: Scope) -> Result<Pla
     }
     plan.candidates = candidates.to_vec();
     Ok(plan)
+}
+
+/// Add this host (and its OS, where the module lists one) to another
+/// host's module, or drop both limits for every host. Several candidates
+/// may join the same module.
+fn join(edits: &mut Vec<FileChange>, path: &Path, facts: &HostFacts, scope: Scope) -> Result<()> {
+    let at = match edits.iter().position(|edit| edit.path == path) {
+        Some(at) => at,
+        None => {
+            let text = read(path)?;
+            edits.push(FileChange {
+                path: path.to_path_buf(),
+                before: Some(text.clone()),
+                after: Some(text),
+            });
+            edits.len() - 1
+        }
+    };
+    let edit = &mut edits[at];
+    let text = edit.after.as_deref().unwrap_or_default();
+    edit.after = Some(edit_module(path, text, |doc| match scope {
+        Scope::Host => crate::scope::widen(
+            doc,
+            &crate::scope::Widening {
+                host: Some(facts.id.clone()),
+                os: Some(facts.os),
+                ..Default::default()
+            },
+        ),
+        Scope::All => crate::scope::every_host(doc),
+    })?);
+    Ok(())
+}
+
+fn edit_module(
+    path: &Path,
+    text: &str,
+    change: impl FnOnce(&mut dyn toml_edit::TableLike),
+) -> Result<String> {
+    let mut doc: toml_edit::DocumentMut = text.parse().map_err(|err: toml_edit::TomlError| {
+        Error::Usage(format!("{}: {}", path.display(), err.message().trim()))
+    })?;
+    change(doc.as_table_mut());
+    Ok(doc.to_string())
 }
 
 /// The file with every candidate's lines removed (or commented out), and a
@@ -774,6 +844,7 @@ fn edit_file(
                 commit: None,
                 order: candidate.order,
                 at: now(),
+                include: candidate.kind == Kind::Include,
             }
         })
         .collect();
@@ -862,12 +933,15 @@ pub fn execute(ctx: &Context, plan: Plan) -> Result<Vec<Adoption>> {
     snapshots.save(&changed, "adopt")?;
     let mut written = false;
     let write = || -> Result<()> {
-        for change in &plan.files {
+        for change in plan.files.iter().chain(&plan.edits) {
             unchanged(&change.path, change.before.as_deref())?;
         }
         written = true;
         for (path, text) in &plan.modules {
             write_module(ctx, path, text)?;
+        }
+        for edit in &plan.edits {
+            write_text(&edit.path, edit.after.as_deref())?;
         }
         for change in &plan.files {
             write_text(&change.path, change.after.as_deref())?;
@@ -876,7 +950,7 @@ pub fn execute(ctx: &Context, plan: Plan) -> Result<Vec<Adoption>> {
     };
     if let Err(err) = apply::apply_after(ctx, write) {
         if written {
-            for change in &plan.files {
+            for change in plan.files.iter().chain(&plan.edits) {
                 let _ = write_text(&change.path, change.before.as_deref());
             }
             for (path, _) in &plan.modules {
@@ -958,6 +1032,13 @@ pub fn execute(ctx: &Context, plan: Plan) -> Result<Vec<Adoption>> {
 /// `adopt(zsh): add bun PATH from ~/.zshrc on mbp`.
 fn commit_message(candidate: &Candidate, home: &Path, host: &str) -> String {
     let name = candidate.name.as_deref().unwrap_or("adopted");
+    let file = display(&candidate.file, home);
+    if candidate.kind == Kind::Include {
+        return format!(
+            "adopt({}): include {name} from {file} on {host}",
+            candidate.shell()
+        );
+    }
     let what = match &candidate.content {
         Some(module) if candidate.kind == Kind::Structured => {
             let mut kinds = Vec::new();
@@ -979,9 +1060,8 @@ fn commit_message(candidate: &Candidate, home: &Path, host: &str) -> String {
         _ => "snippet".into(),
     };
     format!(
-        "adopt({}): add {name} {what} from {} on {host}",
-        candidate.shell(),
-        display(&candidate.file, home)
+        "adopt({}): add {name} {what} from {file} on {host}",
+        candidate.shell()
     )
 }
 
@@ -1158,8 +1238,11 @@ pub fn ignore(ctx: &Context, id: u32) -> Result<QueueItem> {
 pub struct Undo {
     pub adoption: Adoption,
     pub file: FileChange,
-    /// The module file that goes away, with its content.
+    /// The module file with its content now.
     pub module: Option<(PathBuf, String)>,
+    /// What the module becomes; `None` removes it. A module this host only
+    /// joined loses this host instead.
+    pub module_after: Option<String>,
 }
 
 /// Plan `rsmt restore <id>`: put the lines back where they were, and remove
@@ -1186,6 +1269,15 @@ pub fn plan_undo(ctx: &Context, id: u32) -> Result<Undo> {
         Ok::<_, Error>((path, text))
     })
     .transpose()?;
+    let module_after = match &module {
+        Some((path, text)) if adoption.include => {
+            let host = host_config(ctx)?;
+            Some(edit_module(path, text, |doc| {
+                crate::scope::remove_host(doc, &host.id)
+            })?)
+        }
+        _ => None,
+    };
     Ok(Undo {
         file: FileChange {
             path: adoption.file.clone(),
@@ -1194,6 +1286,7 @@ pub fn plan_undo(ctx: &Context, id: u32) -> Result<Undo> {
         },
         adoption,
         module,
+        module_after,
     })
 }
 
@@ -1267,7 +1360,7 @@ pub fn undo(ctx: &Context, plan: Undo) -> Result<()> {
         written = true;
         write_text(&plan.file.path, plan.file.after.as_deref())?;
         if let Some((path, _)) = &plan.module {
-            write_text(path, None)?;
+            write_text(path, plan.module_after.as_deref())?;
         }
         Ok(())
     };
@@ -1351,6 +1444,7 @@ mod tests {
             commit: None,
             order: 0,
             at: 0,
+            include: false,
         }
     }
 

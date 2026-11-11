@@ -35,6 +35,9 @@ pub struct Adoption {
     pub commit: Option<String>,
     pub order: u32,
     pub at: u64,
+    /// This host was added to another host's module rather than a new one.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub include: bool,
 }
 
 #[derive(Debug, Default, Serialize, Deserialize)]
