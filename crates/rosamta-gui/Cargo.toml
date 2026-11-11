@@ -15,6 +15,12 @@ toml_edit = "0.25.19"
 gpui-pre = { version = "=0.3.12", optional = true }
 gpui-pre-platform = { version = "=0.3.12", optional = true }
 
+[dev-dependencies]
+# gpui's test platform, for tests of the views.
+gpui-pre = { version = "=0.3.12", features = ["test-support"] }
+gpui-pre-platform = { version = "=0.3.12", features = ["test-support"] }
+tempfile = "3.27.0"
+
 [features]
 # Development only: save each page as a PNG (see src/screenshot.rs).
 screenshot = ["gpui-pre/test-support", "gpui-pre-platform/test-support"]

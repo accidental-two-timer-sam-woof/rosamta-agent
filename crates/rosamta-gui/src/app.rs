@@ -433,3 +433,149 @@ mod tests {
         assert_eq!(review_id("https://review/12"), None);
     }
 }
+
+#[cfg(test)]
+mod view_tests {
+    use std::path::Path;
+    use std::process::Command;
+
+    use gpui_kit::TestAppContext;
+    use rosamta_core::apply::Context as Core;
+
+    // Not `super::*`: gpui's `test` attribute would replace the standard one.
+    use super::{Detail, Page, Rosamta, actions};
+
+    /// Set by the parent test for the child run in a home of its own.
+    const OWN_HOME: &str = "ROSAMTA_TEST_OWN_HOME";
+
+    /// The app reads HOME and the XDG paths everywhere, so the views are
+    /// tested in a child process with a home of its own: setting the
+    /// environment here would race the other tests, and never the real one.
+    #[test]
+    fn the_review_page_follows_the_queue_and_actions() {
+        let home = tempfile::tempdir().unwrap();
+        let mut child = Command::new(std::env::current_exe().unwrap());
+        child
+            .args(["--exact", "app::view_tests::in_own_home", "--ignored"])
+            .env("HOME", home.path())
+            .env(OWN_HOME, home.path())
+            .env("ROSAMTA_NO_KEYCHAIN", "1")
+            .env("GIT_CONFIG_GLOBAL", "/dev/null")
+            .env("GIT_CONFIG_NOSYSTEM", "1")
+            .env("GIT_AUTHOR_NAME", "test")
+            .env("GIT_AUTHOR_EMAIL", "test@example.com")
+            .env("GIT_COMMITTER_NAME", "test")
+            .env("GIT_COMMITTER_EMAIL", "test@example.com");
+        for var in [
+            "XDG_CONFIG_HOME",
+            "XDG_DATA_HOME",
+            "XDG_STATE_HOME",
+            "XDG_CACHE_HOME",
+            "XDG_RUNTIME_DIR",
+            "ZDOTDIR",
+        ] {
+            child.env_remove(var);
+        }
+        let out = child.output().unwrap();
+        assert!(
+            out.status.success() && String::from_utf8_lossy(&out.stdout).contains("1 passed"),
+            "{}\n{}",
+            String::from_utf8_lossy(&out.stdout),
+            String::from_utf8_lossy(&out.stderr)
+        );
+    }
+
+    fn write(path: &Path, text: &str) {
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(path, text).unwrap();
+    }
+
+    /// Two copies that differ from the repo: two review items.
+    fn set_up(core: &Core) {
+        let repo = core.paths.repo();
+        write(
+            &repo.join("rosamta.toml"),
+            "format = 1\nhosts = [\"test\"]\n",
+        );
+        write(
+            &core.paths.host_config(),
+            "id = \"test\"\nadopt = \"ask\"\n",
+        );
+        let git = Command::new("git")
+            .args(["init", "--quiet"])
+            .current_dir(&repo)
+            .status()
+            .unwrap();
+        assert!(git.success());
+        let mut manifest = String::new();
+        for name in [".a", ".b"] {
+            write(&repo.join("home").join(name), "repo\n");
+            write(&core.home.join(name), "mine\n");
+            manifest.push_str(&format!(
+                "[[dotfile]]\npath = \"{name}\"\ndeploy = \"copy\"\n\n"
+            ));
+        }
+        write(&repo.join("dotfiles.toml"), &manifest);
+        rosamta_core::dotfiles::deploy(core).unwrap();
+    }
+
+    #[test]
+    #[ignore = "run by the_review_page_follows_the_queue_and_actions, in a home of its own"]
+    fn in_own_home() {
+        let Some(own) = std::env::var_os(OWN_HOME) else {
+            return;
+        };
+        assert_eq!(std::env::var_os("HOME"), Some(own));
+        let core = Core::from_env().unwrap();
+        set_up(&core);
+
+        let mut cx = TestAppContext::single();
+        cx.update(gpui_kit::init);
+        let (view, cx) = cx.add_window_view(|window, cx| {
+            crate::theme::init(window, cx);
+            Rosamta::new(None, window, cx)
+        });
+        cx.run_until_parked();
+        let ids: Vec<u32> = view.read_with(cx, |view, _| {
+            assert!(view.snap.ready);
+            view.snap.queue.iter().map(|item| item.id).collect()
+        });
+        assert_eq!(ids.len(), 2);
+        view.read_with(cx, |view, _| {
+            assert_eq!(view.selected, Some(ids[0]));
+            assert!(matches!(&view.detail, Some(Detail::Dotfile(diff)) if diff.contains("+repo")));
+        });
+
+        // Choosing an item opens it on the review page with its own diff.
+        view.update(cx, |view, cx| {
+            view.page = Page::Overview;
+            view.select(ids[1], cx);
+        });
+        view.read_with(cx, |view, _| {
+            assert!(view.page == Page::Review && view.detail.is_none());
+        });
+        cx.run_until_parked();
+        assert!(view.read_with(cx, |view, _| view.detail.is_some()));
+
+        // Buttons wait while an action runs; afterwards the item is gone
+        // and the remaining one is selected.
+        let second = ids[1];
+        cx.update(|window, cx| {
+            view.update(cx, |view, cx| {
+                view.run(window, cx, move |core| actions::discard(core, second));
+                assert!(view.busy);
+            })
+        });
+        cx.run_until_parked();
+        view.read_with(cx, |view, _| {
+            assert!(!view.busy);
+            assert_eq!(view.snap.queue.len(), 1);
+            assert_eq!(view.selected, Some(ids[0]));
+            assert!(view.detail.is_some());
+        });
+        assert_eq!(
+            std::fs::read_to_string(core.home.join(".b")).unwrap(),
+            "repo\n"
+        );
+    }
+}
