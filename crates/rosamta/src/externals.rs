@@ -55,8 +55,9 @@ pub fn update(json: bool, paths: &[PathBuf]) -> Result<ExitCode> {
     let steps = externals::apply(&ctx)?;
     let failed =
         !updated.failed.is_empty() || steps.iter().any(|step| step.action == Action::Failed);
-    // New locks reach other hosts only once they downloaded here.
-    if !updated.locks.is_empty() && !failed {
+    // Locks reach other hosts only once they downloaded here, including
+    // locks an earlier run committed but could not download.
+    if !failed {
         after_commit(&ctx, &lock, started, json);
     }
     if json {
