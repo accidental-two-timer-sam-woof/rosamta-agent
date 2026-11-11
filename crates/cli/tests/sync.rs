@@ -177,6 +177,23 @@ fn pull_brings_in_and_applies_another_hosts_module() {
 }
 
 #[test]
+fn a_pull_with_nothing_for_this_hosts_shells_starts_none() {
+    let hosts = hosts();
+    run(&hosts.a, &["apply"]);
+    append(&hosts.a, ".profile", "echo started >> \"$HOME/starts\"\n");
+    hosts.b.write(
+        "modules/only-b.toml",
+        "[when]\nhosts = [\"b\"]\n\n[env]\nONLY_B = \"1\"\n",
+    );
+    run(&hosts.b, &["publish"]);
+
+    let out = run(&hosts.a, &["pull"]);
+    assert!(out.contains("Pulled"), "{out}");
+    assert!(hosts.a.repo().join("modules/only-b.toml").is_file());
+    assert!(!hosts.a.root.join("starts").exists());
+}
+
+#[test]
 fn a_failing_external_does_not_fail_the_pull() {
     let hosts = hosts();
     run(&hosts.a, &["apply"]);
