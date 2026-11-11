@@ -109,7 +109,7 @@ pub fn watched_files(env: &HookEnv) -> Vec<Watched> {
 /// adopted module, so the generated scripts count too.
 fn profile_readers(env: &HookEnv) -> Vec<Shell> {
     let runs = |path: &Path| {
-        std::fs::read_to_string(path).is_ok_and(|text| runs_profile(&text, &env.home))
+        std::fs::read_to_string(path).is_ok_and(|text| runs(&text, &env.home, ".profile"))
     };
     let generated = |shell: Shell| {
         std::fs::read_dir(env.current.join(shell.name()))
@@ -139,14 +139,15 @@ fn profile_readers(env: &HookEnv) -> Vec<Shell> {
     shells
 }
 
-/// A line such as `. ~/.profile`, `. "$HOME"/.profile`, `. /home/me/.profile`
-/// or `emulate sh -c '. ~/.profile'`. Text that only looks like one (in a
-/// function never called, say) counts too: that renders `.profile` for the
-/// shell, as every host did before.
-fn runs_profile(text: &str, home: &Path) -> bool {
+/// A line that runs `~/<name>`, such as `. ~/.profile`, `. "$HOME"/.profile`,
+/// `. /home/me/.profile` or `emulate sh -c '. ~/.profile'`. Text that only
+/// looks like one (in a function never called, say) counts too: for
+/// `.profile` that renders it for the shell, as every host did before.
+pub(crate) fn runs(text: &str, home: &Path, name: &str) -> bool {
     let home = regex::escape(&home.to_string_lossy());
+    let name = regex::escape(name);
     Regex::new(&format!(
-        r#"(?m)^[^#\n]*?(?:^|[\s;&|'"(])(?:\.|source)\s+["']?(?:~|\$HOME|\$\{{HOME\}}|{home})["']?/\.profile(?:["'\s;&|)]|$)"#
+        r#"(?m)^[^#\n]*?(?:^|[\s;&|'"(])(?:\.|source)\s+["']?(?:~|\$HOME|\$\{{HOME\}}|{home})["']?/{name}(?:["'\s;&|)]|$)"#
     ))
     .unwrap()
     .is_match(text)
@@ -529,7 +530,7 @@ mod tests {
             ". \"$HOME\"/.profile",
             ". /home/me/.profile",
         ] {
-            assert!(runs_profile(text, home), "{text}");
+            assert!(runs(text, home, ".profile"), "{text}");
         }
         for text in [
             "# . ~/.profile",
@@ -538,8 +539,17 @@ mod tests {
             "export PROFILE=~/.profile",
             ". /home/other/.profile",
         ] {
-            assert!(!runs_profile(text, home), "{text}");
+            assert!(!runs(text, home, ".profile"), "{text}");
         }
+        // Fedora's and Arch's `.bash_profile`.
+        for text in [
+            "if [ -f ~/.bashrc ]; then\n\t. ~/.bashrc\nfi\n",
+            "[[ -f ~/.bashrc ]] && . ~/.bashrc\n",
+        ] {
+            assert!(runs(text, home, ".bashrc"), "{text}");
+            assert!(!runs(text, home, ".profile"), "{text}");
+        }
+        assert!(!runs(". ~/.bashrc.local", home, ".bashrc"));
     }
 
     fn spans(text: &str) -> Vec<(usize, usize)> {

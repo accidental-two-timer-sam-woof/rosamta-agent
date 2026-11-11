@@ -789,6 +789,92 @@ fn ejected_bashrc_parses_without_interactive_code() {
     }
 }
 
+/// How to start a shell from a `shell` that reads its env snippets' files
+/// again: any zsh, but only a login bash (`.bash_profile`, `.profile`).
+fn nested(shell: &str) -> &'static str {
+    match shell {
+        "bash" => "bash -l -i",
+        _ => "zsh -i",
+    }
+}
+
+/// What a startup file gave every shell (options, functions, variables it
+/// did not export) reaches a shell started from another one too; exported
+/// values came down already and are not built up a second time.
+#[test]
+fn a_nested_shell_runs_env_snippets_again_but_not_the_exports() {
+    let home = Home::new();
+    home.cmd("rsmt").arg("init").assert().success();
+    home.write(
+        "modules/opts.toml",
+        "phase = \"env\"\n[env]\nCNT = \"x$CNT\"\n[raw]\nbash = 'LOCAL=1'\nzsh = 'LOCAL=1'\n",
+    );
+    apply(&home);
+    for shell in ["bash", "zsh"] {
+        if !has(shell) {
+            continue;
+        }
+        let script = format!("{} -c 'echo \"${{LOCAL-unset}} $CNT\"'", nested(shell));
+        let out = home.shell(&[shell, "-i", "-c", &script].map(String::from));
+        assert_eq!(String::from_utf8_lossy(&out.stdout), "1 x\n", "{shell}");
+    }
+    // bash does not read `.bash_profile` again in a shell that is not a login one.
+    if has("bash") {
+        let script = "bash -i -c 'echo \"${LOCAL-unset} $CNT\"'; :";
+        let out = home.shell(&["bash", "-i", "-c", script].map(String::from));
+        assert_eq!(String::from_utf8_lossy(&out.stdout), "unset x\n");
+    }
+}
+
+/// The marker that a process ran its snippets reaches a nested shell when
+/// the user exports it (`set -a`); the nested shell runs them all the same.
+#[test]
+fn an_exported_marker_does_not_hide_env_snippets_from_a_nested_shell() {
+    let home = Home::new();
+    home.cmd("rsmt").arg("init").assert().success();
+    home.write(
+        "modules/opts.toml",
+        "phase = \"env\"\n[raw]\nbash = 'LOCAL=1'\nzsh = 'LOCAL=1'\n",
+    );
+    apply(&home);
+    for shell in ["bash", "zsh"] {
+        if !has(shell) {
+            continue;
+        }
+        // `; :` keeps the nested shell a child: a last command may be exec'd, keeping the PID.
+        let script = format!(
+            "export _rosamta_env; {} -c 'echo \"${{LOCAL-unset}}\"'; :",
+            nested(shell)
+        );
+        let out = home.shell(&[shell, "-i", "-c", &script].map(String::from));
+        assert_eq!(String::from_utf8_lossy(&out.stdout), "1\n", "{shell}");
+    }
+}
+
+/// Ejected code runs an env snippet once in a shell and once more in a
+/// shell started from it, as the loaders did.
+#[test]
+fn ejected_env_snippets_run_once_in_every_shell() {
+    let home = Home::new();
+    home.cmd("rsmt").arg("init").assert().success();
+    let count = "N=\"x${N-}\"";
+    home.write(
+        "modules/opts.toml",
+        &format!("phase = \"env\"\n[raw]\nbash = '{count}'\nzsh = '{count}'\n"),
+    );
+    apply(&home);
+    eject(&home);
+    for shell in ["bash", "zsh"] {
+        if !has(shell) {
+            continue;
+        }
+        // `; :` keeps the nested shell a child: a last command may be exec'd.
+        let script = format!("echo \"$N\"; {} -c 'echo \"$N\"'; :", nested(shell));
+        let out = home.shell(&[shell, "-i", "-c", &script].map(String::from));
+        assert_eq!(String::from_utf8_lossy(&out.stdout), "x\nx\n", "{shell}");
+    }
+}
+
 #[test]
 fn ejected_code_keeps_return_local_and_env_once() {
     let home = Home::new();
