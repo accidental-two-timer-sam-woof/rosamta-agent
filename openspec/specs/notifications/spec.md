@@ -17,11 +17,15 @@
 - **THEN** rosamta 的 GUI 開啟並顯示該項目
 
 ### Requirement: Batch notifications
-短時間內出現多個待處理項目時，背景服務 SHALL 合併成一則通知，而不是逐項通知。
+短時間內出現多個待處理項目時，背景服務 SHALL 合併成一則通知，而不是逐項通知。通知服務沒有接下這則通知時，背景服務 SHALL 稍後再試，且這些項目在顯示前不算已通知，重新啟動後也會再通知。
 
 #### Scenario: Installer writes three files
 - **WHEN** 某個安裝程式在 10 秒內修改了三個 rc 檔
 - **THEN** 使用者只收到一則通知，說明有三個待處理項目
+
+#### Scenario: Review items found before the notification service starts
+- **WHEN** 背景服務在桌面的通知服務啟動前發現待處理項目
+- **THEN** 通知服務啟動後，使用者會收到這則通知
 
 ### Requirement: Problem notifications
 推送或拉取受阻（簽章失敗、偵測到秘密或遠端拒絕存取）、推送或拉取失敗、拉取衝突、拉取後套用失敗，以及遠端 repo 需要較新版本的 rosamta 時，背景服務 SHALL 各發出一則通知，並說明是推送還是拉取出了問題；同一個問題在解決之前 SHALL 不重複通知。通知沒能交給系統的通知服務時（例如通知服務比背景服務晚啟動），該問題 SHALL 不算已通知，之後 SHALL 再試。
