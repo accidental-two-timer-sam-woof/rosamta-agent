@@ -1013,7 +1013,7 @@ pub fn execute(ctx: &Context, plan: Plan) -> Result<Vec<Adoption>> {
         .collect();
     snapshots.save(&changed, "adopt")?;
     let mut written = false;
-    let mut replaced = Vec::new();
+    let (mut edited, mut replaced) = (Vec::new(), Vec::new());
     let write = || -> Result<()> {
         for change in plan.files.iter().chain(&plan.edits) {
             unchanged(&change.path, change.before.as_deref())?;
@@ -1022,13 +1022,15 @@ pub fn execute(ctx: &Context, plan: Plan) -> Result<Vec<Adoption>> {
         for (path, text) in &plan.modules {
             write_module(ctx, path, text)?;
         }
-        for change in plan.edits.iter().chain(&plan.files) {
-            replace(
-                &change.path,
-                change.before.as_deref(),
-                change.after.as_deref(),
-            )?;
-            replaced.push(change);
+        for (changes, done) in [(&plan.edits, &mut edited), (&plan.files, &mut replaced)] {
+            for change in changes {
+                replace(
+                    &change.path,
+                    change.before.as_deref(),
+                    change.after.as_deref(),
+                )?;
+                done.push(change);
+            }
         }
         Ok(())
     };
@@ -1048,9 +1050,16 @@ pub fn execute(ctx: &Context, plan: Plan) -> Result<Vec<Adoption>> {
                 )
                 .is_ok();
             }
-            // A file edited since rosamta wrote it keeps the adopted lines
-            // out, so the modules holding them stay.
+            // An rc file edited since rosamta wrote it keeps the adopted
+            // lines out, so the modules holding them, new or joined, stay.
             if restored {
+                for change in &edited {
+                    let _ = replace(
+                        &change.path,
+                        change.after.as_deref(),
+                        change.before.as_deref(),
+                    );
+                }
                 for (path, _) in &plan.modules {
                     let _ = std::fs::remove_file(path);
                 }
@@ -1480,7 +1489,7 @@ pub fn undo(ctx: &Context, plan: Undo) -> Result<()> {
         std::slice::from_ref(&plan.file.path),
         &format!("restore adoption {}", plan.adoption.id),
     )?;
-    let mut written = false;
+    let (mut written, mut narrowed) = (false, false);
     let write = || -> Result<()> {
         unchanged(&plan.file.path, plan.file.before.as_deref())?;
         if let Some((path, text)) = &plan.module {
@@ -1494,6 +1503,7 @@ pub fn undo(ctx: &Context, plan: Undo) -> Result<()> {
         )?;
         if let Some((path, text)) = &plan.module {
             replace(path, Some(text), plan.module_after.as_deref())?;
+            narrowed = true;
         }
         Ok(())
     };
@@ -1503,18 +1513,21 @@ pub fn undo(ctx: &Context, plan: Undo) -> Result<()> {
         .find(|watched| watched.path == plan.adoption.file)
         .map_or_else(|| vec![plan.adoption.shell], |watched| watched.shells);
     if let Err(err) = apply::apply_after(ctx, &shells, write) {
-        // The module takes the lines back only when the rc file gave them
-        // back, and only while it still holds what rosamta wrote.
-        let restored = written
+        // The lines stay in the rc file while a module edited since rosamta
+        // narrowed it cannot take them back; the module takes them only
+        // once the rc file gave them up.
+        let module = plan.module.as_ref().filter(|_| narrowed);
+        let module_free =
+            module.is_none_or(|(path, _)| unchanged(path, plan.module_after.as_deref()).is_ok());
+        if written
+            && module_free
             && replace(
                 &plan.file.path,
                 plan.file.after.as_deref(),
                 plan.file.before.as_deref(),
             )
-            .is_ok();
-        if restored
-            && let Some((path, text)) = &plan.module
-            && unchanged(path, plan.module_after.as_deref()).is_ok()
+            .is_ok()
+            && let Some((path, text)) = module
         {
             let _ = write_module(ctx, path, text);
         }
