@@ -27,12 +27,15 @@ pub fn sync_now(ctx: &Context) -> Done {
 /// Try again after the problem `kind`. What a pull brought in but could not
 /// apply is applied first: a sync alone finds nothing new and calls it done.
 pub fn retry(ctx: &Context, kind: &str) -> Done {
-    if kind == "apply_failed"
-        && let Some(failure) = apply_if_applied(ctx)?
-    {
-        return Ok(Some(failure));
-    }
-    sync_now(ctx)
+    let warning = match kind {
+        "apply_failed" => {
+            let _lock = adopt::lock(ctx)?;
+            apply_if_applied(ctx)?
+        }
+        _ => None,
+    };
+    // The sync records that the pull is applied now, whatever the warning.
+    sync_now(ctx).map(|_| warning)
 }
 
 /// What `rsmt review` does: queue new rc file content, or adopt it under
