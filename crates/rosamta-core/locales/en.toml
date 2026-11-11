@@ -34,6 +34,8 @@ apply_failed = "New settings were not applied: {reason}"
 invalid = "The repo has an invalid file: {reason}"
 upgrade = "The repo needs a newer rosamta"
 locked = "Encrypted dotfiles need the passphrase"
+offline_one = "Offline: 1 change waiting to push"
+offline = "Offline: {count} changes waiting to push"
 
 [nav]
 overview = "Overview"

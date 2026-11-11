@@ -33,6 +33,8 @@ apply_failed = "新設定沒有套用：{reason}"
 invalid = "repo 中有格式錯誤的檔案：{reason}"
 upgrade = "repo 需要較新版本的 rosamta"
 locked = "加密的設定檔需要輸入密碼"
+offline_one = "沒有網路，1 個變更等待推送"
+offline = "沒有網路，{count} 個變更等待推送"
 
 [nav]
 overview = "總覽"

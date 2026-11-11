@@ -443,7 +443,7 @@ git -C ~/.local/share/rosamta/repo remote add origin git@github.com:<你的帳�
 rsmt publish
 ```
 
-接管、還原，以及 `rsmt add`、`rsmt forget`、`rsmt review accept` 建立 commit 後會立即推送。在 `~/.config/rosamta/host.toml` 設定 `publish = "manual"` 時，只在執行 `rsmt publish` 或 `rsmt sync` 時推送。
+接管、還原，以及 `rsmt add`、`rsmt forget`、`rsmt review accept` 建立 commit 後會立即推送。在 `~/.config/rosamta/host.toml` 設定 `publish = "manual"` 時，只在執行 `rsmt publish` 或 `rsmt sync` 時推送。沒有網路時，commit 留在這台主機並通知一次；背景服務每分鐘重試，連上網路後推送。
 
 拉取時，這台主機還沒推送的 commit 會接在遠端的變更之後。兩台主機改到同一個檔案的同一處時，拉取會中止並列出這些檔案，repo 維持拉取前的狀態；在 repo 中用 git 合併後，再執行 `rsmt sync`。拉取到的 module 讓 shell 啟動時出現新的錯誤時，repo 保留新內容，shell 繼續使用原本的設定。
 

@@ -196,6 +196,88 @@ fn problems_say_whether_publishing_or_pulling_failed() {
 }
 
 #[test]
+fn being_offline_with_commits_waiting_is_notified_once() {
+    let dir = tempfile::tempdir().unwrap();
+    let (mut daemon, shown) = daemon(dir.path());
+    let state = daemon.ctx.paths.state().to_path_buf();
+    instance::save(&state, &instance::DaemonState::default()).unwrap();
+    let save =
+        |sync_state: sync::SyncState| Store::new(&state).save("sync.json", &sync_state).unwrap();
+    let offline = || Some(sync::Attempt::new(Outcome::Offline, None));
+
+    // Only a pull could not reach the remote: nothing waits.
+    save(sync::SyncState {
+        pull: offline(),
+        ..Default::default()
+    });
+    daemon.report_problems();
+    assert!(shown.lock().unwrap().is_empty());
+
+    for unpushed in [1, 2] {
+        save(sync::SyncState {
+            publish: offline(),
+            unpushed,
+            ..Default::default()
+        });
+        daemon.report_problems();
+    }
+    assert_eq!(
+        *shown.lock().unwrap(),
+        ["Offline: 1 change waiting to push"]
+    );
+
+    // Pushed, then offline again: a new notification.
+    save(sync::SyncState {
+        publish: Some(sync::Attempt::ok()),
+        ..Default::default()
+    });
+    daemon.report_problems();
+    save(sync::SyncState {
+        publish: offline(),
+        unpushed: 3,
+        ..Default::default()
+    });
+    daemon.report_problems();
+    assert_eq!(
+        shown.lock().unwrap().last().unwrap(),
+        "Offline: 3 changes waiting to push"
+    );
+}
+
+#[test]
+fn waiting_commits_are_pushed_again_a_minute_after_going_offline() {
+    let dir = tempfile::tempdir().unwrap();
+    let (mut daemon, _) = daemon(dir.path());
+    let state = daemon.ctx.paths.state().to_path_buf();
+    let offline_since = |seconds: u64, unpushed| {
+        let attempt = sync::Attempt {
+            at: crate::time::now() - seconds,
+            ..sync::Attempt::new(Outcome::Offline, None)
+        };
+        let sync_state = sync::SyncState {
+            publish: Some(attempt),
+            unpushed,
+            ..Default::default()
+        };
+        Store::new(&state).save("sync.json", &sync_state).unwrap();
+    };
+    offline_since(10, 1);
+    assert!(!daemon.push_due());
+    offline_since(61, 1);
+    assert!(daemon.push_due());
+    offline_since(61, 0);
+    assert!(!daemon.push_due());
+    // A pull that failed first leaves the publish attempt old: the retry
+    // itself starts the minute.
+    offline_since(61, 1);
+    daemon.pushed_again = Some(Instant::now());
+    assert!(!daemon.push_due());
+    daemon.pushed_again = None;
+    daemon.host.publish = SyncPolicy::Manual;
+    assert!(!daemon.push_due());
+}
+
+#[test]
 fn a_locked_key_is_notified_once() {
     crate::git::tests::isolate();
     let dir = tempfile::tempdir().unwrap();
