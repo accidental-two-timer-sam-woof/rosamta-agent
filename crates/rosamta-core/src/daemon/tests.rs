@@ -388,10 +388,7 @@ fn new_vars_in_host_toml_render_a_waiting_template() {
 
     daemon.changed(std::slice::from_ref(&host));
     daemon.announce();
-    assert_eq!(
-        *shown.lock().unwrap(),
-        ["~/.npmrc: waiting for values of vars.email"]
-    );
+    assert_eq!(*shown.lock().unwrap(), ["~/.npmrc: waiting for vars.email"]);
 
     crate::host::set_var(&daemon.ctx.paths, "email", "a@example.com").unwrap();
     daemon.changed(&[host]);
