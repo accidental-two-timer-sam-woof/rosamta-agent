@@ -33,7 +33,7 @@ cargo deny check
 依賴有變動時重新產生第三方授權聲明：
 
 ```sh
-cargo about generate --workspace about.md.hbs -o THIRD_PARTY_NOTICES.md
+cargo about generate --workspace -c packaging/about.toml packaging/about.md.hbs -o THIRD_PARTY_NOTICES.md
 ```
 
 ## 發行版與 shell 測試
