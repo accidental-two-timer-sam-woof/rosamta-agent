@@ -1,6 +1,7 @@
 //! Writes, each through core under the same lock the CLI and the background
 //! service take. Run off the main thread.
 
+use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 
 use rosamta_core::adopt::{self, Lock, Scope};
@@ -21,6 +22,17 @@ pub type Done = Result<Option<String>>;
 
 pub fn sync_now(ctx: &Context) -> Done {
     sync::sync(ctx).map(|_| None)
+}
+
+/// Try again after the problem `kind`. What a pull brought in but could not
+/// apply is applied first: a sync alone finds nothing new and calls it done.
+pub fn retry(ctx: &Context, kind: &str) -> Done {
+    if kind == "apply_failed"
+        && let Some(failure) = apply_if_applied(ctx)?
+    {
+        return Ok(Some(failure));
+    }
+    sync_now(ctx)
 }
 
 /// What `rsmt review` does: queue new rc file content, or adopt it under
@@ -170,9 +182,12 @@ fn apply_if_applied(ctx: &Context) -> Done {
 }
 
 /// What to hand to the system to open `path`: the file itself, or its
-/// folder when the file is not there, made first when that is missing too.
+/// folder when the file is not there (made first when that is missing too)
+/// or is a program, which the system would run instead of showing.
 pub fn to_open(path: &Path) -> std::io::Result<PathBuf> {
-    if path.exists() {
+    let program = std::fs::metadata(path)
+        .is_ok_and(|file| file.is_file() && file.permissions().mode() & 0o111 != 0);
+    if path.exists() && !program {
         return Ok(path.to_path_buf());
     }
     let folder = path.parent().unwrap_or(path);
@@ -193,5 +208,16 @@ mod tests {
         assert!(folder.is_dir());
         std::fs::write(&file, "").unwrap();
         assert_eq!(to_open(&file).unwrap(), file);
+    }
+
+    #[test]
+    fn a_program_opens_its_folder_so_it_is_not_run() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().unwrap();
+        let script = dir.path().join("setup");
+        std::fs::write(&script, "#!/bin/sh\n").unwrap();
+        assert_eq!(to_open(&script).unwrap(), script);
+        std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
+        assert_eq!(to_open(&script).unwrap(), dir.path());
     }
 }

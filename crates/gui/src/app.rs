@@ -317,6 +317,11 @@ impl Rosamta {
         self.run(window, cx, "sync", actions::sync_now);
     }
 
+    /// Try again after the problem `kind`.
+    pub fn retry(&mut self, kind: &'static str, window: &mut Window, cx: &mut Context<Self>) {
+        self.run(window, cx, "sync", move |core| actions::retry(core, kind));
+    }
+
     /// Create a repo from chezmoi's source, then show what was imported.
     pub fn import_chezmoi(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.run_then(
