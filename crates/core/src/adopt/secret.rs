@@ -59,11 +59,11 @@ fn literal_assignments() -> &'static [Regex; 2] {
 }
 
 /// A quoted literal (`$'...'` too), and a quoted or bare one: no expansion
-/// inside. A `$` expands only before a name, `{`, `(`, `[`, a quote or a
-/// special parameter; `Summer2024$` is a literal.
-const QUOTED: &str =
-    r#"(?:\$?'[^']+'|"(?:[^"$`\\]|\\.|\$[^A-Za-z0-9_{(\[?!#@*$'"\\`=^~+\s;()-])+\$?")"#;
-const VALUE: &str = r#"(?:\$?'[^']+'|"(?:[^"$`\\]|\\.|\$[^A-Za-z0-9_{(\[?!#@*$'"\\`=^~+\s;()-])+\$?"|(?:[^\s'"$`\;()]|\\.|\$[^A-Za-z0-9_{(\[?!#@*$'"\\`=^~+\s;()-])+\$?)"#;
+/// inside. A `$` expands only before a name, `{`, `(`, `[` or a special
+/// parameter, and outside quotes before a quote too; `Summer2024$` is a
+/// literal, and so is `"Xk9$)vB2"`.
+const QUOTED: &str = r#"(?:\$?'[^']+'|"(?:[^"$`\\]|\\.|\$[^A-Za-z0-9_{(\[?!#@*$"\\`=^~+-])+\$?")"#;
+const VALUE: &str = r#"(?:\$?'[^']+'|"(?:[^"$`\\]|\\.|\$[^A-Za-z0-9_{(\[?!#@*$"\\`=^~+-])+\$?"|(?:[^\s'"$`;()\\]|\\.|\$[^A-Za-z0-9_{(\[?!#@*$'"\\`=^~+\s;()-])+\$?)"#;
 
 /// Every `NAME=literal` word in `command` with its value, as in
 /// `export A=1 TOKEN=x` or `local -r KEY=x`.
@@ -237,7 +237,11 @@ fn ends_secret(name: &str) -> bool {
 /// no part of the name ends in the secret's word (`MAX_TOKENS=4096`, but
 /// not `DB_PASSWORD=482913`).
 fn plain(name: &str, value: &str) -> bool {
-    let value = value.strip_prefix('$').unwrap_or(value);
+    // `$'...'` is a quoted literal; any other `$` is part of the value.
+    let value = value
+        .strip_prefix('$')
+        .filter(|rest| rest.starts_with('\''))
+        .unwrap_or(value);
     let value = value
         .strip_prefix(['\'', '"'])
         .and_then(|rest| rest.strip_suffix(['\'', '"']))
@@ -571,6 +575,18 @@ mod tests {
             "export DB_PASSWORD=Summer2024$",
             "export DB_PASSWORD=pa$%word1",
             "export DB_PASSWORD_PROD=482913",
+            "export DB_PASSWORD=$/Summer2024",
+            // An escaped dollar outside quotes, in a word that is not the first.
+            r"export DB_USER=app DB_PASSWORD=Xk9\$vB2qLm7wT",
+            r"declare -x DB_PASSWORD=pa\$\$word",
+            r"env DEPLOY_TOKEN=abc\$def ./deploy",
+            // In double quotes a dollar before these stays.
+            "export DB_PASSWORD=\"Xk9$)vB2#qLm7&wT\"",
+            "export DB_PASSWORD=\"Xk9$;vB2qLm7wT\"",
+            "export DB_PASSWORD=\"Xk9$'vB2qLm7wT\"",
+            "export DB_PASSWORD=\"Pa$ w0rd\"",
+            "DB_PASSWORD = \"pa$ word\"",
+            "set -gx DB_PASSWORD \"pa$ word\"",
         ] {
             assert_eq!(secret_rule(text), Some("secret-name"), "{text}");
         }
@@ -586,6 +602,8 @@ mod tests {
             "export API_TOKEN=prefix$OTHER",
             "export SUM_TOKEN=\"$[1+2]\"",
             "export OPENAI_MAX_TOKENS=4096",
+            // The value is on the next line.
+            "export GITHUB_TOKEN=\\",
         ] {
             assert!(!looks_secret(text), "{text}");
         }
