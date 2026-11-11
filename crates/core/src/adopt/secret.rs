@@ -93,31 +93,62 @@ fn secret_name(text: &str) -> bool {
 
 fn high_entropy(text: &str) -> bool {
     text.split(|c: char| !(c.is_ascii_alphanumeric() || "+/=_-.".contains(c)))
-        .map(value)
-        .any(|token| match token.contains('/') {
-            false => token.len() >= MIN_LEN && !words(token) && entropy(token) > MIN_ENTROPY,
-            true => {
-                !path_like(token)
-                    && token.len() >= MIN_SLASHED_LEN
-                    && entropy(token) > MIN_SLASHED_ENTROPY
-            }
+        .any(|whole| {
+            let token = value(whole);
+            // In quotes a token may be a literal value (`X="…"`, fish
+            // `set X '…'`): it never passes as a name, and the part before its
+            // `=` is judged too unless it reads as a variable name, with `_`.
+            let start = whole.as_ptr() as usize - text.as_ptr() as usize;
+            let quoted = text[..start].ends_with(['"', '\'']);
+            let assigned = whole[..whole.len() - token.len()].trim_end_matches(['=', '+']);
+            let name =
+                !quoted && assigned.is_empty() && known_name(token) && !fish_value(&text[..start]);
+            high(token, name) || (quoted && !assigned.contains('_') && high(assigned, false))
         })
 }
 
-/// `NAME=value` is judged by its value; base64 padding (`abc==`) is not an
-/// assignment.
-fn value(token: &str) -> &str {
-    match token.split_once('=') {
-        Some((name, value))
-            if !name.is_empty()
-                && !value.is_empty()
-                && !value.starts_with('=')
-                && name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_') =>
-        {
-            value
+/// Whether a token after `before` is a value of fish `set -gx X …`, so
+/// never a name.
+fn fish_value(before: &str) -> bool {
+    static RULE: OnceLock<Regex> = OnceLock::new();
+    let command = before
+        .rsplit(['\n', ';', '&', '|'])
+        .next()
+        .unwrap_or_default();
+    RULE.get_or_init(|| {
+        Regex::new(r"^\s*set\s+(?:-{1,2}[A-Za-z]+\s+)*[A-Za-z_][A-Za-z0-9_]*\s").unwrap()
+    })
+    .is_match(command)
+}
+
+fn high(token: &str, name: bool) -> bool {
+    match token.contains('/') {
+        false => token.len() >= MIN_LEN && !words(token) && !name && entropy(token) > MIN_ENTROPY,
+        true => {
+            !path_like(token)
+                && token.len() >= MIN_SLASHED_LEN
+                && entropy(token) > MIN_SLASHED_ENTROPY
         }
-        _ => token,
     }
+}
+
+/// `NAME=value` is judged by the value, and so is `NAME+=value` for a known
+/// name; elsewhere `+=` may sit inside a key. Base64 padding (`abc==`) is
+/// not an assignment.
+fn value(token: &str) -> &str {
+    let Some((name, value)) = token.split_once('=') else {
+        return token;
+    };
+    let name = match name.strip_suffix('+') {
+        Some(name) if known_name(name) => name,
+        Some(_) => return token,
+        None => name,
+    };
+    let assignment = !name.is_empty()
+        && !value.is_empty()
+        && !value.starts_with('=')
+        && name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_');
+    if assignment { value } else { token }
 }
 
 /// Words joined by `-` or `.` in one case, such as `my-macbook-pro` or
@@ -129,6 +160,22 @@ fn words(token: &str) -> bool {
             .all(|c| c.is_ascii_alphabetic() || c == '-' || c == '.')
         && !(token.chars().any(|c| c.is_ascii_uppercase())
             && token.chars().any(|c| c.is_ascii_lowercase()))
+}
+
+/// Variable names of tools whose settings files are long lists of them, such
+/// as Powerlevel10k's `~/.p10k.zsh`.
+const KNOWN_PREFIXES: [&str; 2] = ["POWERLEVEL9K_", "P9K_"];
+
+/// A known tool's variable, such as `POWERLEVEL9K_DIR_FOREGROUND`, also as
+/// `NAME=`, `NAME+=` or at the end of a sentence.
+fn known_name(token: &str) -> bool {
+    let token = token.trim_end_matches(['=', '+', '.']);
+    KNOWN_PREFIXES
+        .iter()
+        .any(|prefix| token.starts_with(prefix))
+        && token
+            .chars()
+            .all(|c| c.is_ascii_uppercase() || c.is_ascii_digit() || c == '_')
 }
 
 /// `/usr/bin`, `~/.cargo`, `HOME/.local/share` (what `$HOME/...` leaves):
@@ -227,6 +274,39 @@ mod tests {
         assert!(looks_secret("export X=Zk3q9LmP2vR8tY6wB1nC4xJ7"));
         assert!(looks_secret("export credential=qwertyuiopasdfghjklzxcvbnm"));
         assert!(looks_secret("Zk3q9LmP2vR8tY6wB1nC4xJ7=="));
+        assert!(looks_secret("export X=K7Q2M9X4P8R3T6W1Z5N0"));
+        assert!(looks_secret("export X=\"Zk3q9LmP2vR8tY6wB1A=\""));
+        assert!(looks_secret("export X=qwertyuiopasdfghjkl_zxcvbnm"));
+        assert!(looks_secret("export X=\"qwertyuiopasdfghjkl_zxcvbnm\""));
+        assert!(looks_secret(
+            "kubeadm join 10.0.0.5:6443 --token q8xkzm.vjwpbhrtcfnlsydg"
+        ));
+        assert!(looks_secret(
+            "export NR_USER=NRAK-QW8ZRTYUPLKJHGFDSAXCVBN4M"
+        ));
+        assert!(looks_secret("export LICENSE=QW8ZRTYUPLKJ_HGFDSAXCVBNMKJH"));
+        assert!(looks_secret("export X=K7Q2_M9X4_P8R3_T6W1_Z5N0"));
+        assert!(looks_secret(
+            "export X=POWERLEVEL9K_QWERTYUIOPASDFGHJZXCVBNM"
+        ));
+        assert!(looks_secret("X+=Zk3q9LmP2vR8tY6wB1nC4xJ7"));
+        assert!(looks_secret("X+=347f23b364db67195b295cfa0e7abc28"));
+        assert!(looks_secret("1DLDn0L8D1aQzEqb61EKBo3+=x"));
+        assert!(looks_secret("export X=\"K7Q2M9X4P8R3T6W1Z5N0+=abc\""));
+        assert!(looks_secret("export X='K7Q2M9X4P8R3T6W1Z5N0=abc'"));
+        assert!(looks_secret(
+            "export X=\"POWERLEVEL9K_QWERTYUIOPASDFGHJZXCVBNM\""
+        ));
+        assert!(looks_secret("X = \"P9K_QWERTYUIOPASDFGHJZXCVBNM\""));
+        assert!(looks_secret("set -gx X 'K7Q2M9X4P8R3T6W1Z5N0=abc'"));
+        assert!(looks_secret("set -gx X P9K_K7Q2_M9X4_P8R3_T6W1_Z5N0"));
+        assert!(looks_secret(
+            "cd ~; set -gx X a P9K_K7Q2_M9X4_P8R3_T6W1_Z5N0"
+        ));
+        assert!(looks_secret(&format!(
+            "export X=\"{}=Zk3q9LmP2vR8tY6wB1nC4xJ7\"",
+            "A".repeat(64)
+        )));
         assert!(looks_secret(
             "aws_secret_access_key = wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY"
         ));
@@ -252,6 +332,23 @@ mod tests {
             "# Adopted from ~/.zshrc on xinshoutw-macbook-pro.",
             "Host my-company-internal-tools.example",
             "export HOST=my-company-internal-tools.example",
+            "  # as POWERLEVEL9K_MULTILINE_FIRST_PROMPT_GAP_FOREGROUND below.",
+            "  typeset -g POWERLEVEL9K_MULTILINE_FIRST_PROMPT_GAP_BACKGROUND=",
+            "  typeset -g POWERLEVEL9K_VCS_BRANCH_ICON='\\uF126 '",
+            "  # typeset -g POWERLEVEL9K_CPU_ARCH_X86_64_CONTENT_EXPANSION=",
+            "  # POWERLEVEL9K_ASDF_PROMPT_ALWAYS_SHOW.",
+            "  typeset -g POWERLEVEL9K_XPLR_VISUAL_IDENTIFIER_EXPANSION=",
+            "  POWERLEVEL9K_CONTEXT_TEMPLATE+=foo",
+            "  POWERLEVEL9K_KUBECONTEXT_DEFAULT_CONTENT_EXPANSION+='${P9K_KUBECONTEXT_NAME}'",
+            "env 'POWERLEVEL9K_MULTILINE_FIRST_PROMPT_GAP_BACKGROUND=red' zsh",
+            "alias -g RED='RAILS_ENV=development'",
+            "echo \"RUSTFLAGS=-Zfmt-debug=none\" >> $GITHUB_ENV",
+            "docker run -e \"PYENV_VIRTUALENV_DISABLE_PROMPT=1\" app",
+            "export \"DOCKER_DEFAULT_PLATFORM=linux/amd64\"",
+            "Environment=\"KUBECONFIG=/etc/kubernetes/admin.conf\"",
+            "  - \"NODE_OPTIONS=--max-old-space-size=4096\"",
+            "docker run -e \"DATABASE_HOST=postgres.internal.example.com\" app",
+            "export \"QTWEBENGINE_CHROMIUM_FLAGS=--disable-gpu\"",
         ] {
             assert!(!looks_secret(text), "{text}");
         }
