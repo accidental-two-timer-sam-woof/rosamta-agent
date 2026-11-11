@@ -35,7 +35,10 @@ pub fn retry(ctx: &Context, kind: &str) -> Done {
         _ => None,
     };
     // The sync records that the pull is applied now, whatever the warning.
-    sync_now(ctx).map(|_| warning)
+    match (sync_now(ctx), warning) {
+        (Err(err), Some(warning)) => Err(rosamta_core::Error::Usage(format!("{warning}; {err}"))),
+        (done, warning) => done.map(|_| warning),
+    }
 }
 
 /// What `rsmt review` does: queue new rc file content, or adopt it under
