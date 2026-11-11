@@ -195,6 +195,47 @@ fn copies_follow_the_repo_until_changed_here() {
 }
 
 #[test]
+fn create_writes_only_what_is_missing() {
+    let home = Home::new("ask");
+    let path = ".config/foo/config.toml";
+    let target = home.at(path);
+    home.repo_write("home/.config/foo/config.toml", "a = 1\n");
+    home.repo_write(
+        "dotfiles.toml",
+        &format!("[[dotfile]]\npath = \"{path}\"\ndeploy = \"copy\"\n"),
+    );
+    home.deploy();
+    home.repo_write(
+        "dotfiles.toml",
+        &format!("[[dotfile]]\npath = \"{path}\"\ndeploy = \"create\"\npermissions = \"0600\"\n"),
+    );
+    // A copy's record goes once the path becomes create.
+    assert_eq!(home.deploy(), one(path, Action::Unchanged));
+    let records = || {
+        dotfiles::state::load(home.ctx.paths.state())
+            .unwrap()
+            .entries
+    };
+    assert!(records().is_empty());
+
+    fs::remove_file(&target).unwrap();
+    assert_eq!(home.deploy(), one(path, Action::Copied));
+    assert_eq!(read(&target), "a = 1\n");
+    assert_eq!(mode(&target), 0o600);
+    assert!(records().is_empty());
+
+    // From now on the file is the app's, whichever side changes.
+    write(&target, "a = 2\n");
+    home.repo_write("home/.config/foo/config.toml", "a = 3\n");
+    assert_eq!(home.deploy(), one(path, Action::Unchanged));
+    assert_eq!(read(&target), "a = 2\n");
+
+    fs::remove_file(&target).unwrap();
+    assert_eq!(home.deploy(), one(path, Action::Copied));
+    assert_eq!(read(&target), "a = 3\n");
+}
+
+#[test]
 fn auto_policy_saves_copies() {
     let home = Home::new("auto");
     home.repo_write("home/.npmrc", "a\n");

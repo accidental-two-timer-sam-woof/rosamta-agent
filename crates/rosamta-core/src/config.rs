@@ -247,6 +247,8 @@ pub enum Deploy {
     Copy,
     /// Rendered from a template.
     Template,
+    /// Copied only when nothing is there, then left alone.
+    Create,
 }
 
 fn is_default<T: Default + PartialEq>(value: &T) -> bool {
