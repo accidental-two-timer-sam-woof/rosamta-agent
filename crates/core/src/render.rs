@@ -463,7 +463,8 @@ fn again(
         return out;
     }
     let login = match shell {
-        Shell::Bash => " && shopt -q login_shell",
+        // Another shell may read `.bashrc`, and so this loader; it has no `shopt`.
+        Shell::Bash => " && shopt -q login_shell 2>/dev/null",
         _ => "",
     };
     writeln!(

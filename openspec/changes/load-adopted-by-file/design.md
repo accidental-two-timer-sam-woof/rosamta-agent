@@ -42,7 +42,7 @@
 
 執行其他啟動檔的行（`. ~/.bashrc`、`. ~/.profile`、`emulate sh -c '. ~/.profile'`）不接管。執行 `.bashrc` 的行已經在 `fix/bash-profile-wiring` 做完；執行 `.profile` 的行還沒有（tasks 2.4）。
 
-rosamta 不再替既有的 `.bash_profile` 加 `. ~/.bashrc`。為了讓 rosamta 自己的互動內容在 login bash 仍然生效，`.bash_profile` 的 hook 在互動 shell 中直接載入 `rc.bash`，並用一個**不 export** 的變數避免同一個程序在 `.bashrc` 的 hook 再載入一次。`.bash_profile` 與 `.bash_login` 都不存在時，rosamta 和現在一樣新建 `.bash_profile`，讓它執行 `.profile` 與 `.bashrc`，login bash 才讀得到 bash 的 hook。`.profile` 可能直接或間接執行過 `.bashrc`，這一點靜態分析看不完：`.bashrc` 的 hook 設下一個不 export 的記號，新建的那一行只在記號不存在時才執行 `.bashrc`。
+rosamta 不再替既有的 `.bash_profile` 加 `. ~/.bashrc`。為了讓 rosamta 自己的互動內容在 login bash 仍然生效，`.bash_profile` 的 hook 在互動 shell 中直接載入 `rc.bash`，並用一個**不 export** 的變數記下這個程序已載入的版本，`.bashrc` 的 hook 只在版本相同時略過：啟動時不會載入兩次，套用新版本之後手動 `source ~/.bashrc` 仍會載入。`.bash_profile` 與 `.bash_login` 都不存在時，rosamta 和現在一樣新建 `.bash_profile`，讓它執行 `.profile` 與 `.bashrc`，login bash 才讀得到 bash 的 hook。`.profile` 可能直接或間接執行過 `.bashrc`，這一點靜態分析看不完：`.bashrc` 的 hook 設下一個不 export 的記號，新建的那一行只在記號不存在時才執行 `.bashrc`。
 
 ### 5. 格式 2 與 migration
 
