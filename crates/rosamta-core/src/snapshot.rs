@@ -3,16 +3,30 @@
 //! `$XDG_STATE_HOME/rosamta/snapshots` is a local git repo that never has a
 //! remote. `files/` holds the content before each change, with the reason in
 //! the commit message. `original/` holds what a file looked like before
-//! rosamta first touched it, and `original-absent` lists files that did not
-//! exist then; neither is ever overwritten.
+//! rosamta first touched it, `original-meta.json` its mode or link target,
+//! and `original-absent` lists files that did not exist then; none is ever
+//! overwritten.
 
+use std::collections::BTreeMap;
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
+
+use serde::{Deserialize, Serialize};
 
 use crate::error::{Error, Result};
 use crate::git;
 
 const ABSENT: &str = "original-absent";
+const META: &str = "original-meta.json";
+
+/// What an original was besides its bytes.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+struct Meta {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    mode: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    link: Option<PathBuf>,
+}
 
 pub struct Snapshots {
     dir: PathBuf,
@@ -23,8 +37,12 @@ pub struct Snapshots {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Original {
     pub path: PathBuf,
-    /// `None` when the file did not exist.
+    /// What it showed; `None` when it did not exist or was a dangling link.
     pub content: Option<Vec<u8>>,
+    /// Permission bits of a regular file.
+    pub mode: Option<u32>,
+    /// Where it pointed, when it was a symlink.
+    pub link: Option<PathBuf>,
 }
 
 impl Snapshots {
@@ -82,8 +100,13 @@ impl Snapshots {
         }
         self.ensure_repo()?;
         let mut absent = self.absent_list()?;
+        let mut meta = self.meta()?;
         for path in paths {
             let key = self.key(path);
+            let link = std::fs::symlink_metadata(path)
+                .is_ok_and(|meta| meta.is_symlink())
+                .then(|| std::fs::read_link(path).map_err(Error::read(path)))
+                .transpose()?;
             let content = match std::fs::read(path) {
                 Ok(content) => Some(content),
                 Err(err) if err.kind() == std::io::ErrorKind::NotFound => None,
@@ -95,10 +118,16 @@ impl Snapshots {
                 }
             };
             let original = self.dir.join("original").join(&key);
-            if !original.exists() && !absent.contains(&key) {
-                match &content {
-                    Some(content) => write(&original, content)?,
-                    None => absent.push(key.clone()),
+            if !original.exists() && !absent.contains(&key) && !meta.contains_key(&key) {
+                if content.is_none() && link.is_none() {
+                    absent.push(key.clone());
+                } else {
+                    if let Some(content) = &content {
+                        write(&original, content)?;
+                    }
+                    let mode = std::fs::metadata(path).ok().filter(|_| link.is_none());
+                    let mode = mode.map(|meta| meta.permissions().mode() & 0o7777);
+                    meta.insert(key.clone(), Meta { mode, link });
                 }
             }
             let latest = self.dir.join("files").join(&key);
@@ -116,6 +145,8 @@ impl Snapshots {
             .map(|key| format!("{}\n", key.display()))
             .collect();
         write(&self.dir.join(ABSENT), list.as_bytes())?;
+        let json = serde_json::to_string_pretty(&meta).expect("paths and modes serialize");
+        write(&self.dir.join(META), json.as_bytes())?;
         let names: Vec<String> = paths
             .iter()
             .map(|path| path.display().to_string())
@@ -146,9 +177,20 @@ impl Snapshots {
         }
     }
 
+    fn meta(&self) -> Result<BTreeMap<PathBuf, Meta>> {
+        let path = self.dir.join(META);
+        match std::fs::read_to_string(&path) {
+            Ok(text) => serde_json::from_str(&text)
+                .map_err(|err| Error::Usage(format!("{}: {err}", path.display()))),
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(BTreeMap::new()),
+            Err(err) => Err(Error::Read { path, source: err }),
+        }
+    }
+
     /// Every file rosamta has changed, as it was before the first change.
     pub fn originals(&self) -> Result<Vec<Original>> {
         let mut out = Vec::new();
+        let mut meta = self.meta()?;
         let root = self.dir.join("original");
         if root.is_dir() {
             let mut stack = vec![root.clone()];
@@ -160,18 +202,32 @@ impl Snapshots {
                     } else {
                         let key = path.strip_prefix(&root).unwrap_or(&path);
                         let content = std::fs::read(&path).map_err(Error::read(&path))?;
+                        let Meta { mode, link } = meta.remove(key).unwrap_or_default();
                         out.push(Original {
                             path: self.path_of(key),
                             content: Some(content),
+                            mode,
+                            link,
                         });
                     }
                 }
             }
         }
+        // Links whose target was missing have no bytes to keep.
+        for (key, Meta { mode, link }) in meta {
+            out.push(Original {
+                path: self.path_of(&key),
+                content: None,
+                mode,
+                link,
+            });
+        }
         for key in self.absent_list()? {
             out.push(Original {
                 path: self.path_of(&key),
                 content: None,
+                mode: None,
+                link: None,
             });
         }
         out.sort_by(|a, b| a.path.cmp(&b.path));
