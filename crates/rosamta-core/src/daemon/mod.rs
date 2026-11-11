@@ -589,6 +589,11 @@ impl Daemon {
     }
 
     fn sync_now(&mut self) {
+        // A failed apply may have been passing trouble (a download); try again.
+        if self.repo_problem.is_some() {
+            self.repo_seen = None;
+            self.repo_changed();
+        }
         if self.host.pull != SyncPolicy::Auto {
             return;
         }
