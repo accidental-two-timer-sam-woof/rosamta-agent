@@ -82,7 +82,8 @@ pub(crate) fn set_origin(dir: &Path, url: &str) -> Result<()> {
 /// The commit `branch`, or the remote's default branch, is at now.
 pub(crate) fn remote_head(dir: &Path, url: &str, branch: Option<&str>) -> Result<String> {
     let reference = branch.map_or_else(|| "HEAD".to_string(), |b| format!("refs/heads/{b}"));
-    let out = run(dir, &["ls-remote", url, &reference])?;
+    // Updating reads declarations unchecked: a URL is never an option.
+    let out = run(dir, &["ls-remote", "--", url, &reference])?;
     out.split_whitespace()
         .next()
         .map(str::to_string)
