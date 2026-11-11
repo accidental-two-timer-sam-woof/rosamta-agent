@@ -824,6 +824,44 @@ mod manage {
         let err = manage::forget(&home.ctx, &ghostty).unwrap_err();
         assert!(err.to_string().contains("is not a dotfile"), "{err}");
     }
+
+    #[test]
+    fn forget_keeps_a_source_another_dotfile_uses() {
+        let home = Home::new("ask");
+        home.repo_write("home/.config/ghostty/config", "theme = dark\n");
+        home.repo_write("home/.gitconfig", "[user]\n");
+        home.repo_write(
+            "dotfiles.toml",
+            "[[dotfile]]\npath = \".config/ghostty\"\n\n\
+             [[dotfile]]\npath = \".config/ghostty-work/config\"\nsource = \"home/.config/ghostty/config\"\n\n\
+             [[dotfile]]\npath = \".gitconfig\"\n\n\
+             [[dotfile]]\npath = \".gitconfig-work\"\nsource = \"home/.gitconfig\"\n",
+        );
+        git(&home.repo(), &["add", "-A"]);
+        git(
+            &home.repo(),
+            &["commit", "--quiet", "--no-verify", "-m", "init"],
+        );
+        home.deploy();
+        manage::forget(&home.ctx, &home.at(".config/ghostty")).unwrap();
+        manage::forget(&home.ctx, &home.at(".gitconfig")).unwrap();
+        let manifest = read(&home.repo().join("dotfiles.toml"));
+        assert!(
+            !manifest.contains("path = \".config/ghostty\"\n"),
+            "{manifest}"
+        );
+        assert!(!manifest.contains("path = \".gitconfig\"\n"), "{manifest}");
+        assert_eq!(
+            read(&home.repo().join("home/.config/ghostty/config")),
+            "theme = dark\n"
+        );
+        assert_eq!(read(&home.repo().join("home/.gitconfig")), "[user]\n");
+        assert_eq!(
+            read(&home.at(".config/ghostty-work/config")),
+            "theme = dark\n"
+        );
+        assert_eq!(read(&home.at(".gitconfig-work")), "[user]\n");
+    }
 }
 
 #[test]
