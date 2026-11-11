@@ -94,7 +94,10 @@ fn secret_name(text: &str) -> bool {
 fn high_entropy(text: &str) -> bool {
     text.split(|c: char| !(c.is_ascii_alphanumeric() || "+/=_-.".contains(c)))
         .any(|whole| {
-            let token = value(whole);
+            // Inside quotes a token is a value, never `NAME=value`.
+            let start = whole.as_ptr() as usize - text.as_ptr() as usize;
+            let quoted = matches!(text[..start].chars().next_back(), Some('"' | '\''));
+            let token = if quoted { whole } else { value(whole) };
             // A known name passes as a name, never as an assignment's value.
             let name = token.len() == whole.len() && known_name(token);
             match token.contains('/') {
@@ -269,6 +272,8 @@ mod tests {
             "export X=POWERLEVEL9K_QWERTYUIOPASDFGHJZXCVBNM"
         ));
         assert!(looks_secret("X+=Zk3q9LmP2vR8tY6wB1nC4xJ7"));
+        assert!(looks_secret("export X=\"K7Q2M9X4P8R3T6W1Z5N0+=abc\""));
+        assert!(looks_secret("export X='K7Q2M9X4P8R3T6W1Z5N0=abc'"));
         assert!(looks_secret(
             "aws_secret_access_key = wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY"
         ));
