@@ -32,4 +32,4 @@
 
 - 新依賴：`mise-system-packages`（鎖定版本）。
 - 新增 `rsmt install <package>`、`rsmt bootstrap`。
-- `add-providers-and-doctor` 與 `add-templates-and-secrets` 會宣告它們需要的應用程式。
+- `add-providers` 與 `add-templates-and-secrets` 會宣告它們需要的應用程式。

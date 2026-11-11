@@ -579,6 +579,18 @@ rsmt schema module > module.schema.json
 
 <br/><br/>
 
+## 展望
+
+- 在 repo 中自訂整合，不必修改 rosamta。
+- 啟用 starship 時選擇官方的 preset。
+- 更多整合：rbenv、fnm、SDKMAN、zinit 與 antidote 等插件管理器，以及 kubectl、gh、gcloud 這類指令的補全。
+
+<br/><br/>
+
+---
+
+<br/><br/>
+
 ## 開發環境建置
 [![Rust](https://img.shields.io/badge/Rust-1.99-000000?style=for-the-badge&logo=rust&logoColor=white)](https://www.rust-lang.org)
 
