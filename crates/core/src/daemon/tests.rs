@@ -88,8 +88,9 @@ fn fingerprints_follow_content() {
 struct Shown(Arc<Mutex<Vec<String>>>);
 
 impl Notifier for Shown {
-    fn show(&self, note: &Note) {
+    fn show(&self, note: &Note) -> bool {
         self.0.lock().unwrap().push(note.body.clone());
+        true
     }
 }
 
@@ -456,8 +457,9 @@ fn script_items_are_view_only_notes() {
 struct Notes(Arc<Mutex<Vec<Note>>>);
 
 impl Notifier for Notes {
-    fn show(&self, note: &Note) {
+    fn show(&self, note: &Note) -> bool {
         self.0.lock().unwrap().push(note.clone());
+        true
     }
 }
 
@@ -527,4 +529,45 @@ fn pulled_settings_that_do_not_apply_are_not_deployed() {
     assert!(daemon.repo_problem.is_some());
     daemon.dotfiles_changed();
     assert!(!dir.path().join(".npmrc").exists());
+}
+
+/// Shows nothing until `up` is set, as before the desktop's notification
+/// service starts.
+struct Late {
+    up: Arc<Mutex<bool>>,
+    shown: Arc<Mutex<Vec<String>>>,
+}
+
+impl Notifier for Late {
+    fn show(&self, note: &Note) -> bool {
+        let up = *self.up.lock().unwrap();
+        if up {
+            self.shown.lock().unwrap().push(note.body.clone());
+        }
+        up
+    }
+}
+
+#[test]
+fn a_problem_not_shown_is_shown_once_the_service_is_up() {
+    crate::git::tests::isolate();
+    let dir = tempfile::tempdir().unwrap();
+    let up = Arc::new(Mutex::new(false));
+    let shown = Arc::default();
+    let notifier = Box::new(Late {
+        up: Arc::clone(&up),
+        shown: Arc::clone(&shown),
+    });
+    let mut daemon = Daemon::new(ctx(dir.path()), HostConfig::new("test".into()), notifier);
+    daemon.lang = Lang::En;
+    instance::save(daemon.ctx.paths.state(), &instance::DaemonState::default()).unwrap();
+    daemon.repo_problem = Some(("invalid", "modules/a.toml: bad".into()));
+    daemon.report_problems();
+    *up.lock().unwrap() = true;
+    daemon.report_problems();
+    daemon.report_problems();
+    assert_eq!(
+        *shown.lock().unwrap(),
+        ["The repo has an invalid file: modules/a.toml: bad"]
+    );
 }

@@ -943,12 +943,17 @@ impl Daemon {
                     _ => (&*format!("problem.{kind}"), "reason"),
                 };
                 let body = i18n::text(self.lang, text, &[(arg, reason)]);
-                self.log(&format!("notified: {body}"));
-                self.notifier.show(&Note {
+                let note = Note {
                     body,
                     items: Vec::new(),
                     view_only: false,
-                });
+                };
+                // Not counted until shown: the notification service may
+                // start after the daemon.
+                if !self.notifier.show(&note) {
+                    continue;
+                }
+                self.log(&format!("notified: {}", note.body));
             }
             keys.push(key);
         }
