@@ -220,39 +220,59 @@ pub fn scan(ctx: &Context) -> Result<Vec<Candidate>> {
                 order: 0,
             };
             let shells = watched.source.shells();
-            // Back in its own file, or in a file whose shells the module serves.
-            let replaces = |adoption: &Adoption| {
-                adoption.file == watched.path
-                    || loaded.iter().any(|(name, module)| {
-                        adoption
-                            .module
-                            .as_deref()
-                            .is_some_and(|path| repo::module_name(path) == *name)
-                            && runs_in(module, shells)
-                    })
-            };
-            if let Some(adoption) = adoptions
-                .adoptions
-                .iter()
-                .find(|a| a.hash == hash && replaces(a))
-            {
-                candidate.kind = Kind::Duplicate;
-                candidate.module = adoption.module.clone();
-                out.push(candidate);
-                continue;
-            }
+            let recorded = adoptions.adoptions.iter().filter(|a| a.hash == hash);
             if segment.comment_only() {
+                // Comments adopted from this file before run nothing; drop them again.
+                if let Some(adoption) = recorded.into_iter().find(|a| a.file == watched.path) {
+                    candidate.kind = Kind::Duplicate;
+                    candidate.module = adoption.module.clone();
+                    candidate.local = adoption.local;
+                }
                 out.push(candidate);
                 continue;
             }
             let module = structured(ctx, &segment, &watched, &recognizers, barrier);
             if let Some(module) = &module
+                && settles(&loaded, shells, module)
                 && let Some((name, _)) = loaded
                     .iter()
                     .find(|(_, m)| runs_in(m, shells) && covers(m, module))
             {
                 candidate.kind = Kind::Duplicate;
-                candidate.module = Some(PathBuf::from(name));
+                // Where restore finds it: in the repo, else this host's own.
+                candidate.module = module_files
+                    .iter()
+                    .find(|path| repo::module_name(path) == *name)
+                    .and_then(|path| path.strip_prefix(ctx.paths.repo()).ok())
+                    .map(Path::to_path_buf);
+                if candidate.module.is_none() {
+                    candidate.local = true;
+                    candidate.module = Some(local_dir(ctx).join(format!("{name}.toml")));
+                }
+                out.push(candidate);
+                continue;
+            }
+            // Code adopted before is a duplicate only while its module still
+            // loads here and holds that code, comments and blank lines aside
+            // as when another host's module was joined.
+            let code = snippet(ctx, &text, &watched);
+            let still_held = |adoption: &&Adoption| {
+                loaded.iter().any(|(name, m)| {
+                    adoption
+                        .module
+                        .as_deref()
+                        .is_some_and(|path| repo::module_name(path) == *name)
+                        && runs_in(m, shells)
+                        && shells.iter().all(|&shell| {
+                            m.raw.get(shell).map(|text| shared::code(shell, text))
+                                == code.raw.get(shell).map(|text| shared::code(shell, text))
+                        })
+                })
+            };
+            if let Some(adoption) = recorded.into_iter().find(still_held) {
+                candidate.kind = Kind::Duplicate;
+                candidate.module = adoption.module.clone();
+                candidate.local = adoption.local;
                 out.push(candidate);
                 continue;
             }
@@ -264,7 +284,7 @@ pub fn scan(ctx: &Context) -> Result<Vec<Candidate>> {
                 None => {
                     candidate.kind = Kind::Snippet;
                     barrier |= watched.phase != Phase::Env;
-                    snippet(ctx, &text, &watched)
+                    code
                 }
             };
             // Only the shells that read the file ran it before.
@@ -429,14 +449,8 @@ fn snippet(ctx: &Context, text: &str, watched: &Watched) -> Module {
 /// Whether `module` does its work in each of `shells`: structured content
 /// wherever the module renders, raw code only where it is written.
 fn runs_in(module: &Module, shells: &[Shell]) -> bool {
-    let structured = !module.env.is_empty()
-        || !module.path.prepend.is_empty()
-        || !module.path.append.is_empty()
-        || !module.aliases.is_empty();
-    shells.iter().all(|&shell| {
-        (module.shells.is_empty() || module.shells.contains(&shell))
-            && (structured || module.raw.get(shell).is_some())
-    })
+    let reached = module.reaches();
+    shells.iter().all(|shell| reached.contains(shell))
 }
 
 /// True when `existing` already sets everything `new` does.
@@ -448,16 +462,33 @@ fn covers(existing: &Module, new: &Module) -> bool {
             .aliases
             .iter()
             .all(|(name, value)| existing.aliases.get(name) == Some(value))
-        && new
-            .path
-            .prepend
+        && in_order(&existing.path.prepend, &new.path.prepend)
+        && in_order(&existing.path.append, &new.path.append)
+}
+
+/// Whether `want` appears in `have` in the same order, gaps allowed.
+fn in_order(have: &[String], want: &[String]) -> bool {
+    let mut have = have.iter();
+    want.iter().all(|dir| have.any(|entry| entry == dir))
+}
+
+/// True when the modules that load here end up with each variable and alias
+/// `new` sets as `new` sets it: a later module may set another value.
+fn settles(loaded: &[(String, Module)], shells: &[Shell], new: &Module) -> bool {
+    let last = |get: &dyn Fn(&Module) -> Option<&String>| {
+        loaded
             .iter()
-            .all(|dir| existing.path.prepend.contains(dir))
+            .filter(|(_, module)| runs_in(module, shells))
+            .filter_map(|(_, module)| get(module))
+            .last()
+    };
+    new.env
+        .iter()
+        .all(|(name, value)| last(&|module| module.env.get(name)) == Some(value))
         && new
-            .path
-            .append
+            .aliases
             .iter()
-            .all(|dir| existing.path.append.contains(dir))
+            .all(|(name, value)| last(&|module| module.aliases.get(name)) == Some(value))
 }
 
 const GENERIC: [&str; 9] = [
@@ -873,6 +904,7 @@ fn edit_file(
                 at: now(),
                 include: candidate.kind == Kind::Include,
                 limits: None,
+                duplicate: candidate.kind == Kind::Duplicate,
             }
         })
         .collect();
@@ -894,7 +926,7 @@ fn changed(path: &Path) -> Error {
 
 /// Fails when `path` no longer holds `before`, so an edit made since the
 /// plan is never overwritten.
-fn unchanged(path: &Path, before: Option<&str>) -> Result<()> {
+pub(crate) fn unchanged(path: &Path, before: Option<&str>) -> Result<()> {
     let now = match std::fs::read(path) {
         Ok(bytes) => Some(bytes),
         Err(err) if err.kind() == std::io::ErrorKind::NotFound => None,
@@ -976,7 +1008,13 @@ pub fn execute(ctx: &Context, plan: Plan) -> Result<Vec<Adoption>> {
         }
         Ok(())
     };
-    if let Err(err) = apply::apply_after(ctx, write) {
+    let shells: Vec<Shell> = plan
+        .candidates
+        .iter()
+        .flat_map(|candidate| candidate.source.shells())
+        .copied()
+        .collect();
+    if let Err(err) = apply::apply_after(ctx, &shells, write) {
         if written {
             for change in plan.files.iter().chain(&plan.edits) {
                 let _ = write_text(&change.path, change.before.as_deref());
@@ -997,7 +1035,9 @@ pub fn execute(ctx: &Context, plan: Plan) -> Result<Vec<Adoption>> {
             .expect("each record comes from a candidate")
     };
     for mut record in plan.records {
-        if !matches!(candidate_of(&record).kind, Kind::Comment | Kind::Duplicate) {
+        // Duplicates are recorded too: restoring the module's own adoption
+        // must know these lines rely on it, and they can be put back alone.
+        if candidate_of(&record).kind != Kind::Comment {
             adoptions.next_id = adoptions.next_id.max(1);
             record.id = adoptions.next_id;
             adoptions.next_id += 1;
@@ -1020,9 +1060,10 @@ pub fn execute(ctx: &Context, plan: Plan) -> Result<Vec<Adoption>> {
     }
     update_notice(&store, &host, queue.items.len())?;
     let repo_dir = ctx.paths.repo();
+    // A duplicate changes no module, and an edit in progress there is not ours to commit.
     for record in done
         .iter_mut()
-        .filter(|record| record.id > 0 && !record.local)
+        .filter(|record| record.id > 0 && !record.local && !record.duplicate)
     {
         let Some(module) = &record.module else {
             continue;
@@ -1291,7 +1332,7 @@ pub fn plan_undo(ctx: &Context, id: u32) -> Result<Undo> {
         other.id != id && other.module == adoption.module && other.local == adoption.local
     });
     let module = match &adoption.module {
-        Some(_) if in_use => None,
+        Some(_) if in_use || adoption.duplicate => None,
         Some(module) if adoption.local => Some(module.clone()),
         Some(module) => Some(ctx.paths.repo().join(module)),
         None => None,
@@ -1303,7 +1344,16 @@ pub fn plan_undo(ctx: &Context, id: u32) -> Result<Undo> {
     })
     .transpose()?;
     let module_after = match &module {
-        Some((path, text)) => released(path, text, &adoption, &host_config(ctx)?.id)?,
+        Some((path, text)) => {
+            let registered = repo::read_manifest(&ctx.paths.repo())?.hosts;
+            // A local module is this host's alone.
+            let registered = if adoption.local {
+                Vec::new()
+            } else {
+                registered
+            };
+            released(path, text, &adoption, &host_config(ctx)?.id, &registered)?
+        }
         None => None,
     };
     Ok(Undo {
@@ -1320,12 +1370,18 @@ pub fn plan_undo(ctx: &Context, id: u32) -> Result<Undo> {
 
 /// The module once this host no longer uses it: with the limits it had
 /// before this host joined it for every host, without this host while
-/// another host is listed, and otherwise gone.
-fn released(path: &Path, text: &str, adoption: &Adoption, host: &str) -> Result<Option<String>> {
+/// another host loads it, and otherwise gone.
+fn released(
+    path: &Path,
+    text: &str,
+    adoption: &Adoption,
+    host: &str,
+    registered: &[String],
+) -> Result<Option<String>> {
     let mut others = true;
     let after = edit_module(path, text, |doc| match &adoption.limits {
         Some(limits) => crate::scope::limit(doc, &limits.hosts, &limits.os),
-        None => others = crate::scope::remove_host(doc, host),
+        None => others = crate::scope::remove_host(doc, host, registered),
     })?;
     Ok(others.then_some(after))
 }
@@ -1404,7 +1460,15 @@ pub fn undo(ctx: &Context, plan: Undo) -> Result<()> {
         }
         Ok(())
     };
-    if let Err(err) = apply::apply_after(ctx, write) {
+    // The shells that read the file the lines go back to.
+    let shells: Vec<Shell> = watched_files(&ctx.hook_env(&ctx.installed()))
+        .into_iter()
+        .find(|watched| watched.path == plan.adoption.file)
+        .map_or_else(
+            || vec![plan.adoption.shell],
+            |watched| watched.source.shells().to_vec(),
+        );
+    if let Err(err) = apply::apply_after(ctx, &shells, write) {
         if written {
             let _ = write_text(&plan.file.path, plan.file.before.as_deref());
             if let Some((path, text)) = &plan.module {
@@ -1425,7 +1489,11 @@ pub fn undo(ctx: &Context, plan: Undo) -> Result<()> {
         ignored.hashes.push(plan.adoption.hash.clone());
     }
     store.save_ignored(&ignored)?;
-    if let (Some(module), false) = (&plan.adoption.module, plan.adoption.local) {
+    // Only a module this restore changed is committed; an edit in progress
+    // in one it left alone is not ours.
+    if let (Some(_), Some(module), false) =
+        (&plan.module, &plan.adoption.module, plan.adoption.local)
+    {
         let rel = module.to_string_lossy();
         let name = plan.adoption.name.as_deref().unwrap_or("adopted");
         let message = format!(
@@ -1486,6 +1554,7 @@ mod tests {
             at: 0,
             include: false,
             limits: None,
+            duplicate: false,
         }
     }
 

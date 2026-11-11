@@ -428,8 +428,11 @@ impl Daemon {
     /// to the repo reaches it as a repo change, which publishes it. A target
     /// rosamta wrote itself matches its record and is left alone.
     fn dotfiles_changed(&mut self) {
-        // A host that never applied has no deployed dotfiles to look after.
-        if generated::current_id(&self.ctx.paths.generated()).is_none() {
+        // A host that never applied has no deployed dotfiles to look after,
+        // and a repo that did not apply is not deployed either.
+        if generated::current_id(&self.ctx.paths.generated()).is_none()
+            || self.repo_problem.is_some()
+        {
             return;
         }
         let result = (|| {
@@ -541,8 +544,11 @@ impl Daemon {
         }
         self.repo_seen = Some(seen);
         self.repo_problem = self.apply_repo().err();
-        // Edits by hand are committed and pushed only after they apply.
+        // Edits by hand are committed and pushed only after they apply; an
+        // edit saved while applying waits for its own check.
+        let unchecked = fingerprint(&self.repo_files()) != seen;
         if self.repo_problem.is_none()
+            && !unchecked
             && self.host.publish == SyncPolicy::Auto
             && let Err(err) = sync::publish(&self.ctx)
             && !err.is_usage()
@@ -581,20 +587,38 @@ impl Daemon {
             return Ok(());
         }
         let _lock = adopt::lock(&self.ctx).map_err(|err| ("apply_failed", err.to_string()))?;
-        apply::apply(&self.ctx)
-            .map(drop)
-            .map_err(|err| ("apply_failed", err.to_string()))
+        let applied = apply::apply(&self.ctx).map_err(|err| ("apply_failed", err.to_string()))?;
+        match applied.failures().into_iter().next() {
+            Some(failure) => Err(("apply_failed", failure)),
+            None => Ok(()),
+        }
     }
 
     fn sync_now(&mut self) {
+        // A failed apply may have been passing trouble (a download); try again.
+        if self.repo_problem.is_some() {
+            self.repo_seen = None;
+            self.repo_changed();
+        }
         if self.host.pull != SyncPolicy::Auto {
             return;
         }
-        match sync::sync_per_policy(&self.ctx) {
+        let started = crate::time::now();
+        // Hand edits that did not apply stay unpublished; pulling may fix them.
+        match sync::sync_per_policy(&self.ctx, self.repo_problem.is_some()) {
             Ok(_) => {}
             // No remote yet, or no repo: nothing to sync with.
             Err(err) if err.is_usage() => {}
             Err(err) => self.log(&err.to_string()),
+        }
+        // Pulled settings that did not apply hold back dotfiles, as a repo
+        // edit that did not apply does.
+        if let Some(pull) = sync::load_state(self.ctx.paths.state())
+            .ok()
+            .and_then(|state| state.pull)
+            .filter(|pull| pull.applying && pull.at >= started)
+        {
+            self.repo_problem = Some(("apply_failed", pull.reason.unwrap_or_default()));
         }
         // A pull applies dotfiles too.
         self.queue_applied_items();

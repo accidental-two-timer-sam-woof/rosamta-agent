@@ -689,7 +689,10 @@ fn deploy_with(ctx: &Context, render_all: bool) -> Result<Vec<Step>> {
 /// Write what `target` holds to `source` in the repo, encrypted when declared so.
 pub(crate) fn save(ctx: &Context, entry: &Dotfile, target: &Path, source: &Path) -> Result<()> {
     if !entry.encrypted {
-        return tree::put(Content::Tree(target), source);
+        // A target this host turned into a link saves what the link shows:
+        // the link itself would point nowhere on other hosts.
+        let shown = std::fs::canonicalize(target).map_err(Error::read(target))?;
+        return tree::put(Content::Tree(&shown), source);
     }
     let plain = std::fs::read(target).map_err(Error::read(target))?;
     tree::put(Content::Bytes(&crypt::encrypt(ctx, &plain)?), source)
@@ -740,6 +743,10 @@ fn run(ctx: &Context, repo: &Path, deployed: &mut Deployed, path: &Path, work: W
                 tree::put(Content::Tree(&source), &target)?;
             } else {
                 history::recover(repo, &record.source, &target)?;
+            }
+            // git keeps no private mode, and the declaration may be gone.
+            if let Some(mode) = record.mode {
+                tree::set_mode(&target, mode)?;
             }
             deployed.entries.remove(path);
             deployed.ignored.remove(path);
@@ -807,6 +814,7 @@ fn run(ctx: &Context, repo: &Path, deployed: &mut Deployed, path: &Path, work: W
             source: entry.source(),
             source_hash,
             target_hash,
+            mode: entry.mode(),
         },
     );
     deployed.ignored.remove(path);

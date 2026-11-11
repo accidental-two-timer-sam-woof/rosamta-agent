@@ -1,7 +1,9 @@
 //! The secret check before a push: every line the push would add to the remote.
 
 use std::path::Path;
+use std::sync::OnceLock;
 
+use regex::Regex;
 use serde::Serialize;
 
 use crate::adopt::secret_rule;
@@ -32,6 +34,14 @@ const PATCH: [&str; 8] = [
 ];
 
 const ARMOR: &str = "-----BEGIN AGE ENCRYPTED FILE-----";
+const ARMOR_END: &str = "-----END AGE ENCRYPTED FILE-----";
+
+/// An encrypted dotfile: one armored block and nothing else.
+fn armored(text: &str) -> bool {
+    text.starts_with(ARMOR)
+        && text.trim_end().ends_with(ARMOR_END)
+        && text.matches(ARMOR).count() == 1
+}
 
 /// Lines added by each commit in `range` (arguments to `git log`), with
 /// their line numbers in that commit's version of the file.
@@ -41,6 +51,8 @@ pub(crate) fn scan(repo: &Path, range: &[&str]) -> Result<Vec<Hit>> {
         "core.quotePath=false",
         "log",
         "--patch",
+        // The first commit's diff too, whatever `log.showRoot` says.
+        "--root",
         "--reverse",
         "--format=commit %H",
         "--no-show-signature",
@@ -49,20 +61,49 @@ pub(crate) fn scan(repo: &Path, range: &[&str]) -> Result<Vec<Hit>> {
     ];
     args.extend(PATCH);
     args.extend_from_slice(range);
+    let mut revs = vec!["rev-list"];
+    revs.extend_from_slice(range);
+    let commits = git::run(repo, &revs)?;
+    let hosts = host_ids(repo, commits.lines().map(|sha| format!("{sha}:")));
     Ok(unencrypted(
         repo,
-        check(&added_lines(&git::run(repo, &args)?)),
+        check(&added_lines(&git::run(repo, &args)?), &hosts),
     ))
 }
 
 /// Lines added by the staged changes.
-pub(crate) fn staged(repo: &Path) -> Result<Vec<Hit>> {
+pub(crate) fn staged(repo: &Path, paths: &[&str]) -> Result<Vec<Hit>> {
     let mut args = vec!["-c", "core.quotePath=false", "diff", "--cached"];
     args.extend(PATCH);
+    if !paths.is_empty() {
+        args.push("--");
+        args.extend_from_slice(paths);
+    }
+    let hosts = host_ids(repo, [":".to_string()]);
     Ok(unencrypted(
         repo,
-        check(&added_lines(&git::run(repo, &args)?)),
+        check(&added_lines(&git::run(repo, &args)?), &hosts),
     ))
+}
+
+/// Host IDs come from hostnames, which can look random (`Mac-1762…`) but
+/// are never secrets: those registered now and in each of `snapshots` (a
+/// `<commit>:` or the index `:`), so a host renamed since still counts.
+fn host_ids(repo: &Path, snapshots: impl IntoIterator<Item = String>) -> Vec<String> {
+    let mut hosts = crate::repo::read_manifest(repo)
+        .map(|manifest| manifest.hosts)
+        .unwrap_or_default();
+    for snapshot in snapshots {
+        let blob = format!("{snapshot}{}", crate::repo::MANIFEST);
+        if let Ok(text) = git::run(repo, &["cat-file", "blob", &blob])
+            && let Ok(manifest) = crate::validate::parse::<crate::config::RepoManifest>(&text)
+        {
+            hosts.extend(manifest.hosts);
+        }
+    }
+    hosts.sort();
+    hosts.dedup();
+    hosts
 }
 
 /// Hits outside encrypted dotfiles. A changed ciphertext adds only base64
@@ -71,7 +112,7 @@ fn unencrypted(repo: &Path, hits: Vec<Hit>) -> Vec<Hit> {
     hits.into_iter()
         .filter(|hit| {
             let blob = format!("{}:{}", hit.commit, hit.file);
-            !git::run(repo, &["cat-file", "blob", &blob]).is_ok_and(|text| text.starts_with(ARMOR))
+            !git::run(repo, &["cat-file", "blob", &blob]).is_ok_and(|text| armored(&text))
         })
         .collect()
 }
@@ -126,20 +167,38 @@ fn added_lines(log: &str) -> Vec<Added> {
     out
 }
 
+/// `text` with the registered host IDs taken out of `hosts = [...]` lists;
+/// the same words anywhere else are still checked.
+fn without_host_ids(text: &str, hosts: &[String]) -> String {
+    static LIST: OnceLock<Regex> = OnceLock::new();
+    let list = LIST.get_or_init(|| Regex::new(r"\bhosts\s*=\s*\[[^\]]*\]").unwrap());
+    list.replace_all(text, |caps: &regex::Captures| {
+        hosts.iter().fold(caps[0].to_string(), |list, host| {
+            list.replace(&format!("\"{host}\""), "\"\"")
+        })
+    })
+    .into_owned()
+}
+
 /// Check each file's added lines together, so rules spanning lines (private
 /// keys) still match; report the first line that matches on its own.
-fn check(files: &[Added]) -> Vec<Hit> {
+fn check(files: &[Added], hosts: &[String]) -> Vec<Hit> {
+    let matched = |text: &str| secret_rule(&without_host_ids(text, hosts));
     files
         .iter()
-        // Encrypted dotfiles are ciphertext, which looks like a key to the rules.
-        .filter(|added| !added.lines.iter().any(|(_, text)| text == ARMOR))
         .filter_map(|added| {
             let text: Vec<&str> = added.lines.iter().map(|(_, text)| text.as_str()).collect();
-            let rule = secret_rule(&text.join("\n"))?;
+            let text = text.join("\n");
+            // A new encrypted dotfile is ciphertext, which looks like a key to
+            // the rules; an armored block in a plain file is not one.
+            if added.lines.first().is_some_and(|(line, _)| *line == 1) && armored(&text) {
+                return None;
+            }
+            let rule = matched(&text)?;
             let line = added
                 .lines
                 .iter()
-                .find(|(_, text)| secret_rule(text).is_some())
+                .find(|(_, text)| matched(text).is_some())
                 .unwrap_or(&added.lines[0])
                 .0;
             Some(Hit {
@@ -179,9 +238,105 @@ mod tests {
             secret_rule(body).is_some(),
             "the body must look like a secret"
         );
-        assert_eq!(staged(repo).unwrap(), []);
+        assert_eq!(staged(repo, &[]).unwrap(), []);
         crate::git::run(repo, &["commit", "--quiet", "--no-verify", "-m", "v2"]).unwrap();
         assert_eq!(scan(repo, &["HEAD~1..HEAD"]).unwrap(), []);
+
+        // A plain file holding an armored block is still scanned.
+        let notes = format!(
+            "# notes\n{}export GITHUB_TOKEN=ghp_0123456789abcdefghijABCDEFGHIJ012345\n",
+            armored("YWdlLWVuY3J5cHRpb24ub3JnL3YxCi0+IFgyNTUxOSBhYmNk")
+        );
+        std::fs::write(repo.join("notes"), notes).unwrap();
+        crate::git::run(repo, &["add", "notes"]).unwrap();
+        let hits = staged(repo, &[]).unwrap();
+        assert_eq!(hits.len(), 1, "{hits:?}");
+        assert_eq!(hits[0].file, "notes");
+        crate::git::run(repo, &["reset", "--quiet"]).unwrap();
+
+        // So is one that starts with an armored block, new or added to.
+        let token = "export GITHUB_TOKEN=ghp_0123456789abcdefghijABCDEFGHIJ012345\n";
+        let block = armored("YWdlLWVuY3J5cHRpb24ub3JnL3YxCi0+IFgyNTUxOSBhYmNk");
+        std::fs::write(repo.join("tail"), format!("{block}{token}")).unwrap();
+        crate::git::run(repo, &["add", "tail"]).unwrap();
+        assert_eq!(staged(repo, &["tail"]).unwrap().len(), 1);
+        std::fs::write(repo.join("tail"), &block).unwrap();
+        crate::git::run(repo, &["add", "tail"]).unwrap();
+        crate::git::run(repo, &["commit", "--quiet", "--no-verify", "-m", "v3"]).unwrap();
+        std::fs::write(repo.join("tail"), format!("{block}{token}")).unwrap();
+        crate::git::run(repo, &["add", "tail"]).unwrap();
+        crate::git::run(repo, &["commit", "--quiet", "--no-verify", "-m", "v4"]).unwrap();
+        let hits = scan(repo, &["HEAD~1..HEAD"]).unwrap();
+        assert_eq!(hits.len(), 1, "{hits:?}");
+    }
+
+    /// The first commit is scanned whatever the user's `log.showRoot`.
+    #[test]
+    fn the_first_commit_is_scanned() {
+        crate::git::tests::isolate();
+        let dir = tempfile::tempdir().unwrap();
+        let repo = dir.path();
+        crate::git::run(repo, &["init", "--quiet"]).unwrap();
+        crate::git::run(repo, &["config", "log.showRoot", "false"]).unwrap();
+        let token = "export GITHUB_TOKEN=ghp_0123456789abcdefghijABCDEFGHIJ012345\n";
+        std::fs::write(repo.join("env"), token).unwrap();
+        crate::git::run(repo, &["add", "env"]).unwrap();
+        crate::git::run(repo, &["commit", "--quiet", "--no-verify", "-m", "root"]).unwrap();
+        assert_eq!(scan(repo, &["HEAD"]).unwrap().len(), 1);
+    }
+
+    /// A host renamed since a commit was made still counts for that commit.
+    #[test]
+    fn a_renamed_host_still_counts() {
+        crate::git::tests::isolate();
+        let dir = tempfile::tempdir().unwrap();
+        let repo = dir.path();
+        let host = "mac-zk3q9lmp2vr8ty6wb1nc4xj7";
+        crate::git::run(repo, &["init", "--quiet"]).unwrap();
+        let manifest = |host: &str| format!("format = 1\nhosts = [\"{host}\"]\n");
+        std::fs::write(repo.join("rosamta.toml"), manifest(host)).unwrap();
+        crate::git::run(repo, &["add", "--all"]).unwrap();
+        crate::git::run(repo, &["commit", "--quiet", "--no-verify", "-m", "join"]).unwrap();
+        std::fs::write(repo.join("rosamta.toml"), manifest("mbp")).unwrap();
+        crate::git::run(repo, &["add", "--all"]).unwrap();
+        crate::git::run(repo, &["commit", "--quiet", "--no-verify", "-m", "rename"]).unwrap();
+        assert_eq!(scan(repo, &["HEAD"]).unwrap(), []);
+        // The index, not the working tree, for staged changes.
+        std::fs::write(repo.join("rosamta.toml"), manifest(host)).unwrap();
+        crate::git::run(repo, &["add", "--all"]).unwrap();
+        std::fs::write(repo.join("rosamta.toml"), manifest("mbp")).unwrap();
+        assert_eq!(staged(repo, &[]).unwrap(), []);
+    }
+
+    /// A host named by a random-looking hostname is not a secret.
+    #[test]
+    fn host_ids_are_not_secrets() {
+        crate::git::tests::isolate();
+        let dir = tempfile::tempdir().unwrap();
+        let repo = dir.path();
+        let host = "mac-zk3q9lmp2vr8ty6wb1nc4xj7";
+        assert!(secret_rule(&format!("hosts = [\"{host}\"]")).is_some());
+        crate::git::run(repo, &["init", "--quiet"]).unwrap();
+        let manifest = format!("format = 1\nhosts = [\"{host}\"]\n");
+        std::fs::write(repo.join("rosamta.toml"), manifest).unwrap();
+        std::fs::create_dir(repo.join("modules")).unwrap();
+        let module = format!("[when]\nhosts = [\"{host}\"]\n\n[env]\nA = \"1\"\n");
+        std::fs::write(repo.join("modules/a.toml"), module).unwrap();
+        crate::git::run(repo, &["add", "--all"]).unwrap();
+        assert_eq!(staged(repo, &[]).unwrap(), []);
+
+        std::fs::write(
+            repo.join("modules/b.toml"),
+            "[env]\nB = \"Zk3q9LmP2vR8tY6wB1nC4xJ7\"\n",
+        )
+        .unwrap();
+        // The same word as a password is still one.
+        let password = format!("[env]\nDB_PASSWORD = \"{host}\"\n");
+        std::fs::write(repo.join("modules/c.toml"), password).unwrap();
+        crate::git::run(repo, &["add", "--all"]).unwrap();
+        let hits = staged(repo, &[]).unwrap();
+        let files: Vec<&str> = hits.iter().map(|hit| hit.file.as_str()).collect();
+        assert_eq!(files, ["modules/b.toml", "modules/c.toml"], "{hits:?}");
     }
 
     const LOG: &str = "commit 1111
@@ -250,7 +405,10 @@ deleted file mode 100644
         let files =
             |hits: Vec<Hit>| -> Vec<String> { hits.into_iter().map(|hit| hit.file).collect() };
         git::run(repo, &["add", "--all"]).unwrap();
-        assert_eq!(files(staged(repo).unwrap()), ["marked.bin", "nul.toml"]);
+        assert_eq!(
+            files(staged(repo, &[]).unwrap()),
+            ["marked.bin", "nul.toml"]
+        );
         commit("binary");
         assert_eq!(
             files(scan(repo, &["HEAD~1..HEAD"]).unwrap()),
@@ -277,7 +435,7 @@ deleted file mode 100644
     #[test]
     fn hits_name_file_line_and_rule() {
         assert_eq!(
-            check(&added_lines(LOG)),
+            check(&added_lines(LOG), &[]),
             [Hit {
                 commit: "1111".into(),
                 file: "modules/env.toml".into(),

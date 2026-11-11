@@ -1,6 +1,6 @@
 //! Calls to the system `git`, so the user's own config (signing, credentials) applies.
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 
 use crate::error::{Error, Result};
@@ -223,21 +223,71 @@ pub(crate) fn commit(dir: &Path, message: &str, paths: &[&str]) -> Result<Commit
     }
     run(dir, &limit(&["add", "--all"], paths))?;
     let args = limit(&["commit", "--quiet", "--message", message], paths);
-    finish(dir, &args, paths)
+    finish(dir, run(dir, &args), paths)
 }
 
-/// Commit what is staged and add nothing, so what the caller checked is
-/// what gets committed; on failure `paths` end up unstaged again.
+/// Commit what is staged under `paths` (everything staged when empty) and
+/// add nothing; other staged changes stay staged and out of the commit. On
+/// failure `paths` end up unstaged again.
 pub(crate) fn commit_staged(dir: &Path, message: &str, paths: &[&str]) -> Result<Commit> {
-    if succeeds(dir, &["diff", "--cached", "--quiet"])? {
+    if succeeds(dir, &limit(&["diff", "--cached", "--quiet"], paths))? {
         return Ok(Commit::Clean);
     }
-    finish(dir, &["commit", "--quiet", "--message", message], paths)
+    let commit = ["commit", "--quiet", "--message", message];
+    if paths.is_empty() {
+        return finish(dir, run(dir, &commit), paths);
+    }
+    // `commit -- paths` would take the files as they are now, not as staged
+    // and scanned: commit from an index of HEAD plus their staged entries.
+    let index =
+        PathBuf::from(run(dir, &["rev-parse", "--absolute-git-dir"])?.trim()).join("rosamta-index");
+    let result = commit_from(dir, &index, &commit, paths);
+    let _ = std::fs::remove_file(&index);
+    finish(dir, result, paths)
 }
 
-/// Run `git commit`; whatever stops it, `paths` end up unstaged again.
-fn finish(dir: &Path, args: &[&str], paths: &[&str]) -> Result<Commit> {
-    let Err(err) = run(dir, args) else {
+/// Run `commit` with `index` holding HEAD and the staged entries of `paths`.
+fn commit_from(dir: &Path, index: &Path, commit: &[&str], paths: &[&str]) -> Result<String> {
+    let scoped = |args: &[&str]| {
+        let output = git()
+            .arg("-C")
+            .arg(dir)
+            .env("GIT_INDEX_FILE", index)
+            .args(args)
+            .output();
+        check(args, output)
+    };
+    if succeeds(dir, &["rev-parse", "--verify", "--quiet", "HEAD"])? {
+        scoped(&["read-tree", "HEAD"])?;
+    } else {
+        scoped(&["read-tree", "--empty"])?;
+    }
+    scoped(&limit(
+        &["rm", "--cached", "-r", "--quiet", "--ignore-unmatch"],
+        paths,
+    ))?;
+    let staged = run(dir, &limit(&["ls-files", "--stage", "-z"], paths))?;
+    let entries: Vec<String> = staged
+        .split('\0')
+        .filter_map(|entry| {
+            let (meta, path) = entry.split_once('\t')?;
+            let mut meta = meta.split(' ');
+            Some(format!("{},{},{path}", meta.next()?, meta.next()?))
+        })
+        .collect();
+    if !entries.is_empty() {
+        let mut args = vec!["update-index", "--add"];
+        for entry in &entries {
+            args.extend(["--cacheinfo", entry.as_str()]);
+        }
+        scoped(&args)?;
+    }
+    scoped(commit)
+}
+
+/// After `git commit`; whatever stopped it, `paths` end up unstaged again.
+fn finish(dir: &Path, result: Result<String>, paths: &[&str]) -> Result<Commit> {
+    let Err(err) = result else {
         return Ok(Commit::Created);
     };
     run(dir, &limit(&["reset", "--quiet"], paths))?;
@@ -346,6 +396,36 @@ pub(crate) mod tests {
             Failure::Offline
         );
         assert_eq!(failure(&b, &["fetch", "--quiet"]), Failure::Offline);
+    }
+
+    /// What was staged and scanned goes in, not a later edit; new folders
+    /// and deletions too, and other staged changes stay staged.
+    #[test]
+    fn a_scoped_commit_takes_what_was_staged() {
+        isolate();
+        let dir = tempfile::tempdir().unwrap();
+        let repo = dir.path();
+        run(repo, &["init", "--quiet"]).unwrap();
+        std::fs::write(repo.join("a"), "1\n").unwrap();
+        std::fs::write(repo.join("gone"), "g\n").unwrap();
+        commit_all(repo, "base").unwrap();
+        std::fs::write(repo.join("a"), "scanned\n").unwrap();
+        std::fs::remove_file(repo.join("gone")).unwrap();
+        std::fs::create_dir(repo.join("new")).unwrap();
+        std::fs::write(repo.join("new/b"), "b\n").unwrap();
+        std::fs::write(repo.join("other"), "o\n").unwrap();
+        run(repo, &["add", "--all"]).unwrap();
+        std::fs::write(repo.join("a"), "edited\n").unwrap();
+        let commit = commit_staged(repo, "scoped", &["a", "gone", "new"]).unwrap();
+        assert!(matches!(commit, Commit::Created));
+        assert_eq!(run(repo, &["show", "HEAD:a"]).unwrap(), "scanned\n");
+        assert_eq!(run(repo, &["show", "HEAD:new/b"]).unwrap(), "b\n");
+        assert_eq!(run(repo, &["ls-tree", "HEAD", "gone"]).unwrap(), "");
+        assert_eq!(
+            run(repo, &["diff", "--cached", "--name-only"]).unwrap(),
+            "other\n"
+        );
+        assert_eq!(run(repo, &["diff", "--name-only"]).unwrap(), "a\n");
     }
 
     #[test]

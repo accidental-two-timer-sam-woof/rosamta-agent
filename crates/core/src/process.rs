@@ -3,10 +3,15 @@
 use std::io::Read;
 use std::os::unix::process::CommandExt;
 use std::process::{Command, Output, Stdio};
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-/// `Ok(None)` means the deadline passed: the child was killed, or something
-/// it started still held its output open.
+/// How long output may keep arriving after the child exits: what it wrote
+/// is in the pipe by then, and a background job may hold the pipe for good.
+const DRAIN: Duration = Duration::from_millis(200);
+
+/// `Ok(None)` means the child did not exit before the deadline and was
+/// killed. Output something it started writes after it exits may be cut.
 pub(crate) fn output_with_timeout(
     cmd: &mut Command,
     timeout: Duration,
@@ -28,32 +33,21 @@ pub(crate) fn output_with_timeout(
         .stderr(Stdio::piped())
         .spawn()?;
     // Drain both pipes on threads so a chatty child cannot block on a full pipe.
-    let mut stdout = child.stdout.take().expect("piped");
-    let mut stderr = child.stderr.take().expect("piped");
-    let out = std::thread::spawn(move || {
-        let mut buf = Vec::new();
-        let _ = stdout.read_to_end(&mut buf);
-        buf
-    });
-    let err = std::thread::spawn(move || {
-        let mut buf = Vec::new();
-        let _ = stderr.read_to_end(&mut buf);
-        buf
-    });
+    let (out, out_done) = drain(child.stdout.take().expect("piped"));
+    let (err, err_done) = drain(child.stderr.take().expect("piped"));
     let deadline = Instant::now() + timeout;
     loop {
         if let Some(status) = child.try_wait()? {
             // A background job of the child can hold the pipes past its exit.
-            while !(out.is_finished() && err.is_finished()) {
-                if Instant::now() >= deadline {
-                    return Ok(None);
-                }
+            let until = deadline.min(Instant::now() + DRAIN);
+            while !(out_done.is_finished() && err_done.is_finished()) && Instant::now() < until {
                 std::thread::sleep(Duration::from_millis(5));
             }
+            let take = |buf: &Arc<Mutex<Vec<u8>>>| std::mem::take(&mut *buf.lock().unwrap());
             return Ok(Some(Output {
                 status,
-                stdout: out.join().unwrap_or_default(),
-                stderr: err.join().unwrap_or_default(),
+                stdout: take(&out),
+                stderr: take(&err),
             }));
         }
         if Instant::now() >= deadline {
@@ -66,9 +60,44 @@ pub(crate) fn output_with_timeout(
     }
 }
 
+/// Read `pipe` to its end on a thread, into a buffer readable at any time.
+fn drain(
+    mut pipe: impl Read + Send + 'static,
+) -> (Arc<Mutex<Vec<u8>>>, std::thread::JoinHandle<()>) {
+    let buf = Arc::new(Mutex::new(Vec::new()));
+    let sink = Arc::clone(&buf);
+    let done = std::thread::spawn(move || {
+        let mut chunk = [0; 8192];
+        while let Ok(read @ 1..) = pipe.read(&mut chunk) {
+            // The result was returned: stop and close the pipe instead of
+            // buffering a background job's output for no one.
+            // shortcut: a job that keeps the pipe open but stays silent keeps
+            // this thread until it exits; read with poll(2) if those pile up.
+            if Arc::strong_count(&sink) == 1 {
+                break;
+            }
+            sink.lock().unwrap().extend_from_slice(&chunk[..read]);
+        }
+    });
+    (buf, done)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_reader_nobody_needs_stops_at_the_next_write() {
+        let (mut writer, reader) = std::os::unix::net::UnixStream::pair().unwrap();
+        let (buf, done) = drain(reader);
+        drop(buf);
+        std::io::Write::write_all(&mut writer, b"late\n").unwrap();
+        let until = Instant::now() + Duration::from_secs(5);
+        while !done.is_finished() && Instant::now() < until {
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        assert!(done.is_finished());
+    }
 
     #[test]
     fn a_grandchild_holding_the_pipes_cannot_outlast_the_deadline() {
@@ -80,13 +109,13 @@ mod tests {
                 .unwrap()
                 .is_none()
         );
+        // The child is done; its background job does not hold up the result.
         let mut cmd = Command::new("/bin/sh");
         cmd.args(["-c", "sleep 30 & echo started"]);
-        assert!(
-            output_with_timeout(&mut cmd, Duration::from_millis(300))
-                .unwrap()
-                .is_none()
-        );
+        let output = output_with_timeout(&mut cmd, Duration::from_secs(10))
+            .unwrap()
+            .unwrap();
+        assert_eq!(output.stdout, b"started\n");
         assert!(start.elapsed() < Duration::from_secs(5));
 
         let mut cmd = Command::new("/bin/sh");

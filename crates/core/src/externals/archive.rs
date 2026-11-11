@@ -30,6 +30,8 @@ pub(crate) fn download(url: &str, to: &Path) -> Result<String> {
         .timeout_connect(Some(Duration::from_secs(30)))
         .timeout_global(Some(Duration::from_secs(600)))
         .tls_config(tls)
+        // An https URL never follows a redirect to plain http.
+        .https_only(url.starts_with("https://"))
         .build()
         .new_agent();
     let mut response = agent

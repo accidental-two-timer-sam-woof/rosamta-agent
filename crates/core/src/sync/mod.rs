@@ -61,13 +61,18 @@ fn sync_locked(ctx: &Context) -> Result<Published> {
 
 /// The background service's Sync: with the publish policy `manual`, only
 /// Pull, leave edits the user has not committed alone and count unpushed
-/// commits.
-pub fn sync_per_policy(ctx: &Context) -> Result<()> {
+/// commits. While the repo has edits that do not apply (`hold`), `auto`
+/// still pushes what is committed but leaves those edits uncommitted.
+pub fn sync_per_policy(ctx: &Context, hold: bool) -> Result<()> {
     let _lock = adopt::lock(ctx)?;
-    if host::load(&ctx.paths.host_config())?.publish == SyncPolicy::Auto {
+    let auto = host::load(&ctx.paths.host_config())?.publish == SyncPolicy::Auto;
+    if auto && !hold {
         return sync_locked(ctx).map(drop);
     }
     pull_locked(ctx, false)?;
+    if auto {
+        return publish_locked(ctx, false).map(drop);
+    }
     let repo_dir = ctx.paths.repo();
     let unpushed = Remote::required(&repo_dir)?.unpushed(&repo_dir)?;
     state::update(ctx.paths.state(), |state| state.unpushed = unpushed)
@@ -91,15 +96,19 @@ pub fn publish_if_auto(ctx: &Context, _held: &Lock) -> Result<Option<Published>>
 
 /// Record that a commit could not be signed, from any command that commits.
 pub(crate) fn signing_blocked(ctx: &Context, message: &str) -> Result<()> {
-    record_publish(ctx, Attempt::new(Outcome::Blocked, Some(signing(message))))
+    record_publish(ctx, failed_commit(signing(message)))
 }
 
 /// Record a commit that failed for any other reason, such as a rebase in progress.
 pub(crate) fn commit_blocked(ctx: &Context, err: &Error) -> Result<()> {
-    record_publish(
-        ctx,
-        Attempt::new(Outcome::Blocked, Some(format!("commit failed: {err}"))),
-    )
+    record_publish(ctx, failed_commit(format!("commit failed: {err}")))
+}
+
+fn failed_commit(reason: String) -> Attempt {
+    Attempt {
+        commit: true,
+        ..Attempt::new(Outcome::Blocked, Some(reason))
+    }
 }
 
 fn signing(message: &str) -> String {
@@ -296,8 +305,21 @@ fn publish_locked(ctx: &Context, commit_edits: bool) -> Result<Published> {
         break;
     }
     let unpushed = Remote::required(&repo_dir)?.unpushed(&repo_dir)?;
+    // A commit rosamta could not make (signing, a stale lock, a secret) stays
+    // reported while its change is still uncommitted, whatever else was
+    // pushed; a push that worked clears what only blocked pushing.
+    let uncommitted = !commit_edits
+        && !git::run(&repo_dir, &["status", "--porcelain"])?
+            .trim()
+            .is_empty();
     state::update(ctx.paths.state(), |state| {
-        state.publish = Some(Attempt::ok());
+        let blocked = state
+            .publish
+            .as_ref()
+            .is_some_and(|attempt| attempt.outcome == Outcome::Blocked && attempt.commit);
+        if !(blocked && uncommitted) {
+            state.publish = Some(Attempt::ok());
+        }
         state.unpushed = unpushed;
     })?;
     Ok(published)
@@ -314,6 +336,7 @@ fn secret_blocked(ctx: &Context, hits: &[Hit], unpushed: Option<u32>) -> Error {
         lines.join("\n")
     );
     let mut attempt = Attempt::new(Outcome::Blocked, Some(text.clone()));
+    attempt.commit = unpushed.is_none();
     attempt.files = hits.iter().map(|hit| hit.file.clone()).collect();
     attempt.files.sort();
     attempt.files.dedup();
@@ -364,9 +387,9 @@ pub(crate) fn commit_scanned(ctx: &Context, paths: &[&str], message: Option<&str
         return Ok(false);
     }
     git::run(&repo_dir, &limit(&["add", "--all"]))?;
-    let hits = scan::staged(&repo_dir)?;
+    let hits = scan::staged(&repo_dir, paths)?;
     if !hits.is_empty() {
-        git::run(&repo_dir, &["reset", "--quiet"])?;
+        git::run(&repo_dir, &limit(&["reset", "--quiet"]))?;
         return Err(secret_blocked(ctx, &hits, None));
     }
     let message = message.map_or_else(|| edit_message(&status), str::to_string);
@@ -490,7 +513,7 @@ fn pull_locked(ctx: &Context, commit_edits: bool) -> Result<Pulled> {
         });
     }
     // Judged against how shells start now, so only new errors stop it.
-    match apply::around_shells(ctx, || apply::apply_after(ctx, || Ok(()))) {
+    match apply::around_shells(ctx, || apply::apply_after(ctx, &[], || Ok(()))) {
         Ok(applied) => {
             record_pull(ctx, Attempt::ok())?;
             Ok(Pulled {
@@ -564,7 +587,10 @@ fn rebase(ctx: &Context, repo_dir: &Path, upstream: &str) -> Result<()> {
         .lines()
         .map(str::to_string)
         .collect();
-    git::run(repo_dir, &["rebase", "--abort"])?;
+    // A rebase that could not even start (an untracked file in the way) has nothing to abort.
+    if git::rebasing(repo_dir) {
+        git::run(repo_dir, &["rebase", "--abort"])?;
+    }
     if !files.is_empty() {
         return Err(conflict(ctx, files));
     }
@@ -643,7 +669,7 @@ mod tests {
         std::fs::write(repo_dir.join("modules/a.toml"), "[env]\nA = \"2\"\n").unwrap();
         let remote_head = git::run(&bare, &["rev-parse", "HEAD"]).unwrap();
 
-        sync_per_policy(&ctx).unwrap();
+        sync_per_policy(&ctx, false).unwrap();
         assert!(repo_dir.join("modules/b.toml").is_file());
         assert_eq!(
             git::run(&bare, &["rev-parse", "HEAD"]).unwrap(),
@@ -656,6 +682,37 @@ mod tests {
         let state = load_state(ctx.paths.state()).unwrap();
         assert_eq!(state.unpushed, 1);
         assert_eq!(state.pull.unwrap().outcome, Outcome::Ok);
+
+        // A file this host has not committed is in the way of the pull:
+        // the failure is recorded, not lost to a failed abort.
+        std::fs::write(other.join("modules/c.toml"), "[env]\nC = \"1\"\n").unwrap();
+        git::commit_all(&other, "c").unwrap();
+        git::run(&other, &["push", "--quiet"]).unwrap();
+        std::fs::write(repo_dir.join("modules/c.toml"), "[env]\nC = \"2\"\n").unwrap();
+        assert!(matches!(sync_per_policy(&ctx, false), Err(Error::Sync(_))));
+        let state = load_state(ctx.paths.state()).unwrap();
+        assert_eq!(state.pull.unwrap().outcome, Outcome::Failed);
+        assert!(!git::rebasing(&repo_dir));
+        std::fs::remove_file(repo_dir.join("modules/c.toml")).unwrap();
+        sync_per_policy(&ctx, false).unwrap();
+        let remote_head = git::run(&bare, &["rev-parse", "HEAD"]).unwrap();
+
+        // An edit that does not apply is held back under `auto` too, while
+        // what is committed still goes.
+        std::fs::write(ctx.paths.host_config(), "id = \"a\"\npublish = \"auto\"\n").unwrap();
+        sync_per_policy(&ctx, true).unwrap();
+        assert_ne!(
+            git::run(&bare, &["rev-parse", "HEAD"]).unwrap(),
+            remote_head
+        );
+        assert_eq!(
+            git::run(&bare, &["rev-parse", "HEAD"]).unwrap(),
+            git::run(&repo_dir, &["rev-parse", "HEAD"]).unwrap()
+        );
+        assert_eq!(
+            git::run(&repo_dir, &["status", "--porcelain"]).unwrap(),
+            " M modules/a.toml\n"
+        );
     }
 
     #[test]

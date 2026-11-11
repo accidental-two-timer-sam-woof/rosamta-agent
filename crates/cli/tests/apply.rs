@@ -339,6 +339,34 @@ fn a_module_that_prints_errors_is_rolled_back() {
     assert_eq!(fs::read_link(current(&home)).unwrap(), before);
 }
 
+/// `exit` prints nothing, but new shells would close at once.
+#[test]
+fn a_module_that_exits_the_shell_is_rolled_back() {
+    let home = set_up();
+    apply(&home);
+    let before = fs::read_link(current(&home)).unwrap();
+    home.write(
+        "modules/quits.toml",
+        "[raw]\nsh = 'exit 0'\nbash = 'exit 0'\nzsh = 'exit 0'\nfish = 'exit 0'\n",
+    );
+    home.cmd("rsmt").arg("apply").assert().code(1).stderr(
+        predicate::str::contains("module quits")
+            .and(predicate::str::contains("exited before startup finished")),
+    );
+    assert_eq!(fs::read_link(current(&home)).unwrap(), before);
+}
+
+#[test]
+fn output_without_a_newline_still_finishes_startup() {
+    let home = set_up();
+    apply(&home);
+    home.write(
+        "modules/title.toml",
+        "[raw]\nsh = \"printf 'title'\"\nbash = \"printf 'title'\"\nzsh = \"printf 'title'\"\nfish = \"printf 'title'\"\n",
+    );
+    apply(&home);
+}
+
 #[test]
 fn a_login_snippet_that_prints_errors_is_rolled_back() {
     if !has("zsh") {
@@ -378,6 +406,66 @@ fn a_shell_that_was_already_slow_does_not_block_apply() {
         .timeout(Duration::from_secs(60))
         .assert()
         .success();
+}
+
+/// A background job from the rc file holds the output open after the
+/// shell exits; the shell still counts as having finished.
+#[test]
+fn a_background_job_does_not_hide_a_module_that_exits() {
+    if !has("zsh") {
+        return;
+    }
+    let home = set_up();
+    apply(&home);
+    let before = fs::read_link(current(&home)).unwrap();
+    for rel in [".zshrc", ".config/zsh/.zshrc"] {
+        let text = read(&home, rel);
+        if text.contains(BEGIN) {
+            fs::write(home.root.join(rel), format!("(sleep 8 &)\n{text}")).unwrap();
+        }
+    }
+    home.write("modules/quits.toml", "[raw]\nzsh = 'exit 0'\n");
+    home.cmd("rsmt")
+        .arg("apply")
+        .timeout(Duration::from_secs(60))
+        .assert()
+        .code(1)
+        .stderr(predicate::str::contains("exited before startup finished"));
+    assert_eq!(fs::read_link(current(&home)).unwrap(), before);
+}
+
+/// A version check that fails once (a slow start, another PATH) keeps the
+/// shell's last checked scripts; the next apply in a normal PATH updates them.
+#[test]
+fn a_shell_that_does_not_answer_keeps_its_scripts() {
+    use std::os::unix::fs::PermissionsExt;
+    if !has("zsh") {
+        return;
+    }
+    let home = set_up();
+    apply(&home);
+    let fake = home.root.join("fake-bin");
+    fs::create_dir_all(&fake).unwrap();
+    let zsh = fake.join("zsh");
+    fs::write(&zsh, "#!/bin/sh\nexit 1\n").unwrap();
+    fs::set_permissions(&zsh, fs::Permissions::from_mode(0o755)).unwrap();
+    let path = format!("{}:{}", fake.display(), std::env::var("PATH").unwrap());
+    home.write("modules/more.toml", "[env]\nMORE = \"1\"\n");
+    home.cmd("rsmt")
+        .arg("apply")
+        .env("PATH", path)
+        .assert()
+        .success();
+    // The new module waits for zsh to be checked; the old scripts stay.
+    let version = fs::read_link(current(&home)).unwrap();
+    let rc = fs::read_to_string(current(&home).join("zsh/env.zsh")).unwrap();
+    assert!(!rc.contains("more-env"), "{rc}");
+    assert!(rc.contains(&*version.to_string_lossy()), "{rc}");
+    assert!(
+        fs::read_to_string(current(&home).join("bash/env.bash"))
+            .unwrap()
+            .contains("more-env")
+    );
 }
 
 #[test]

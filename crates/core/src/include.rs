@@ -371,7 +371,22 @@ pub fn include(ctx: &Context, items: &[Item], changes: &[FileChange]) -> Result<
         }
         Ok(())
     };
-    if let Err(err) = apply::apply_after(ctx, write) {
+    // Only modules reach shell scripts.
+    let loaded = apply::load_modules(&ctx.paths.repo())?;
+    let shells: Vec<Shell> = items
+        .iter()
+        .filter(|item| item.kind == Kind::Module)
+        .flat_map(|item| {
+            let reached = match loaded.iter().find(|(name, _)| *name == item.name) {
+                Some((_, module)) => module.reaches(),
+                None => Shell::ALL.to_vec(),
+            };
+            reached
+                .into_iter()
+                .chain(item.widening.shells.iter().copied())
+        })
+        .collect();
+    if let Err(err) = apply::apply_after(ctx, &shells, write) {
         if written {
             for change in changes {
                 let _ = crate::edit::write_atomic(

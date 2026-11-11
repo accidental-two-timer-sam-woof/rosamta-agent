@@ -350,13 +350,116 @@ fn reinstalled_content_is_removed_without_a_new_module() {
     }
     let home = hooked(&[(".zshrc", BUN)]);
     run(&home, &["adopt", "--yes"]);
+    // Adoption records keep removed lines, which may look secret.
+    let state = home.root.join(".local/state/rosamta");
+    let mode = |path: &Path| fs::metadata(path).unwrap().permissions().mode() & 0o777;
+    assert_eq!(mode(&state.join("adoptions.json")), 0o600);
+    assert_eq!(mode(&state), 0o700);
     let commits = repo_git(&home, &["rev-list", "--count", "HEAD"]);
+    // An edit in progress in the module stays uncommitted.
+    let module = format!("{}# editing\n", read(&home, BUN_MODULE));
+    write(&home, BUN_MODULE, &module);
     let zshrc = read(&home, ".zshrc");
     fs::write(home.root.join(".zshrc"), format!("{zshrc}{BUN}")).unwrap();
     assert!(review(&home).is_empty());
     assert_eq!(read(&home, ".zshrc"), zshrc);
     assert_eq!(adopted(&home).len(), 1);
     assert_eq!(repo_git(&home, &["rev-list", "--count", "HEAD"]), commits);
+    assert!(repo_git(&home, &["status", "--porcelain"]).contains("bun.toml"));
+}
+
+#[test]
+fn reinstalled_content_comes_back_once_its_module_changes() {
+    if !has("zsh") {
+        return;
+    }
+    let orbstack = "\nsource ~/.orbstack/shell/init.zsh 2>/dev/null || :\n";
+    let home = hooked(&[(".zshrc", &format!("{BUN}{orbstack}"))]);
+    run(&home, &["adopt", "--yes"]);
+    // bun's module is gone; orbstack's now runs something else.
+    fs::remove_file(home.repo().join("modules/adopted/bun.toml")).unwrap();
+    let snippet = adopted(&home)
+        .into_iter()
+        .find(|path| fs::read_to_string(path).unwrap().contains("init.zsh"))
+        .unwrap();
+    let text = fs::read_to_string(&snippet).unwrap();
+    fs::write(&snippet, text.replace("init.zsh", "other.zsh")).unwrap();
+    let zshrc = read(&home, ".zshrc");
+    fs::write(home.root.join(".zshrc"), format!("{zshrc}{BUN}{orbstack}")).unwrap();
+    assert_eq!(review(&home).len(), 2);
+    let zshrc = read(&home, ".zshrc");
+    assert!(
+        zshrc.contains("BUN_INSTALL") && zshrc.contains("init.zsh"),
+        "{zshrc}"
+    );
+}
+
+/// A joined module can carry the other host's comments around the same code.
+#[test]
+fn reinstalled_content_matches_a_module_with_other_comments() {
+    if !has("zsh") {
+        return;
+    }
+    let orbstack = "\nsource ~/.orbstack/shell/init.zsh 2>/dev/null || :\n";
+    let home = hooked(&[(".zshrc", orbstack)]);
+    run(&home, &["adopt", "--yes"]);
+    let snippet = adopted(&home)
+        .into_iter()
+        .find(|path| fs::read_to_string(path).unwrap().contains("init.zsh"))
+        .unwrap();
+    let text = fs::read_to_string(&snippet).unwrap();
+    let joined = text.replace(
+        "source ~/.orbstack",
+        "# Added by OrbStack\n\nsource ~/.orbstack",
+    );
+    fs::write(&snippet, joined).unwrap();
+    let zshrc = read(&home, ".zshrc");
+    fs::write(home.root.join(".zshrc"), format!("{zshrc}{orbstack}")).unwrap();
+    assert!(review(&home).is_empty());
+    assert!(!read(&home, ".zshrc").contains("init.zsh"));
+}
+
+/// A line whose value a later module changes is not covered by an earlier
+/// module that sets the same value.
+#[test]
+fn a_line_a_later_module_overrides_stays() {
+    if !has("zsh") {
+        return;
+    }
+    let home = hooked(&[(".zshrc", "\nexport EDITOR=nvim\n")]);
+    home.write(
+        "modules/a.toml",
+        "order = 1001\n\n[env]\nEDITOR = \"nvim\"\n",
+    );
+    home.write(
+        "modules/b.toml",
+        "order = 2001\n\n[env]\nEDITOR = \"code\"\n",
+    );
+    review(&home);
+    assert!(read(&home, ".zshrc").contains("export EDITOR=nvim"));
+}
+
+/// zsh does not answer this time, so its scripts cannot take a new module.
+#[test]
+fn adopting_waits_for_a_shell_that_cannot_be_checked() {
+    if !has("zsh") {
+        return;
+    }
+    let home = hooked(&[(".zshrc", BUN)]);
+    let fake = home.root.join("fake-bin");
+    fs::create_dir_all(&fake).unwrap();
+    fs::write(fake.join("zsh"), "#!/bin/sh\nexit 1\n").unwrap();
+    fs::set_permissions(fake.join("zsh"), fs::Permissions::from_mode(0o755)).unwrap();
+    let path = format!("{}:{}", fake.display(), std::env::var("PATH").unwrap());
+    let before = read(&home, ".zshrc");
+    home.cmd("rsmt")
+        .args(["adopt", "--yes"])
+        .env("PATH", path)
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("cannot start zsh to check it"));
+    assert_eq!(read(&home, ".zshrc"), before);
+    assert!(adopted(&home).is_empty());
 }
 
 #[test]
@@ -650,6 +753,66 @@ fn restoring_keeps_a_module_another_host_joined() {
 }
 
 #[test]
+fn restoring_keeps_an_every_host_module_for_the_others() {
+    if !has("zsh") {
+        return;
+    }
+    let home = hooked(&[(".zshrc", BUN)]);
+    home.write("rosamta.toml", "format = 1\nhosts = [\"test\", \"box\"]\n");
+    let item = review(&home).remove(0);
+    let out = run(
+        &home,
+        &[
+            "review",
+            "accept",
+            &item["id"].to_string(),
+            "--scope",
+            "all",
+        ],
+    );
+    assert!(!read(&home, BUN_MODULE).contains("hosts"));
+    run(&home, &["restore", &adopted_id(&out), "--yes"]);
+    let module = read(&home, BUN_MODULE);
+    assert!(module.contains("hosts = [\"box\"]\n"), "{module}");
+    assert!(read(&home, ".zshrc").contains("BUN_INSTALL"));
+}
+
+#[test]
+fn lines_removed_as_duplicates_keep_their_module_and_come_back() {
+    if !has("zsh") {
+        return;
+    }
+    let home = hooked(&[(".zshrc", BUN)]);
+    let out = run(&home, &["adopt", "--yes"]);
+    // An installer writes the same lines into another zsh file.
+    let zprofile = read(&home, ".zprofile");
+    fs::write(home.root.join(".zprofile"), format!("{zprofile}{BUN}")).unwrap();
+    assert!(review(&home).is_empty());
+    assert!(!read(&home, ".zprofile").contains("BUN_INSTALL"));
+
+    run(&home, &["restore", &adopted_id(&out), "--yes"]);
+    assert!(read(&home, ".zshrc").contains("BUN_INSTALL"));
+    assert!(home.root.join(BUN_MODULE).exists());
+
+    let adoptions: serde_json::Value = serde_json::from_str(&adoptions_json(&home)).unwrap();
+    let removed = &adoptions["adoptions"][0];
+    assert!(
+        removed["file"].as_str().unwrap().ends_with(".zprofile"),
+        "{adoptions}"
+    );
+    assert_eq!(removed["module"], "modules/adopted/bun.toml");
+    assert_eq!(removed["duplicate"], true);
+    // A module being edited by hand is neither changed nor committed.
+    let module = format!("{}# editing\n", read(&home, BUN_MODULE));
+    write(&home, BUN_MODULE, &module);
+    let commits = repo_git(&home, &["rev-list", "--count", "HEAD"]);
+    run(&home, &["restore", &removed["id"].to_string(), "--yes"]);
+    assert!(read(&home, ".zprofile").contains("BUN_INSTALL"));
+    assert_eq!(read(&home, BUN_MODULE), module);
+    assert_eq!(repo_git(&home, &["rev-list", "--count", "HEAD"]), commits);
+}
+
+#[test]
 fn joining_for_every_host_comes_undone() {
     if !has("zsh") {
         return;
@@ -710,6 +873,30 @@ fn secrets_never_join_another_hosts_module() {
         item["local"] == true && item.get("include").is_none(),
         "{item}"
     );
+}
+
+/// A secret snippet adopted into a local module comes back as a duplicate
+/// of that local module, which then outlives restoring the first adoption.
+#[test]
+fn a_local_snippet_added_again_depends_on_its_local_module() {
+    if !has("zsh") {
+        return;
+    }
+    let login = "\nsome-cli login --key sk-proj-Zk3q9LmP2vR8tY6wB1nC4xJ7aa >/dev/null 2>&1 || :\n";
+    let home = hooked(&[(".zshrc", login)]);
+    let out = run(&home, &["adopt", "--yes"]);
+    let zshrc = read(&home, ".zshrc");
+    fs::write(home.root.join(".zshrc"), format!("{zshrc}{login}")).unwrap();
+    assert!(review(&home).is_empty());
+    let adoptions: serde_json::Value = serde_json::from_str(&adoptions_json(&home)).unwrap();
+    let records = adoptions["adoptions"].as_array().unwrap();
+    assert!(
+        records.len() == 2 && records.iter().all(|record| record["local"] == true),
+        "{adoptions}"
+    );
+    let module = records[0]["module"].as_str().unwrap().to_string();
+    run(&home, &["restore", &adopted_id(&out), "--yes"]);
+    assert!(Path::new(&module).exists(), "{module}");
 }
 
 #[test]
@@ -850,6 +1037,18 @@ fn a_failed_commit_keeps_the_adoption_record() {
         return;
     }
     let home = hooked(&[(".zshrc", BUN)]);
+    // With a remote, the publish that follows must not hide the failure.
+    let remote = home.root.join("remote.git");
+    let status = std::process::Command::new("git")
+        .args(["init", "--quiet", "--bare"])
+        .arg(&remote)
+        .status()
+        .unwrap();
+    assert!(status.success());
+    repo_git(
+        &home,
+        &["remote", "add", "origin", &remote.display().to_string()],
+    );
     let lock = home.repo().join(".git/index.lock");
     fs::write(&lock, "").unwrap();
     home.cmd("rsmt")
@@ -865,6 +1064,19 @@ fn a_failed_commit_keeps_the_adoption_record() {
     fs::write(home.root.join(".zshrc"), format!("{zshrc}{BUN}")).unwrap();
     assert!(review(&home).is_empty());
     assert_eq!(read(&home, ".zshrc"), zshrc);
+    // A refusal from the remote is over once a push works, though bun's
+    // module is still uncommitted.
+    let state = ".local/state/rosamta/sync.json";
+    assert!(read(&home, state).contains("commit failed"));
+    write(
+        &home,
+        state,
+        r#"{"publish":{"at":1,"outcome":"blocked","reason":"origin refused access"},"pull":null,"unpushed":1}"#,
+    );
+    fs::write(home.root.join(".zshrc"), format!("{zshrc}\nexport FOO=1\n")).unwrap();
+    run(&home, &["adopt", "--yes"]);
+    let sync: serde_json::Value = serde_json::from_str(&read(&home, state)).unwrap();
+    assert_eq!(sync["publish"]["outcome"], "ok", "{sync}");
 }
 
 #[test]

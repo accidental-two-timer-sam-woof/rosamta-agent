@@ -204,6 +204,63 @@ fn including_a_dotfile_deploys_it() {
     );
 }
 
+/// A dotfile changes no shell script, so a shell that cannot be checked
+/// this time does not stand in its way.
+#[test]
+fn including_a_dotfile_needs_no_shell_check() {
+    use std::os::unix::fs::PermissionsExt;
+    if !has("zsh") {
+        return;
+    }
+    let home = host();
+    commit(
+        &home,
+        &[
+            ("dotfiles.toml", GHOSTTY),
+            ("home/.config/ghostty/config", "font-size = 14\n"),
+        ],
+        1_700_000_000,
+    );
+    let fake = home.root.join("fake-bin");
+    fs::create_dir_all(&fake).unwrap();
+    fs::write(fake.join("zsh"), "#!/bin/sh\nexit 1\n").unwrap();
+    fs::set_permissions(fake.join("zsh"), fs::Permissions::from_mode(0o755)).unwrap();
+    let path = format!("{}:{}", fake.display(), std::env::var("PATH").unwrap());
+    home.cmd("rsmt")
+        .args(["include", ".config/ghostty/config", "--yes"])
+        .env("PATH", path)
+        .assert()
+        .success();
+    assert_eq!(
+        fs::read_to_string(home.root.join(".config/ghostty/config")).unwrap(),
+        "font-size = 14\n"
+    );
+}
+
+/// A module with bash code alone needs no zsh check, whatever its shells say.
+#[test]
+fn including_bash_code_needs_no_zsh_check() {
+    use std::os::unix::fs::PermissionsExt;
+    if !has("zsh") || !has("bash") {
+        return;
+    }
+    let home = host();
+    let bashy = "[when]\nhosts = [\"mbp\"]\n\n[raw]\nbash = 'export BASHY=1'\n";
+    commit(&home, &[("modules/bashy.toml", bashy)], 1_700_000_000);
+    let fake = home.root.join("fake-bin");
+    fs::create_dir_all(&fake).unwrap();
+    fs::write(fake.join("zsh"), "#!/bin/sh\nexit 1\n").unwrap();
+    fs::set_permissions(fake.join("zsh"), fs::Permissions::from_mode(0o755)).unwrap();
+    let path = format!("{}:{}", fake.display(), std::env::var("PATH").unwrap());
+    home.cmd("rsmt")
+        .args(["include", "bashy", "--yes"])
+        .env("PATH", path)
+        .assert()
+        .success();
+    let module = fs::read_to_string(home.repo().join("modules/bashy.toml")).unwrap();
+    assert!(module.contains("\"test\""), "{module}");
+}
+
 #[test]
 fn what_cannot_load_here_is_skipped_with_a_reason() {
     let home = host();
