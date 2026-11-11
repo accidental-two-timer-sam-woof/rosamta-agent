@@ -1,6 +1,7 @@
 //! `rsmt apply`, `hook`, `unhook`, `eject` and `restore --original`.
 
 use std::collections::BTreeMap;
+use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -861,8 +862,8 @@ pub fn plan_restore(ctx: &Context) -> Result<Vec<FileChange>> {
     for original in ctx.snapshots().originals()? {
         let before = match std::fs::read(&original.path) {
             Ok(bytes) => Some(String::from_utf8_lossy(&bytes).into_owned()),
-            // A dotfile directory that did not exist before rosamta.
-            Err(_) if original.path.is_dir() => Some(String::new()),
+            // A dotfile directory that did not exist before rosamta, or a dangling link.
+            Err(_) if original.path.is_dir() || original.path.is_symlink() => Some(String::new()),
             Err(err) if err.kind() == std::io::ErrorKind::NotFound => None,
             Err(err) => {
                 return Err(Error::Read {
@@ -871,16 +872,26 @@ pub fn plan_restore(ctx: &Context) -> Result<Vec<FileChange>> {
                 });
             }
         };
-        let after = original
-            .content
-            .map(|bytes| String::from_utf8_lossy(&bytes).into_owned());
-        changes.push(FileChange {
+        // A link or mode that differs is a change even when the bytes match.
+        let kind_differs = std::fs::read_link(&original.path).ok() != original.link
+            || original.mode.is_some_and(|mode| {
+                std::fs::symlink_metadata(&original.path)
+                    .is_ok_and(|meta| meta.permissions().mode() & 0o7777 != mode)
+            });
+        let after = match (original.content, &original.link) {
+            (Some(bytes), _) => Some(String::from_utf8_lossy(&bytes).into_owned()),
+            (None, Some(_)) => Some(String::new()),
+            (None, None) => None,
+        };
+        let change = FileChange {
             path: original.path,
             before,
             after,
-        });
+        };
+        if kind_differs || !change.is_noop() {
+            changes.push(change);
+        }
     }
-    changes.retain(|change| !change.is_noop());
     Ok(changes)
 }
 
@@ -901,18 +912,54 @@ pub fn restore_original(ctx: &Context) -> Result<Vec<PathBuf>> {
     }
     snapshots.save(&current, "restore original")?;
     for original in originals {
-        match original.content {
-            Some(bytes) => {
-                if let Some(dir) = original.path.parent() {
-                    std::fs::create_dir_all(dir).map_err(Error::write(dir))?;
-                }
-                std::fs::write(&original.path, bytes).map_err(Error::write(&original.path))?;
-            }
-            None => crate::dotfiles::tree::remove(&original.path)?,
-        }
+        put_back(&original)?;
     }
     ctx.set_unhooked(&Shell::ALL)?;
     Ok(paths)
+}
+
+/// One original: its link, then its bytes, written through the link only
+/// when the link was there before rosamta.
+fn put_back(original: &crate::snapshot::Original) -> Result<()> {
+    let path = &original.path;
+    let now_link = std::fs::read_link(path).ok();
+    if original.link.is_some() && now_link != original.link {
+        crate::dotfiles::tree::remove(path)?;
+    } else if original.link.is_none() && now_link.is_some() {
+        std::fs::remove_file(path).map_err(Error::write(path))?;
+    }
+    if (original.link.is_some() || original.content.is_some())
+        && let Some(dir) = path.parent()
+    {
+        std::fs::create_dir_all(dir).map_err(Error::write(dir))?;
+    }
+    if let Some(link) = &original.link
+        && std::fs::symlink_metadata(path).is_err()
+    {
+        std::os::unix::fs::symlink(link, path).map_err(Error::write(path))?;
+    }
+    let Some(bytes) = &original.content else {
+        return match original.link {
+            Some(_) => Ok(()),
+            None => crate::dotfiles::tree::remove(path),
+        };
+    };
+    if std::fs::read(path).ok().as_ref() != Some(bytes) {
+        // A new private file is never readable by others, even briefly.
+        let mut file = std::fs::OpenOptions::new()
+            .write(true)
+            .create(true)
+            .truncate(true)
+            .mode(original.mode.unwrap_or(0o644))
+            .open(path)
+            .map_err(Error::write(path))?;
+        std::io::Write::write_all(&mut file, bytes).map_err(Error::write(path))?;
+    }
+    if let (None, Some(mode)) = (&original.link, original.mode) {
+        std::fs::set_permissions(path, std::fs::Permissions::from_mode(mode))
+            .map_err(Error::write(path))?;
+    }
+    Ok(())
 }
 
 /// One shell on this host, for status screens.

@@ -387,6 +387,46 @@ fn restore_original_removes_new_links() {
 }
 
 #[test]
+fn restore_original_keeps_links_and_modes() {
+    let home = Home::new("ask");
+    let tool = home.at(".config/tool");
+    write(&home.at("shared.conf"), "s\n");
+    write(&tool.join("token"), "t\n");
+    fs::set_permissions(tool.join("token"), fs::Permissions::from_mode(0o600)).unwrap();
+    std::os::unix::fs::symlink("../../shared.conf", tool.join("shared")).unwrap();
+    std::os::unix::fs::symlink("missing.conf", tool.join("dangling")).unwrap();
+    let snapshots = rosamta_core::snapshot::Snapshots::new(home.ctx.paths.state(), &home.ctx.home);
+    snapshots
+        .save(&dotfiles::tree::files(&tool).unwrap(), "test")
+        .unwrap();
+    fs::remove_dir_all(&tool).unwrap();
+    write(&tool.join("shared"), "other\n");
+    assert_eq!(
+        rosamta_core::apply::plan_restore(&home.ctx).unwrap().len(),
+        3
+    );
+
+    rosamta_core::apply::restore_original(&home.ctx).unwrap();
+
+    assert_eq!(
+        fs::read_link(tool.join("shared")).unwrap(),
+        Path::new("../../shared.conf")
+    );
+    assert_eq!(read(&home.at("shared.conf")), "s\n");
+    assert_eq!(
+        fs::read_link(tool.join("dangling")).unwrap(),
+        Path::new("missing.conf")
+    );
+    assert_eq!(read(&tool.join("token")), "t\n");
+    assert_eq!(mode(&tool.join("token")), 0o600);
+    assert!(
+        rosamta_core::apply::plan_restore(&home.ctx)
+            .unwrap()
+            .is_empty()
+    );
+}
+
+#[test]
 fn eject_leaves_regular_files() {
     let home = Home::new("ask");
     home.repo_write("home/.config/nvim/init.lua", "vim.o.number = true\n");
