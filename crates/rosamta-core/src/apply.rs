@@ -372,9 +372,26 @@ pub fn with_dotfiles(ctx: &Context, mut applied: Applied) -> Result<Applied> {
 }
 
 /// Apply after `change` edits rc files or modules, judging shell startup
-/// against how shells started before the change.
-pub fn apply_after(ctx: &Context, change: impl FnOnce() -> Result<()>) -> Result<Applied> {
+/// against how shells started before the change. A change for `shells`
+/// that cannot be checked now (not found, no version) is refused.
+pub fn apply_after(
+    ctx: &Context,
+    shells: &[Shell],
+    change: impl FnOnce() -> Result<()>,
+) -> Result<Applied> {
     migrate(ctx)?;
+    let unchecked: Vec<&str> = plan(ctx)?
+        .kept
+        .iter()
+        .filter(|shell| shells.contains(shell))
+        .map(|shell| shell.name())
+        .collect();
+    if !unchecked.is_empty() {
+        return Err(Error::Apply(format!(
+            "cannot start {} to check it, so nothing changed; try again",
+            unchecked.join(", ")
+        )));
+    }
     let installed = ctx.installed();
     let env = ctx.hook_env(&installed);
     let generated_dir = ctx.paths.generated();
