@@ -57,13 +57,19 @@ pub fn uses_secrets(names: &HashSet<String>) -> bool {
 }
 
 /// The command names `secret()` is called with; `None` when `secret`
-/// appears other than as a call with a quoted name, so any command may run.
+/// appears in an expression other than as a call whose first argument is
+/// a quoted name alone, so any command may run.
 pub fn secret_names(source: &str) -> Option<BTreeSet<String>> {
-    static CALL: OnceLock<Regex> = OnceLock::new();
-    let call = CALL.get_or_init(|| {
-        Regex::new(r#"\bsecret\b(?:\s*\(\s*(?:"([^"\\]*)"|'([^'\\]*)'))?"#).unwrap()
+    static RULES: OnceLock<[Regex; 2]> = OnceLock::new();
+    let [block, call] = RULES.get_or_init(|| {
+        [
+            Regex::new(r"(?s)\{\{.*?\}\}|\{%.*?%\}").unwrap(),
+            Regex::new(r#"\bsecret\b(?:\s*\(\s*(?:"([^"\\]*)"|'([^'\\]*)')\s*,)?"#).unwrap(),
+        ]
     });
-    call.captures_iter(source)
+    block
+        .find_iter(source)
+        .flat_map(|block| call.captures_iter(block.as_str()))
         .map(|caps| Some(caps.get(1).or(caps.get(2))?.as_str().to_string()))
         .collect()
 }
@@ -314,6 +320,11 @@ mod tests {
         assert_eq!(
             names("{% set get = secret %}{{ get(\"op\", \"x\") }}"),
             None
+        );
+        assert_eq!(names("{{ secret(\"fetch\" ~ \"_prod\", \"x\") }}"), None);
+        assert_eq!(
+            names("# secret token\n{{ secret(\"fetch\", \"x\") }}"),
+            Some(vec!["fetch".to_string()])
         );
     }
 }

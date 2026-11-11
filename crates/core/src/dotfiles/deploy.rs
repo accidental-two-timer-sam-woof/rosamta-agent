@@ -496,8 +496,6 @@ fn input_hash(env: &Env, entry: &Dotfile, text: &str) -> Result<String> {
             .map(|name| (name, env.host.vars.get(name)))
             .collect()
     };
-    // The declarations of the commands it runs, or the whole manifest when
-    // those are not known.
     let commands: serde_json::Value = if !names.contains("secret") {
         "".into()
     } else {

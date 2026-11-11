@@ -1306,8 +1306,17 @@ mod templates {
         );
         assert_eq!(home.deploy(), [(".npmrc".to_string(), Action::Unchanged)]);
         home.repo_write("secrets.toml", &manifest.replace("{arg}", "--{arg}"));
-        assert_ne!(home.deploy(), [(".npmrc".to_string(), Action::Unchanged)]);
+        let steps = dotfiles::deploy(&home.ctx).unwrap();
+        assert_eq!(steps[0].action, Action::Skipped);
+        assert!(
+            steps[0].reason.as_deref().unwrap().contains("`fetch`"),
+            "{steps:?}"
+        );
         assert_eq!(runs(&log), 1);
+        home.ctx.interactive = true;
+        home.ctx.session = Default::default();
+        dotfiles::deploy::deploy_all(&home.ctx).unwrap();
+        assert_eq!(read(&home.at(".npmrc")), "token=--npm_1\n");
     }
 
     #[test]
