@@ -667,7 +667,11 @@ fn a_review_note_not_shown_is_shown_once_the_service_is_up() {
 fn a_hook_block_another_tool_removed_is_notified_once() {
     let dir = tempfile::tempdir().unwrap();
     let mut ctx = ctx(dir.path());
-    ctx.path_var = "/bin:/usr/bin".into();
+    // sh alone: no other shell's startup runs.
+    let bin = dir.path().join("bin");
+    std::fs::create_dir(&bin).unwrap();
+    std::os::unix::fs::symlink("/bin/sh", bin.join("sh")).unwrap();
+    ctx.path_var = bin.display().to_string();
     let generated = ctx.paths.generated();
     std::fs::create_dir_all(generated.join("v1/sh")).unwrap();
     std::os::unix::fs::symlink("v1", generated.join(crate::generated::CURRENT)).unwrap();
