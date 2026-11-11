@@ -240,6 +240,7 @@ fn plan_entry(env: &Env, path: &Path, entry: &Dotfile) -> Result<Planned> {
         Deploy::Template => plan_template(env, path, entry),
         Deploy::Link => plan_link(env, path, entry),
         Deploy::Copy => plan_copy(env, path, entry),
+        Deploy::Create => plan_create(env, path, entry),
     }
 }
 
@@ -284,6 +285,18 @@ fn plan_link(env: &Env, path: &Path, entry: &Dotfile) -> Result<Planned> {
         return Ok(step(path, Action::Saved, None, Work::Save(entry.clone())));
     }
     Ok(wait(path, Action::Conflict, local, repo_hash))
+}
+
+/// Whatever is at the target is the host's own; a record left from another
+/// deploy mode is dropped.
+fn plan_create(env: &Env, path: &Path, entry: &Dotfile) -> Result<Planned> {
+    if std::fs::symlink_metadata(env.target(path)).is_ok() {
+        return Ok(step(path, Action::Unchanged, None, Work::Drop));
+    }
+    Ok(match desired(env.ctx, entry)? {
+        Some(desired) => write(path, entry, desired, Action::Copied, None),
+        None => step(path, Action::Skipped, Some(LOCKED.into()), Work::Nothing),
+    })
 }
 
 fn plan_copy(env: &Env, path: &Path, entry: &Dotfile) -> Result<Planned> {
@@ -669,7 +682,7 @@ pub(crate) fn force(ctx: &Context, path: &Path, entry: &Dotfile) -> Result<()> {
     let repo = ctx.paths.repo();
     let work = match entry.deploy {
         Deploy::Link => Work::Link(entry.clone()),
-        Deploy::Copy => match desired(ctx, entry)? {
+        Deploy::Copy | Deploy::Create => match desired(ctx, entry)? {
             Some(desired) => Work::Write(entry.clone(), desired),
             None => return Err(Error::Usage(LOCKED.into())),
         },
@@ -754,6 +767,10 @@ fn run(ctx: &Context, repo: &Path, deployed: &mut Deployed, path: &Path, work: W
             &target
         };
         tree::set_mode(at, mode)?;
+    }
+    if entry.deploy == Deploy::Create {
+        deployed.entries.remove(path);
+        return Ok(());
     }
     let source_hash = match input {
         Some(input) => input,

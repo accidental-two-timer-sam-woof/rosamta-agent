@@ -226,7 +226,9 @@ fn dotfile_rows(
             DotfileStatus::Pending
         } else if deployed.ignored.contains_key(&path) {
             DotfileStatus::Skipped
-        } else if deployed.entries.contains_key(&path) {
+        } else if deployed.entries.contains_key(&path)
+            || (entry.deploy == Deploy::Create && ctx.home.join(&path).symlink_metadata().is_ok())
+        {
             DotfileStatus::Deployed
         } else {
             DotfileStatus::NotDeployed

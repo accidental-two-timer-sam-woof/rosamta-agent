@@ -234,15 +234,16 @@ when = { hosts = ["mbp"] }
 |---|---|
 | `path` | 相對於家目錄的位置 |
 | `source` | repo 中的內容，預設為 `home/<path>` |
-| `deploy` | `link`：symlink 回 repo（預設）；`copy`：複製；`template`：依主機產生內容 |
+| `deploy` | `link`：symlink 回 repo（預設）；`copy`：複製；`template`：依主機產生內容；`create`：不存在時才建立 |
 | `permissions` | 部署後設定的權限，例如 `"0600"` |
-| `encrypted` | 加密後存在 repo 中，須搭配 `deploy = "copy"` |
+| `encrypted` | 加密後存在 repo 中，不能搭配 `deploy = "link"` |
 | `when` | 套用範圍，寫法與 module 相同 |
 
 同一個路徑有多筆宣告符合本機時，`when.hosts` 只列本機的那一筆最優先，其次是列出本機的那一筆。
 
 - `link`：app 修改設定檔就是修改 repo。編輯器以新檔案取代 symlink 時，內容會寫回 repo，並重新建立 symlink。
 - `copy`：repo 改變時更新。本機的檔案被修改時依接管偏好處理：`auto` 寫回 repo，`ask` 列入待處理清單，`off` 不處理，之後也不覆蓋。
+- `create`：目標不存在時才從 repo 複製，之後不再管理，適合給 app 自行修改的初始設定。
 
 部署時，目標位置已有內容不同的檔案不會被覆蓋。在終端機執行 `rsmt apply` 時，會顯示差異並詢問要採用 repo 的版本、保留這台主機的版本，或稍後處理。稍後處理的衝突，以及非互動執行與背景服務遇到的衝突，都會列在待處理清單：
 

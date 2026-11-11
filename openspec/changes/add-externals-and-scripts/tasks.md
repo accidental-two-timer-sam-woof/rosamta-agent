@@ -2,7 +2,7 @@
 
 ## 1. `create` 部署方式
 
-- [ ] 1.1 `deploy = "create"`：目標不存在才寫入（含解密與 `permissions`），不記錄、不監看、不進待處理清單；`rsmt validate` 拒絕搭配 template；`rsmt forget` 不動目標。以整合測試驗證建立、已存在不動、刪除後重建，README 的 `deploy` 欄位加上 `create`
+- [x] 1.1 `deploy = "create"`：目標不存在才寫入（含解密與 `permissions`），不記錄、不監看、不進待處理清單；`rsmt validate` 拒絕搭配 template；`rsmt forget` 不動目標。以整合測試驗證建立、已存在不動、刪除後重建，README 的 `deploy` 欄位加上 `create`
 
 ## 2. Externals
 

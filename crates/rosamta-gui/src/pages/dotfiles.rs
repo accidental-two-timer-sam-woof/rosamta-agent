@@ -28,6 +28,7 @@ pub fn render(app: &Rosamta, cx: &mut Context<Rosamta>) -> impl IntoElement {
                     Deploy::Link => "dotfiles.link",
                     Deploy::Copy => "dotfiles.copy",
                     Deploy::Template => "dotfiles.template",
+                    Deploy::Create => "dotfiles.create",
                 };
                 let (status, tone) = match dotfile.status {
                     DotfileStatus::Deployed => ("dotfiles.deployed", Tone::Ok),
