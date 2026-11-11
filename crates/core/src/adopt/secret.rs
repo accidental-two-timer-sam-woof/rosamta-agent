@@ -93,7 +93,7 @@ fn secret_name(text: &str) -> bool {
 
 fn high_entropy(text: &str) -> bool {
     text.split(|c: char| !(c.is_ascii_alphanumeric() || "+/=_-.".contains(c)))
-        .filter(|token| token.len() >= MIN_LEN)
+        .filter(|token| token.len() >= MIN_LEN && mixed(token))
         .any(|token| match token.contains('/') {
             false => entropy(token) > MIN_ENTROPY,
             true => {
@@ -112,6 +112,13 @@ fn high_entropy(text: &str) -> bool {
                     && entropy(value) > MIN_SLASHED_ENTROPY
             }
         })
+}
+
+/// Keys mix digits or letter cases; words and host names such as
+/// `my-macbook-pro` use one case and no digits.
+fn mixed(token: &str) -> bool {
+    let has = |test: fn(&char) -> bool| token.chars().any(|c| test(&c));
+    has(char::is_ascii_digit) || (has(char::is_ascii_uppercase) && has(char::is_ascii_lowercase))
 }
 
 /// `/usr/bin`, `~/.cargo`, `HOME/.local/share` (what `$HOME/...` leaves):
@@ -230,6 +237,8 @@ mod tests {
             "zinit light romkatv/powerlevel10k/powerlevel10k.zsh-theme",
             "export GOPRIVATE=github.com/OrgName/RepoName",
             "export ANDROID_HOME=$HOME/Library/Android/sdk",
+            "# Adopted from ~/.zshrc on xinshoutw-macbook-pro.",
+            "Host my-company-internal-tools.example",
         ] {
             assert!(!looks_secret(text), "{text}");
         }
