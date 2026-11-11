@@ -44,7 +44,7 @@
 - **THEN** 本機的 external 是新的版本
 
 ### Requirement: Local changes to externals are never overwritten
-`git` 工作目錄有未 commit 的修改、或 `archive` 的內容自上次解壓後被修改時，套用 SHALL 不動該 external 並回報本機已修改。第一次部署時目標已存在，且不是 `origin` 相同的 git repo、也不是內容相同的解壓結果時，SHALL 不動目標並回報衝突。不再宣告的 external SHALL 留在原地、不再管理。
+`git` 工作目錄有未 commit 的修改、或 `archive` 的內容自上次解壓後被修改時，套用 SHALL 不動該 external 並回報本機已修改。第一次部署時目標已存在，且不是 `origin` 相同的 git repo 時，SHALL 不動目標並回報衝突。不再宣告的 external SHALL 留在原地、不再管理。
 
 #### Scenario: Edited plugin
 - **WHEN** 使用者修改了 `~/.oh-my-zsh` 中的檔案，之後鎖定值改變
