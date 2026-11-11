@@ -7,15 +7,14 @@ inputs:
 runs:
   using: composite
   steps:
-    # The env context leaves out the runner's own variables, so read them in a step.
-    - id: image
+    # Debs are fetched against the image's package lists, so they only fit runners with the same lists.
+    - id: lists
       shell: bash
-      run: echo "version=${ImageOS}-${ImageVersion}" >> "${GITHUB_OUTPUT}"
+      run: echo "hash=$(cat /var/lib/apt/lists/*Release 2>/dev/null | sha256sum | cut -c1-16)" >> "${GITHUB_OUTPUT}"
     - uses: actions/cache@v6
       with:
         path: ~/apt-debs
-        # Debs pin exact dependency versions, so they only fit the image that fetched them.
-        key: apt-${{ steps.image.outputs.version }}-${{ runner.arch }}-${{ inputs.packages }}
+        key: apt-${{ runner.arch }}-${{ steps.lists.outputs.hash }}-${{ inputs.packages }}
     - shell: bash
       env:
         PACKAGES: ${{ inputs.packages }}
@@ -37,6 +36,7 @@ runs:
           debs=("${archives}"/*.deb)
           if (( ${#debs[@]} )); then cp "${debs[@]}" "${dir}/"; fi
         else
+          echo "::notice::The image's package lists are out of date, so these packages are not cached."
           sudo apt-get -o Acquire::Retries=3 update
         fi
         "${install[@]}" "${packages[@]}"
