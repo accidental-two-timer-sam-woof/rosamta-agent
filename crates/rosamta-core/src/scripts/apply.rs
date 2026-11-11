@@ -75,12 +75,18 @@ pub fn hash(repo: &Path, script: &Script) -> Result<String> {
     let mut watched: Vec<String> = script.watch.iter().map(|path| plain(path)).collect();
     watched.sort();
     watched.dedup();
-    let mut parts = vec![tree::hash(&repo.join(&script.source))?.unwrap_or_default()];
+    let mut parts = vec![followed_hash(&repo.join(&script.source))?];
     for watched in watched {
-        let content = tree::hash(&repo.join(&watched))?.unwrap_or_default();
+        let content = followed_hash(&repo.join(&watched))?;
         parts.push(format!("{watched}\0{content}"));
     }
     Ok(tree::hash_bytes(parts.join("\n").as_bytes()))
+}
+
+/// What a run reads at `path`: through a link, the file it points at.
+fn followed_hash(path: &Path) -> Result<String> {
+    let path = std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
+    Ok(tree::hash(&path)?.unwrap_or_default())
 }
 
 /// The scripts of this host that need to run, in declaration order.

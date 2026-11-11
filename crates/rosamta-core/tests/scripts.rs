@@ -205,4 +205,22 @@ fn how_the_watch_list_is_written_does_not_count_as_a_change() {
     let hash = |watch: &[&str]| apply::hash(&repo, &script(watch)).unwrap();
     assert_eq!(hash(&["a", "b"]), hash(&["b", "./a", "a"]));
     assert_ne!(hash(&["a", "b"]), hash(&["a"]));
+
+    // A script or watched path that is a link changes with what it points at.
+    home.repo_write("impl.sh", "echo 1\n");
+    std::os::unix::fs::symlink("impl.sh", repo.join("brew-link")).unwrap();
+    std::os::unix::fs::symlink("b", repo.join("b-link")).unwrap();
+    let linked = |watch: &[&str]| {
+        let script = Script {
+            source: "brew-link".into(),
+            ..script(watch)
+        };
+        apply::hash(&repo, &script).unwrap()
+    };
+    let before = linked(&["b-link"]);
+    home.repo_write("impl.sh", "echo 2\n");
+    let edited = linked(&["b-link"]);
+    assert_ne!(before, edited);
+    home.repo_write("b", "3");
+    assert_ne!(linked(&["b-link"]), edited);
 }
