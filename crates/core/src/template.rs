@@ -2,11 +2,12 @@
 //! that cannot read files or run anything but the secret sources rosamta
 //! provides (ADR 0006).
 
-use std::collections::{BTreeMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashSet};
 use std::path::Path;
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 
 use minijinja::{Environment, ErrorKind, UndefinedBehavior, Value, context};
+use regex::Regex;
 
 use crate::config::HostConfig;
 use crate::secrets::{self, Failure, Session, Waiting};
@@ -53,6 +54,18 @@ pub fn names(name: &str, source: &str) -> Result<HashSet<String>, String> {
 /// Whether the template asks a secret source.
 pub fn uses_secrets(names: &HashSet<String>) -> bool {
     names.contains("secret") || names.contains("bitwarden")
+}
+
+/// The command names `secret()` is called with; `None` when `secret`
+/// appears other than as a call with a quoted name, so any command may run.
+pub fn secret_names(source: &str) -> Option<BTreeSet<String>> {
+    static CALL: OnceLock<Regex> = OnceLock::new();
+    let call = CALL.get_or_init(|| {
+        Regex::new(r#"\bsecret\b(?:\s*\(\s*(?:"([^"\\]*)"|'([^'\\]*)'))?"#).unwrap()
+    });
+    call.captures_iter(source)
+        .map(|caps| Some(caps.get(1).or(caps.get(2))?.as_str().to_string()))
+        .collect()
 }
 
 /// `vars.*` names the template uses, sorted.
@@ -286,5 +299,21 @@ mod tests {
         assert!(err.contains("runs only in `rsmt apply`"), "{err}");
         assert_eq!(session.take_waiting(), [Waiting::Command("op".into())]);
         assert!(session.take_waiting().is_empty());
+    }
+
+    #[test]
+    fn secret_names_are_the_quoted_first_arguments() {
+        let names =
+            |source: &str| secret_names(source).map(|names| names.into_iter().collect::<Vec<_>>());
+        assert_eq!(
+            names("a={{ secret(\"op\", \"x\") }}\nb={{ secret( 'vault' ,'y') }}\n"),
+            Some(vec!["op".to_string(), "vault".to_string()])
+        );
+        assert_eq!(names("{{ bitwarden_ssh_socket() }}"), Some(vec![]));
+        assert_eq!(names("{{ secret(name, \"x\") }}"), None);
+        assert_eq!(
+            names("{% set get = secret %}{{ get(\"op\", \"x\") }}"),
+            None
+        );
     }
 }

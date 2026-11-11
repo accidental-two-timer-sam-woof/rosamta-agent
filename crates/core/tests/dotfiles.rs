@@ -1293,6 +1293,24 @@ mod templates {
     }
 
     #[test]
+    fn only_a_change_to_the_commands_a_template_runs_renders_it_again() {
+        let mut home = Home::new("ask");
+        let log = with_secret(&mut home);
+        home.ctx.interactive = true;
+        dotfiles::deploy::deploy_all(&home.ctx).unwrap();
+        home.ctx.interactive = false;
+        let manifest = fs::read_to_string(home.ctx.paths.repo().join("secrets.toml")).unwrap();
+        home.repo_write(
+            "secrets.toml",
+            &format!("{manifest}[commands.other]\nrun = [\"true\"]\n"),
+        );
+        assert_eq!(home.deploy(), [(".npmrc".to_string(), Action::Unchanged)]);
+        home.repo_write("secrets.toml", &manifest.replace("{arg}", "--{arg}"));
+        assert_ne!(home.deploy(), [(".npmrc".to_string(), Action::Unchanged)]);
+        assert_eq!(runs(&log), 1);
+    }
+
+    #[test]
     fn a_terminal_unlocks_bw_once_for_the_whole_run() {
         let mut home = Home::new("ask");
         let bin = home.ctx.home.join("bin");

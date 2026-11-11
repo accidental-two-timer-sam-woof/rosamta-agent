@@ -496,12 +496,24 @@ fn input_hash(env: &Env, entry: &Dotfile, text: &str) -> Result<String> {
             .map(|name| (name, env.host.vars.get(name)))
             .collect()
     };
-    // shortcut: every command counts, not only the ones this template runs;
-    // a per-name hash needs the names `secret()` is called with.
-    let commands = if names.contains("secret") {
-        std::fs::read_to_string(env.repo.join(secrets::MANIFEST)).unwrap_or_default()
+    // The declarations of the commands it runs, or the whole manifest when
+    // those are not known.
+    let commands: serde_json::Value = if !names.contains("secret") {
+        "".into()
     } else {
-        String::new()
+        match (template::secret_names(text), secrets::load(&env.repo)) {
+            (Some(called), Ok(declared)) => called
+                .into_iter()
+                .map(|name| {
+                    let run = declared.commands.get(&name).map(|command| &command.run);
+                    (name, serde_json::json!(run))
+                })
+                .collect::<serde_json::Map<_, _>>()
+                .into(),
+            _ => std::fs::read_to_string(env.repo.join(secrets::MANIFEST))
+                .unwrap_or_default()
+                .into(),
+        }
     };
     let socket = names
         .contains("bitwarden_ssh_socket")

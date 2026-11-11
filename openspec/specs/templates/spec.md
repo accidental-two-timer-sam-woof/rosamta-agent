@@ -45,6 +45,10 @@ template SHALL 可使用 `vars.<name>`，值來自本機 `host.toml` 的 `[vars]
 - **WHEN** 背景服務因 repo 中其他檔案變動而套用，某個 template 的輸入沒有改變
 - **THEN** 該 template 不重新 render，也不取用任何秘密
 
+#### Scenario: Another secret command changes
+- **WHEN** `secrets.toml` 中只有 template 沒有呼叫的秘密指令改變
+- **THEN** 背景服務不重新 render 該 template
+
 ### Requirement: Local edits to rendered files
 render 出來的目標被修改、偏好不是「關閉」時，SHALL 放進待處理清單（不論偏好是「自動」或「詢問」），因為內容無法寫回 template。`rsmt review accept` SHALL 把目前內容存成本機專用的 copy 宣告（`hosts/<識別名稱>/<路徑>`），沿用權限與加密，且只接受 `--scope host`；template 使用秘密來源、或內容看起來像秘密，而 template 沒有加密時 SHALL 拒絕。`rsmt review discard` SHALL 重新 render 並覆蓋。偏好為「關閉」時 SHALL 不處理，之後的套用也不覆蓋它。
 
