@@ -632,6 +632,14 @@ pub fn deploy(ctx: &Context) -> Result<Vec<Step>> {
     deploy_with(ctx, false)
 }
 
+/// Render every template once, for `rsmt apply` in a terminal, before it
+/// takes the adopt lock: a locked secret source asks for its password and
+/// secret commands run while the daemon can still work, and the shared
+/// session keeps what they gave. Problems are left for the deploy to report.
+pub fn prepare(ctx: &Context) {
+    let _ = plan_with(ctx, true);
+}
+
 /// `deploy` for `rsmt apply`: in a terminal every template renders, so a
 /// changed secret reaches its file.
 pub fn deploy_all(ctx: &Context) -> Result<Vec<Step>> {

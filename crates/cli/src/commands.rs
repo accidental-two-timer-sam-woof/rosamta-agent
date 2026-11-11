@@ -72,9 +72,10 @@ pub fn apply(json: bool, dry_run: bool) -> Result<ExitCode> {
     if interactive {
         crate::dotfiles::ask_vars(&ctx)?;
     }
-    // shortcut: a locked secret source asks for its password while the lock
-    // is held, so the daemon waits until it is typed.
     ctx.interactive = interactive;
+    if interactive {
+        dotfiles::deploy::prepare(&ctx);
+    }
     let applied = {
         let _lock = adopt::lock(&ctx)?;
         apply::apply(&ctx)?
