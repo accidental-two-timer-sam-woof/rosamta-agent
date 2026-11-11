@@ -93,31 +93,36 @@ fn secret_name(text: &str) -> bool {
 
 fn high_entropy(text: &str) -> bool {
     text.split(|c: char| !(c.is_ascii_alphanumeric() || "+/=_-.".contains(c)))
-        .map(value)
-        .any(|token| match token.contains('/') {
-            false => {
-                token.len() >= MIN_LEN
-                    && !words(token)
-                    && !known_name(token)
-                    && entropy(token) > MIN_ENTROPY
-            }
-            true => {
-                !path_like(token)
-                    && token.len() >= MIN_SLASHED_LEN
-                    && entropy(token) > MIN_SLASHED_ENTROPY
+        .any(|whole| {
+            let token = value(whole);
+            // A known name passes as a name, never as an assignment's value.
+            let name = token.len() == whole.len() && known_name(token);
+            match token.contains('/') {
+                false => {
+                    token.len() >= MIN_LEN && !words(token) && !name && entropy(token) > MIN_ENTROPY
+                }
+                true => {
+                    !path_like(token)
+                        && token.len() >= MIN_SLASHED_LEN
+                        && entropy(token) > MIN_SLASHED_ENTROPY
+                }
             }
         })
 }
 
-/// `NAME=value` is judged by its value; base64 padding (`abc==`) is not an
-/// assignment.
+/// `NAME=value` and `NAME+=value` are judged by the value; base64 padding
+/// (`abc==`) is not an assignment.
 fn value(token: &str) -> &str {
     match token.split_once('=') {
         Some((name, value))
-            if !name.is_empty()
+            if !name.strip_suffix('+').unwrap_or(name).is_empty()
                 && !value.is_empty()
                 && !value.starts_with('=')
-                && name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_') =>
+                && name
+                    .strip_suffix('+')
+                    .unwrap_or(name)
+                    .chars()
+                    .all(|c| c.is_ascii_alphanumeric() || c == '_') =>
         {
             value
         }
@@ -261,6 +266,10 @@ mod tests {
         assert!(looks_secret("export LICENSE=QW8ZRTYUPLKJ_HGFDSAXCVBNMKJH"));
         assert!(looks_secret("export X=K7Q2_M9X4_P8R3_T6W1_Z5N0"));
         assert!(looks_secret(
+            "export X=POWERLEVEL9K_QWERTYUIOPASDFGHJZXCVBNM"
+        ));
+        assert!(looks_secret("X+=Zk3q9LmP2vR8tY6wB1nC4xJ7"));
+        assert!(looks_secret(
             "aws_secret_access_key = wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY"
         ));
         assert!(!looks_secret(
@@ -291,6 +300,7 @@ mod tests {
             "  # typeset -g POWERLEVEL9K_CPU_ARCH_X86_64_CONTENT_EXPANSION=",
             "  # POWERLEVEL9K_ASDF_PROMPT_ALWAYS_SHOW.",
             "  typeset -g POWERLEVEL9K_XPLR_VISUAL_IDENTIFIER_EXPANSION=",
+            "  POWERLEVEL9K_CONTEXT_TEMPLATE+=foo",
             "  POWERLEVEL9K_KUBECONTEXT_DEFAULT_CONTENT_EXPANSION+='${P9K_KUBECONTEXT_NAME}'",
         ] {
             assert!(!looks_secret(text), "{text}");
