@@ -6,7 +6,7 @@
 ## Requirements
 
 ### Requirement: Adopt policy
-掃描到可接管的內容時，rosamta SHALL 依本機的接管偏好處理：「自動」立即接管；「詢問」放進待處理清單；「關閉」不做任何記錄。
+掃描到可接管的內容時，rosamta SHALL 依本機的接管偏好處理：「自動」立即接管（secret-guard 規定要先詢問的內容除外）；「詢問」放進待處理清單；「關閉」不做任何記錄。
 
 #### Scenario: Ask
 - **WHEN** 接管偏好為「詢問」，掃描發現新的段落
