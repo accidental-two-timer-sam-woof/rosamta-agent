@@ -1003,7 +1003,19 @@ fn apply_warns_when_chezmoi_would_drop_the_block() {
         "{stderr}"
     );
     assert!(!stderr.contains(".gitconfig"), "{stderr}");
+    // No hook changed, so chezmoi is not asked: answering renders its templates.
+    let stderr = apply("export A=1\n");
+    assert!(!stderr.contains("chezmoi"), "{stderr}");
+    // `chezmoi apply` wrote its copy over the hook: hooking again asks again.
+    let unhooked = || fs::write(home.root.join(".profile"), "export A=1\n").unwrap();
+    unhooked();
+    let stderr = apply("export A=1\n");
+    assert!(
+        stderr.contains("chezmoi also manages ~/.profile"),
+        "{stderr}"
+    );
     // A source that holds the block (`chezmoi re-add`) keeps it.
+    unhooked();
     let stderr = apply(&format!("export A=1\n{BEGIN}\n# <<< rosamta <<<\n"));
     assert!(!stderr.contains("chezmoi"), "{stderr}");
 }
