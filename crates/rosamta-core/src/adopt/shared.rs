@@ -53,7 +53,7 @@ fn same(a: &Module, b: &Module) -> bool {
 }
 
 /// Snippet text without comment lines, blank lines or trailing spaces.
-fn code(text: &str) -> Vec<&str> {
+pub(super) fn code(text: &str) -> Vec<&str> {
     text.lines()
         .map(str::trim_end)
         .filter(|line| !line.is_empty() && !line.trim_start().starts_with('#'))

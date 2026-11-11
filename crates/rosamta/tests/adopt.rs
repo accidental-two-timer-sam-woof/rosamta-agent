@@ -394,6 +394,31 @@ fn reinstalled_content_comes_back_once_its_module_changes() {
     );
 }
 
+/// A joined module can carry the other host's comments around the same code.
+#[test]
+fn reinstalled_content_matches_a_module_with_other_comments() {
+    if !has("zsh") {
+        return;
+    }
+    let orbstack = "\nsource ~/.orbstack/shell/init.zsh 2>/dev/null || :\n";
+    let home = hooked(&[(".zshrc", orbstack)]);
+    run(&home, &["adopt", "--yes"]);
+    let snippet = adopted(&home)
+        .into_iter()
+        .find(|path| fs::read_to_string(path).unwrap().contains("init.zsh"))
+        .unwrap();
+    let text = fs::read_to_string(&snippet).unwrap();
+    let joined = text.replace(
+        "source ~/.orbstack",
+        "# Added by OrbStack\n\nsource ~/.orbstack",
+    );
+    fs::write(&snippet, joined).unwrap();
+    let zshrc = read(&home, ".zshrc");
+    fs::write(home.root.join(".zshrc"), format!("{zshrc}{orbstack}")).unwrap();
+    assert!(review(&home).is_empty());
+    assert!(!read(&home, ".zshrc").contains("init.zsh"));
+}
+
 /// zsh does not answer this time, so its scripts cannot take a new module.
 #[test]
 fn adopting_waits_for_a_shell_that_cannot_be_checked() {

@@ -251,7 +251,8 @@ pub fn scan(ctx: &Context) -> Result<Vec<Candidate>> {
                 continue;
             }
             // Code adopted before is a duplicate only while its module still
-            // loads here and holds exactly that code.
+            // loads here and holds that code, comments and blank lines aside
+            // as when another host's module was joined.
             let code = snippet(ctx, &text, &watched);
             let still_held = |adoption: &&Adoption| {
                 loaded.iter().any(|(name, m)| {
@@ -261,7 +262,8 @@ pub fn scan(ctx: &Context) -> Result<Vec<Candidate>> {
                         .is_some_and(|path| repo::module_name(path) == *name)
                         && runs_in(m, shells)
                         && shells.iter().all(|&shell| {
-                            m.raw.get(shell).map(str::trim) == code.raw.get(shell).map(str::trim)
+                            m.raw.get(shell).map(shared::code)
+                                == code.raw.get(shell).map(shared::code)
                         })
                 })
             };
