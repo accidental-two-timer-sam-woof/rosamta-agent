@@ -56,14 +56,15 @@ pub(crate) fn widen(item: &mut dyn TableLike, widening: &Widening) {
 }
 
 /// Take `host` out of the hosts that load the module: out of `hosts`, or,
-/// when none are listed and so every host loads it, list the other
-/// `registered` hosts. `false` when no other host would load it.
+/// when none are listed (or the list is empty) and so every host loads it,
+/// list the other `registered` hosts. `false` when no other host would load it.
 pub(crate) fn remove_host(module: &mut dyn TableLike, host: &str, registered: &[String]) -> bool {
     let Some(hosts) = module
         .get_mut("when")
         .and_then(Item::as_table_like_mut)
         .and_then(|when| when.get_mut("hosts"))
         .and_then(Item::as_array_mut)
+        .filter(|hosts| !hosts.is_empty())
     else {
         let others: Vec<String> = registered.iter().filter(|h| *h != host).cloned().collect();
         if !others.is_empty() {
@@ -191,6 +192,15 @@ mod tests {
         assert_eq!(
             edit(open, |doc| assert!(!remove_host(doc, "box", &only))),
             open
+        );
+        // An empty list limits nothing either.
+        assert_eq!(
+            edit("[when]\nhosts = []\n", |doc| assert!(remove_host(
+                doc,
+                "box",
+                &registered
+            ))),
+            "[when]\nhosts = [\"mbp\"]\n"
         );
     }
 
