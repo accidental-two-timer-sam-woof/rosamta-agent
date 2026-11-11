@@ -419,6 +419,26 @@ fn reinstalled_content_matches_a_module_with_other_comments() {
     assert!(!read(&home, ".zshrc").contains("init.zsh"));
 }
 
+/// A line whose value a later module changes is not covered by an earlier
+/// module that sets the same value.
+#[test]
+fn a_line_a_later_module_overrides_stays() {
+    if !has("zsh") {
+        return;
+    }
+    let home = hooked(&[(".zshrc", "\nexport EDITOR=nvim\n")]);
+    home.write(
+        "modules/a.toml",
+        "order = 1001\n\n[env]\nEDITOR = \"nvim\"\n",
+    );
+    home.write(
+        "modules/b.toml",
+        "order = 2001\n\n[env]\nEDITOR = \"code\"\n",
+    );
+    review(&home);
+    assert!(read(&home, ".zshrc").contains("export EDITOR=nvim"));
+}
+
 /// zsh does not answer this time, so its scripts cannot take a new module.
 #[test]
 fn adopting_waits_for_a_shell_that_cannot_be_checked() {
