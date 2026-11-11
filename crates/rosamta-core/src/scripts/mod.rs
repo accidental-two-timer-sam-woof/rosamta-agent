@@ -12,6 +12,9 @@ use crate::dotfiles::clean;
 use crate::error::{Error, Result};
 use crate::validate;
 
+pub mod apply;
+pub mod run;
+
 pub const MANIFEST: &str = "scripts.toml";
 
 /// `scripts.toml`.

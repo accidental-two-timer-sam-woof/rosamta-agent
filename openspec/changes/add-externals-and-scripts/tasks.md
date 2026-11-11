@@ -15,7 +15,7 @@
 ## 3. Scripts
 
 - [x] 3.1 `scripts.toml` 的型別、`rsmt schema scripts`、`rsmt validate`；`host.toml` 的 `scripts` 偏好與 schema；以測試驗證
-- [ ] 3.2 執行條件與執行方式：`once`／`onchange` 的狀態與雜湊、shebang、環境變數、工作目錄、紀錄檔（權限、截斷）；以整合測試驗證
+- [x] 3.2 執行條件與執行方式：`once`／`onchange` 的狀態與雜湊、shebang、環境變數、工作目錄、紀錄檔（權限、截斷）；以整合測試驗證
 - [ ] 3.3 接進套用：`before` 在 smoke test 之前、`after` 在 dotfile 之後；終端機直接執行，其他依偏好放進待處理清單或執行；`--dry-run`／`--json`；以整合測試驗證
 - [ ] 3.4 待處理清單的腳本項目：列出、`--json`、`accept` 執行與雜湊檢查、`ignore`、拒絕 `discard`、自動移除；以 CLI 測試驗證
 - [ ] 3.5 背景服務：依偏好處理、通知一次（中英文字串）；以背景服務測試驗證，README 新增 scripts 一節
