@@ -440,12 +440,16 @@ fn restore_original_keeps_links_and_modes() {
     fs::set_permissions(tool.join("token"), fs::Permissions::from_mode(0o600)).unwrap();
     std::os::unix::fs::symlink("../../shared.conf", tool.join("shared")).unwrap();
     std::os::unix::fs::symlink("missing.conf", tool.join("dangling")).unwrap();
+    write(&home.at("final.conf"), "f\n");
+    std::os::unix::fs::symlink("final.conf", home.at("pointer.conf")).unwrap();
+    std::os::unix::fs::symlink("../../pointer.conf", tool.join("chain")).unwrap();
     let snapshots = rosamta_core::snapshot::Snapshots::new(home.ctx.paths.state(), &home.ctx.home);
     snapshots
         .save(&dotfiles::tree::files(&tool).unwrap(), "test")
         .unwrap();
     fs::remove_dir_all(&tool).unwrap();
     fs::remove_file(home.at("shared.conf")).unwrap();
+    fs::remove_file(home.at("final.conf")).unwrap();
     write(&tool.join("shared"), "other\n");
     // Someone holds a readable file where the private one was.
     write(&tool.join("token"), "x\n");
@@ -453,11 +457,16 @@ fn restore_original_keeps_links_and_modes() {
     let mut held = fs::File::open(tool.join("token")).unwrap();
     assert_eq!(
         rosamta_core::apply::plan_restore(&home.ctx).unwrap().len(),
-        3
+        4
     );
 
     rosamta_core::apply::restore_original(&home.ctx).unwrap();
 
+    assert_eq!(
+        fs::read_link(home.at("pointer.conf")).unwrap(),
+        Path::new("final.conf")
+    );
+    assert_eq!(read(&home.at("final.conf")), "f\n");
     let mut seen = String::new();
     std::io::Read::read_to_string(&mut held, &mut seen).unwrap();
     assert_eq!(

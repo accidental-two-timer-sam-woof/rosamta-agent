@@ -1033,11 +1033,10 @@ fn put_back(original: &crate::snapshot::Original) -> Result<()> {
             None => Ok(()),
         };
     }
-    // Through a link the bytes belong to the file it points at.
-    let target = match std::fs::read_link(path) {
-        Ok(link) if original.link.is_some() || legacy(original) => std::fs::canonicalize(path)
-            .unwrap_or_else(|_| path.parent().expect("a target has a parent").join(link)),
-        _ => path.clone(),
+    // Through a link the bytes belong to the file at the end of its chain.
+    let target = match original.link.is_some() || legacy(original) {
+        true => chain_end(path)?,
+        false => path.clone(),
     };
     let mode = original
         .mode
@@ -1047,6 +1046,19 @@ fn put_back(original: &crate::snapshot::Original) -> Result<()> {
     // can read, and a link put there meanwhile is replaced, not followed.
     crate::dotfiles::tree::put(crate::dotfiles::tree::Content::Bytes(bytes), &target)?;
     crate::dotfiles::tree::set_mode(&target, mode)
+}
+
+/// The path a link chain from `path` ends at, even when no file is there.
+fn chain_end(path: &Path) -> Result<PathBuf> {
+    let mut at = path.to_path_buf();
+    // As many hops as the kernel follows.
+    for _ in 0..40 {
+        let Ok(link) = std::fs::read_link(&at) else {
+            return Ok(at);
+        };
+        at = at.parent().expect("a link has a parent").join(link);
+    }
+    Err(Error::Usage(format!("{} links in a loop", path.display())))
 }
 
 /// One shell on this host, for status screens.
