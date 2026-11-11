@@ -36,22 +36,10 @@ pub fn update(json: bool, paths: &[PathBuf]) -> Result<ExitCode> {
     if !updated.locks.is_empty() {
         after_commit(&ctx, &lock, started, json);
     }
-    let steps = externals::apply(&ctx)?;
-    let failed = !updated.failed.is_empty()
-        || steps.iter().any(|step| {
-            matches!(
-                step.action,
-                Action::Failed | Action::Changed | Action::Conflict
-            )
-        });
-    if json {
-        print_json(&Report {
-            updated,
-            externals: steps,
-        });
-    } else {
+    let shown = |path: &PathBuf| adopt::display(&ctx.home.join(path), &ctx.home);
+    // Printed before downloading, which can take a while or fail.
+    if !json {
         let short = |lock: &str| lock.chars().take(7).collect::<String>();
-        let shown = |path: &PathBuf| adopt::display(&ctx.home.join(path), &ctx.home);
         for lock in &updated.locks {
             match &lock.old {
                 Some(old) => println!(
@@ -63,9 +51,19 @@ pub fn update(json: bool, paths: &[PathBuf]) -> Result<ExitCode> {
                 None => println!("Locked {} to {}", shown(&lock.path), short(&lock.new)),
             }
         }
-        for (path, reason) in &updated.failed {
-            eprintln!("error: {}: {reason}", shown(path));
+        for failure in &updated.failed {
+            eprintln!("error: {}: {}", shown(&failure.path), failure.reason);
         }
+    }
+    let steps = externals::apply(&ctx)?;
+    let failed =
+        !updated.failed.is_empty() || steps.iter().any(|step| step.action == Action::Failed);
+    if json {
+        print_json(&Report {
+            updated,
+            externals: steps,
+        });
+    } else {
         if updated.locks.is_empty() && updated.failed.is_empty() && settled(&steps) {
             println!("Already up to date");
         }

@@ -14,6 +14,10 @@ const FOREGROUND: [&str; 4] = [
     "maintenance.autoDetach=false",
 ];
 
+/// Long enough to clone a large repo, short enough that the background
+/// service is not held for good.
+const FOREIGN_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(600);
+
 /// Set when rosamta runs from a git hook; each would point git at that
 /// repository instead of the one `-C` names.
 const REPO_VARS: [&str; 7] = [
@@ -45,11 +49,11 @@ pub(crate) fn run(dir: &Path, args: &[&str]) -> Result<String> {
 }
 
 /// `run` for a repository the repo only names, such as an external: plain
-/// transports only, nothing that clone's own config could run, and a
-/// stalled transfer gives up.
+/// transports only, nothing that clone's own config could run, no prompt
+/// even in a terminal, and a stalled or endless transfer gives up.
 pub(crate) fn run_foreign(dir: &Path, args: &[&str]) -> Result<String> {
-    let output = git()
-        .env("GIT_ALLOW_PROTOCOL", "https:http:ssh:git:file")
+    let mut cmd = git();
+    cmd.env("GIT_ALLOW_PROTOCOL", "https:http:ssh:git:file")
         .args([
             "-c",
             "core.fsmonitor=false",
@@ -62,8 +66,16 @@ pub(crate) fn run_foreign(dir: &Path, args: &[&str]) -> Result<String> {
         ])
         .arg("-C")
         .arg(dir)
-        .args(args)
-        .output();
+        .args(args);
+    let output =
+        crate::process::output_with_timeout(&mut cmd, FOREIGN_TIMEOUT).and_then(|output| {
+            output.ok_or_else(|| {
+                std::io::Error::other(format!(
+                    "gave up after {} minutes",
+                    FOREIGN_TIMEOUT.as_secs() / 60
+                ))
+            })
+        });
     check(args, output)
 }
 

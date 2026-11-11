@@ -102,7 +102,7 @@ fn externals_download_before_the_shells_are_checked() {
 }
 
 #[test]
-fn something_else_at_the_path_fails_apply() {
+fn something_else_at_the_path_is_left_alone() {
     let home = Home::new();
     home.cmd("rsmt").arg("init").assert().success();
     let (url, rev) = upstream(&home);
@@ -118,9 +118,9 @@ fn something_else_at_the_path_fails_apply() {
     home.cmd("rsmt")
         .arg("apply")
         .assert()
-        .code(1)
-        .stderr(predicate::str::contains(
-            "not downloaded ~/.zplug: something else is there",
+        .success()
+        .stdout(predicate::str::contains(
+            "Not downloaded ~/.zplug: something else is there",
         ));
     assert_eq!(
         std::fs::read_to_string(home.root.join(".zplug/mine")).unwrap(),

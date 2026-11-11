@@ -48,7 +48,7 @@
 
 #### Scenario: Edited plugin
 - **WHEN** 使用者修改了 `~/.oh-my-zsh` 中的檔案，之後鎖定值改變
-- **THEN** 套用不更新 `~/.oh-my-zsh`，輸出指出它在本機被修改，指令以 1 結束
+- **THEN** 套用不更新 `~/.oh-my-zsh`，每次套用的輸出都指出它在本機被修改
 
 #### Scenario: Existing clone
 - **WHEN** 新 host 已有從同一個網址 clone 的 `~/.oh-my-zsh`，工作目錄乾淨

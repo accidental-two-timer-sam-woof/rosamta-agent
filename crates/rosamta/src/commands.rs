@@ -71,20 +71,15 @@ pub fn apply(json: bool, dry_run: bool) -> Result<ExitCode> {
         apply::apply(&ctx)?
     };
     warn_skipped(&applied.skipped);
-    // An external left as it is waits on nothing in the review queue.
     let failed = wrong_passphrase
         || applied
             .dotfiles
             .iter()
             .any(|step| step.action == Action::Failed)
-        || applied.externals.iter().any(|step| {
-            matches!(
-                step.action,
-                externals::Action::Failed
-                    | externals::Action::Changed
-                    | externals::Action::Conflict
-            )
-        });
+        || applied
+            .externals
+            .iter()
+            .any(|step| step.action == externals::Action::Failed);
     if json {
         print_json(&applied);
     } else {
@@ -206,8 +201,8 @@ pub(crate) fn print_external(ctx: &Context, step: &externals::Step) {
         (Action::Updated, "") => println!("Updated {path}"),
         (Action::Updated, reason) => println!("Updated {path}: {reason}"),
         (Action::Released, _) => println!("Released {path}"),
-        (Action::Changed, reason) => eprintln!("warning: not updated {path}: {reason}"),
-        (Action::Conflict, reason) => eprintln!("warning: not downloaded {path}: {reason}"),
+        (Action::Changed, reason) => println!("Not updated {path}: {reason}"),
+        (Action::Conflict, reason) => println!("Not downloaded {path}: {reason}"),
         (Action::Skipped, reason) => println!("Skipped {path}: {reason}"),
         (Action::Failed, reason) => eprintln!("error: {path}: {reason}"),
     }

@@ -99,6 +99,22 @@ pub fn apply(ctx: &Context) -> Result<Vec<Step>> {
         }
         // Saved each time: an apply cut short still knows what it placed.
         state::save(ctx.paths.state(), &records)?;
+        // Only a terminal shows the steps; the background service's log keeps them.
+        if !ctx.interactive
+            && matches!(
+                step.action,
+                Action::Failed | Action::Changed | Action::Conflict
+            )
+        {
+            crate::daemon::log_to(
+                ctx.paths.state(),
+                &format!(
+                    "external {}: {}",
+                    step.path.display(),
+                    step.reason.as_deref().unwrap_or_default()
+                ),
+            );
+        }
         steps.push(step);
     }
     Ok(steps)

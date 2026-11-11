@@ -22,8 +22,14 @@ pub struct Lock {
 #[derive(Debug, Default, Serialize)]
 pub struct Updated {
     pub locks: Vec<Lock>,
-    /// Declarations whose newest version could not be found, with why.
-    pub failed: Vec<(PathBuf, String)>,
+    /// Declarations whose newest version could not be found.
+    pub failed: Vec<Failure>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct Failure {
+    pub path: PathBuf,
+    pub reason: String,
 }
 
 /// Lock every declaration, or those at `only`, to its newest version,
@@ -55,7 +61,7 @@ pub fn update(ctx: &Context, only: &[PathBuf]) -> Result<Updated> {
             continue;
         }
         let newest = match entry.kind() {
-            None => continue,
+            None => Err(Error::Usage("set `git` or `archive`".into())),
             Some(Kind::Git) => git::remote_head(&ctx.home, entry.url(), entry.branch.as_deref())
                 .map(|rev| ("rev", rev)),
             Some(Kind::Archive) => newest_archive(ctx, entry.url()).map(|sum| ("sha256", sum)),
@@ -70,10 +76,15 @@ pub fn update(ctx: &Context, only: &[PathBuf]) -> Result<Updated> {
                 });
             }
             Ok(_) => {}
-            Err(err) => out.failed.push((path, err.to_string())),
+            Err(err) => out.failed.push(Failure {
+                path,
+                reason: err.to_string(),
+            }),
         }
     }
     if changed.is_empty() {
+        // Locks an earlier run wrote but could not commit, or a hand edit.
+        crate::sync::commit_scanned(ctx, &[MANIFEST], None)?;
         return Ok(out);
     }
     crate::edit::edit_toml(&repo.join(MANIFEST), |doc| {
