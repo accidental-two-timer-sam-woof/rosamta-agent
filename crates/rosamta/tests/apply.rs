@@ -397,6 +397,32 @@ fn a_shell_that_was_already_slow_does_not_block_apply() {
         .success();
 }
 
+/// A background job from the rc file holds the output open after the
+/// shell exits; the shell still counts as having finished.
+#[test]
+fn a_background_job_does_not_hide_a_module_that_exits() {
+    if !has("zsh") {
+        return;
+    }
+    let home = set_up();
+    apply(&home);
+    let before = fs::read_link(current(&home)).unwrap();
+    for rel in [".zshrc", ".config/zsh/.zshrc"] {
+        let text = read(&home, rel);
+        if text.contains(BEGIN) {
+            fs::write(home.root.join(rel), format!("(sleep 8 &)\n{text}")).unwrap();
+        }
+    }
+    home.write("modules/quits.toml", "[raw]\nzsh = 'exit 0'\n");
+    home.cmd("rsmt")
+        .arg("apply")
+        .timeout(Duration::from_secs(60))
+        .assert()
+        .code(1)
+        .stderr(predicate::str::contains("exited before startup finished"));
+    assert_eq!(fs::read_link(current(&home)).unwrap(), before);
+}
+
 #[test]
 fn a_shell_below_the_minimum_version_is_skipped_with_a_warning() {
     use std::os::unix::fs::PermissionsExt;
