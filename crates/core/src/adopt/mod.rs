@@ -1100,13 +1100,13 @@ pub fn execute(ctx: &Context, plan: Plan) -> Result<Vec<Adoption>> {
     Ok(done)
 }
 
-/// `adopt(zsh): add bun PATH from ~/.zshrc on mbp`.
+/// `chore(adopt): add bun PATH from ~/.zshrc (zsh) on mbp`.
 fn commit_message(candidate: &Candidate, home: &Path, host: &str) -> String {
     let name = candidate.name.as_deref().unwrap_or("adopted");
     let file = display(&candidate.file, home);
     if candidate.kind == Kind::Include {
         return format!(
-            "adopt({}): include {name} from {file} on {host}",
+            "chore(adopt): include {name} from {file} ({}) on {host}",
             candidate.shell()
         );
     }
@@ -1131,7 +1131,7 @@ fn commit_message(candidate: &Candidate, home: &Path, host: &str) -> String {
         _ => "snippet".into(),
     };
     format!(
-        "adopt({}): add {name} {what} from {file} on {host}",
+        "chore(adopt): add {name} {what} from {file} ({}) on {host}",
         candidate.shell()
     )
 }
@@ -1496,9 +1496,9 @@ pub fn undo(ctx: &Context, plan: Undo) -> Result<()> {
         let rel = module.to_string_lossy();
         let name = plan.adoption.name.as_deref().unwrap_or("adopted");
         let message = format!(
-            "restore({}): put back {name} in {} on {}",
-            plan.adoption.shell,
+            "chore(restore): put back {name} in {} ({}) on {}",
             display(&plan.adoption.file, &ctx.home),
+            plan.adoption.shell,
             host.id
         );
         match git::commit(&ctx.paths.repo(), &message, &[&rel]) {

@@ -205,7 +205,7 @@ pub fn add(
     sync::commit_scanned(
         ctx,
         &changed,
-        Some(&format!("add(home): {}", names.join(", "))),
+        Some(&format!("chore(add): {}", names.join(", "))),
     )?;
     deploy::deploy(ctx)?;
     Ok(entries.into_iter().map(|(rel, _)| rel).collect())
@@ -298,7 +298,7 @@ pub fn forget(ctx: &Context, path: &Path) -> Result<PathBuf> {
     deployed.ignored.remove(&rel);
     state::save(ctx.paths.state(), &deployed)?;
     let changed: Vec<&str> = changed.iter().map(String::as_str).collect();
-    sync::commit_scanned(ctx, &changed, Some(&format!("forget(home): {name}")))?;
+    sync::commit_scanned(ctx, &changed, Some(&format!("chore(forget): {name}")))?;
     deploy::deploy(ctx)?;
     Ok(rel)
 }
