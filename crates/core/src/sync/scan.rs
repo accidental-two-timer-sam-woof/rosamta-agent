@@ -167,17 +167,28 @@ fn added_lines(log: &str) -> Vec<Added> {
     out
 }
 
-/// `text` with the registered host IDs taken out of `hosts = [...]` lists;
-/// the same words anywhere else are still checked.
+/// `text` with the registered host IDs taken out of `hosts = [...]` lists
+/// and of the `# Adopted from <file> on <host>.` line adopted modules start
+/// with; the same words anywhere else are still checked.
 fn without_host_ids(text: &str, hosts: &[String]) -> String {
     static LIST: OnceLock<Regex> = OnceLock::new();
+    static ADOPTED: OnceLock<Regex> = OnceLock::new();
     let list = LIST.get_or_init(|| Regex::new(r"\bhosts\s*=\s*\[[^\]]*\]").unwrap());
-    list.replace_all(text, |caps: &regex::Captures| {
+    let adopted =
+        ADOPTED.get_or_init(|| Regex::new(r"(?m)^(# Adopted from .+ on )(\S+)\.$").unwrap());
+    let text = list.replace_all(text, |caps: &regex::Captures| {
         hosts.iter().fold(caps[0].to_string(), |list, host| {
             list.replace(&format!("\"{host}\""), "\"\"")
         })
-    })
-    .into_owned()
+    });
+    adopted
+        .replace_all(&text, |caps: &regex::Captures| {
+            match hosts.contains(&caps[2].to_string()) {
+                true => format!("{}.", &caps[1]),
+                false => caps[0].to_string(),
+            }
+        })
+        .into_owned()
 }
 
 /// Check each file's added lines together, so rules spanning lines (private
@@ -320,7 +331,9 @@ mod tests {
         let manifest = format!("format = 1\nhosts = [\"{host}\"]\n");
         std::fs::write(repo.join("rosamta.toml"), manifest).unwrap();
         std::fs::create_dir(repo.join("modules")).unwrap();
-        let module = format!("[when]\nhosts = [\"{host}\"]\n\n[env]\nA = \"1\"\n");
+        let module = format!(
+            "# Adopted from ~/.zshrc on {host}.\n[when]\nhosts = [\"{host}\"]\n\n[env]\nA = \"1\"\n"
+        );
         std::fs::write(repo.join("modules/a.toml"), module).unwrap();
         crate::git::run(repo, &["add", "--all"]).unwrap();
         assert_eq!(staged(repo, &[]).unwrap(), []);

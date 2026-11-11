@@ -93,25 +93,42 @@ fn secret_name(text: &str) -> bool {
 
 fn high_entropy(text: &str) -> bool {
     text.split(|c: char| !(c.is_ascii_alphanumeric() || "+/=_-.".contains(c)))
-        .filter(|token| token.len() >= MIN_LEN)
+        .map(value)
         .any(|token| match token.contains('/') {
-            false => entropy(token) > MIN_ENTROPY,
+            false => token.len() >= MIN_LEN && !words(token) && entropy(token) > MIN_ENTROPY,
             true => {
-                // `NAME=value` is judged by its value.
-                let value = match token.split_once('=') {
-                    Some((name, value))
-                        if !name.is_empty()
-                            && name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_') =>
-                    {
-                        value
-                    }
-                    _ => token,
-                };
-                !path_like(value)
-                    && value.len() >= MIN_SLASHED_LEN
-                    && entropy(value) > MIN_SLASHED_ENTROPY
+                !path_like(token)
+                    && token.len() >= MIN_SLASHED_LEN
+                    && entropy(token) > MIN_SLASHED_ENTROPY
             }
         })
+}
+
+/// `NAME=value` is judged by its value; base64 padding (`abc==`) is not an
+/// assignment.
+fn value(token: &str) -> &str {
+    match token.split_once('=') {
+        Some((name, value))
+            if !name.is_empty()
+                && !value.is_empty()
+                && !value.starts_with('=')
+                && name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_') =>
+        {
+            value
+        }
+        _ => token,
+    }
+}
+
+/// Words joined by `-` or `.` in one case, such as `my-macbook-pro` or
+/// `internal-tools.example`: a name, not a key.
+fn words(token: &str) -> bool {
+    token.contains(['-', '.'])
+        && token
+            .chars()
+            .all(|c| c.is_ascii_alphabetic() || c == '-' || c == '.')
+        && !(token.chars().any(|c| c.is_ascii_uppercase())
+            && token.chars().any(|c| c.is_ascii_lowercase()))
 }
 
 /// `/usr/bin`, `~/.cargo`, `HOME/.local/share` (what `$HOME/...` leaves):
@@ -208,6 +225,8 @@ mod tests {
     #[test]
     fn high_entropy_literals() {
         assert!(looks_secret("export X=Zk3q9LmP2vR8tY6wB1nC4xJ7"));
+        assert!(looks_secret("export credential=qwertyuiopasdfghjklzxcvbnm"));
+        assert!(looks_secret("Zk3q9LmP2vR8tY6wB1nC4xJ7=="));
         assert!(looks_secret(
             "aws_secret_access_key = wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY"
         ));
@@ -230,6 +249,9 @@ mod tests {
             "zinit light romkatv/powerlevel10k/powerlevel10k.zsh-theme",
             "export GOPRIVATE=github.com/OrgName/RepoName",
             "export ANDROID_HOME=$HOME/Library/Android/sdk",
+            "# Adopted from ~/.zshrc on xinshoutw-macbook-pro.",
+            "Host my-company-internal-tools.example",
+            "export HOST=my-company-internal-tools.example",
         ] {
             assert!(!looks_secret(text), "{text}");
         }

@@ -1029,6 +1029,59 @@ fn adoptions_json(home: &Home) -> String {
     read(home, ".local/state/rosamta/adoptions.json")
 }
 
+/// A host named like most Macs (`<user>-macbook-pro`) can publish what it
+/// adopted: its name in the modules' first line is not taken for a secret.
+#[test]
+fn the_first_publish_after_adopting_goes_out() {
+    if !has("zsh") {
+        return;
+    }
+    let home = Home::new();
+    write(&home, ".zshrc", BUN);
+    write(
+        &home,
+        ".config/rosamta/host.toml",
+        "id = \"xinshoutw-macbook-pro\"\nadopt = \"ask\"\npublish = \"manual\"\n",
+    );
+    home.cmd("rsmt").arg("init").assert().success();
+    run(&home, &["apply"]);
+    let remote = home.root.join("remote.git");
+    let status = std::process::Command::new("git")
+        .args(["init", "--quiet", "--bare"])
+        .arg(&remote)
+        .status()
+        .unwrap();
+    assert!(status.success());
+    repo_git(
+        &home,
+        &["remote", "add", "origin", &remote.display().to_string()],
+    );
+    run(&home, &["adopt", "--yes"]);
+    home.cmd("rsmt").arg("publish").assert().success();
+    let git = |args: &[&str]| {
+        std::process::Command::new("git")
+            .arg("--git-dir")
+            .arg(&remote)
+            .args(args)
+            .output()
+            .unwrap()
+    };
+    let branches = git(&["for-each-ref", "--format=%(refname)", "refs/heads"]);
+    let branch = String::from_utf8(branches.stdout).unwrap();
+    let pushed = git(&[
+        "grep",
+        "-l",
+        "on xinshoutw-macbook-pro.",
+        branch.trim(),
+        "--",
+        "modules",
+    ]);
+    assert!(
+        pushed.status.success(),
+        "the adopted module did not reach the remote"
+    );
+}
+
 /// A commit that fails for a reason other than signing (here a stale
 /// `index.lock`) still leaves the adoption recorded and the warning shown.
 #[test]
