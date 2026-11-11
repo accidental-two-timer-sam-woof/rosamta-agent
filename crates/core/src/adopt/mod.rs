@@ -82,6 +82,13 @@ impl Candidate {
     pub fn shell(&self) -> Shell {
         self.source.owner()
     }
+
+    /// Whether adopting would put a literal that may be a secret in the repo.
+    fn unsure(&self) -> bool {
+        !self.local
+            && matches!(self.kind, Kind::Structured | Kind::Snippet)
+            && secret::unsure(&self.text)
+    }
 }
 
 /// Hold this while reading or writing adoption state and the repo, so the
@@ -1145,8 +1152,9 @@ pub struct Reviewed {
     pub adopted: Vec<Adoption>,
 }
 
-/// Scan and act on the host's adopt policy: `auto` adopts, `ask` queues,
-/// `off` does nothing. Content adopted before is removed under `auto` and `ask`.
+/// Scan and act on the host's adopt policy: `auto` adopts what it is sure
+/// holds no secret and queues the rest, `ask` queues, `off` does nothing.
+/// Content adopted before is removed under `auto` and `ask`.
 pub fn refresh(ctx: &Context) -> Result<Reviewed> {
     // A broken scripts.toml leaves its items as they were; validate reports it.
     let _ = crate::scripts::review::sync_queue(ctx);
@@ -1163,9 +1171,12 @@ pub fn refresh(ctx: &Context) -> Result<Reviewed> {
         return Ok(Reviewed::default());
     }
     let candidates = scan(ctx)?;
+    // `auto` still asks about a literal that could be a key no rule knows:
+    // adopting it would publish it with nobody having looked.
     let (now_adopt, ask): (Vec<Candidate>, Vec<Candidate>) =
         candidates.into_iter().partition(|candidate| {
-            host.adopt == AdoptPolicy::Auto || candidate.kind == Kind::Duplicate
+            candidate.kind == Kind::Duplicate
+                || host.adopt == AdoptPolicy::Auto && !candidate.unsure()
         });
     let adopted = adopt(ctx, &now_adopt, Scope::Host)?;
     let old = store.queue()?;
