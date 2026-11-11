@@ -279,11 +279,7 @@ pub(crate) fn secret_in(path: &Path) -> Result<Option<(PathBuf, &'static str)>> 
 
 /// Add a declaration at the end of `dotfiles.toml`, leaving the rest as written.
 pub(crate) fn append(repo: &Path, entry: &Dotfile) -> Result<()> {
-    use toml_edit::{Array, ArrayOfTables, InlineTable, Table, value};
-    let path = repo.join(MANIFEST);
-    if !path.exists() {
-        crate::edit::write_atomic(&path, "")?;
-    }
+    use toml_edit::{Table, value};
     let mut table = Table::new();
     table["path"] = value(&entry.path);
     if let Some(source) = &entry.source {
@@ -299,10 +295,18 @@ pub(crate) fn append(repo: &Path, entry: &Dotfile) -> Result<()> {
     if entry.encrypted {
         table["encrypted"] = value(true);
     }
-    let when = serde_json::to_value(&entry.when).expect("a condition serializes");
-    let mut inline = InlineTable::new();
+    if let Some(when) = when_table(&entry.when) {
+        table["when"] = value(when);
+    }
+    push_table(&repo.join(MANIFEST), "dotfile", table)
+}
+
+/// `when` as an inline table, or `None` when it is everywhere.
+pub(crate) fn when_table(when: &crate::config::When) -> Option<toml_edit::InlineTable> {
+    let when = serde_json::to_value(when).expect("a condition serializes");
+    let mut inline = toml_edit::InlineTable::new();
     for (key, values) in when.as_object().into_iter().flatten() {
-        let values: Array = values
+        let values: toml_edit::Array = values
             .as_array()
             .into_iter()
             .flatten()
@@ -312,14 +316,19 @@ pub(crate) fn append(repo: &Path, entry: &Dotfile) -> Result<()> {
             inline.insert(key, values.into());
         }
     }
-    if !inline.is_empty() {
-        table["when"] = value(inline);
+    (!inline.is_empty()).then_some(inline)
+}
+
+/// Add `[[key]]` at the end of the TOML file at `path`, creating it.
+pub(crate) fn push_table(path: &Path, key: &str, table: toml_edit::Table) -> Result<()> {
+    if !path.exists() {
+        crate::edit::write_atomic(path, "")?;
     }
-    crate::edit::edit_toml(&path, |doc| {
-        if !doc.contains_key("dotfile") {
-            doc["dotfile"] = toml_edit::Item::ArrayOfTables(ArrayOfTables::new());
+    crate::edit::edit_toml(path, |doc| {
+        if !doc.contains_key(key) {
+            doc[key] = toml_edit::Item::ArrayOfTables(toml_edit::ArrayOfTables::new());
         }
-        if let Some(entries) = doc["dotfile"].as_array_of_tables_mut() {
+        if let Some(entries) = doc[key].as_array_of_tables_mut() {
             entries.push(table);
         }
     })

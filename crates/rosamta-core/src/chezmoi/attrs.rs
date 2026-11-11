@@ -103,8 +103,8 @@ pub fn parse_dir(name: &str) -> (String, DirAttrs) {
     (name.finish(), attrs)
 }
 
-/// `age` is whether chezmoi encrypts with age, whose files end in `.age`.
-pub fn parse_file(name: &str, age: bool) -> (String, FileAttrs) {
+/// `suffix` ends encrypted files: `.age`, or `.asc` for gpg.
+pub fn parse_file(name: &str, suffix: &str) -> (String, FileAttrs) {
     let mut name = Prefixes::new(name);
     let kind = if name.take("create_") {
         FileKind::Create
@@ -155,8 +155,8 @@ pub fn parse_file(name: &str, age: bool) -> (String, FileAttrs) {
     let dot = !matches!(kind, FileKind::Script(_)) && name.take("dot_");
     // The encryption suffix comes off before the others.
     let mut rest = name.name;
-    if attrs.encrypted && age {
-        rest = rest.strip_suffix(".age").unwrap_or(rest);
+    if attrs.encrypted {
+        rest = rest.strip_suffix(suffix).unwrap_or(rest);
     }
     let (rest, template) = suffixes(rest);
     attrs.template = template;
@@ -186,7 +186,7 @@ mod tests {
     use super::*;
 
     fn target(name: &str) -> String {
-        parse_file(name, true).0
+        parse_file(name, ".age").0
     }
 
     /// Each case was checked against `chezmoi managed` 2.x.
@@ -218,14 +218,14 @@ mod tests {
         ] {
             assert_eq!(target(source), expected, "{source}");
         }
-        assert_eq!(parse_file("encrypted_dot_j.age", false).0, ".j.age");
+        assert_eq!(parse_file("encrypted_dot_j.age", ".asc").0, ".j.age");
     }
 
     #[test]
     fn attributes_follow_chezmoi() {
         let (_, attrs) = parse_file(
             "create_encrypted_private_readonly_empty_executable_dot_x.tmpl",
-            true,
+            ".age",
         );
         assert_eq!(
             attrs,
@@ -239,7 +239,7 @@ mod tests {
                 template: true,
             }
         );
-        let script = |name| parse_file(name, true).1.kind;
+        let script = |name| parse_file(name, ".age").1.kind;
         assert_eq!(
             script("run_once_before_a.sh"),
             FileKind::Script(ScriptAttrs {

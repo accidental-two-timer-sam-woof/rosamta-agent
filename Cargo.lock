@@ -6660,6 +6660,7 @@ dependencies = [
  "age",
  "block2 0.6.2",
  "flate2",
+ "globset",
  "indexmap",
  "jsonschema",
  "keyring",
