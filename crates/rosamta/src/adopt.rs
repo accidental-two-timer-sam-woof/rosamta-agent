@@ -41,6 +41,7 @@ pub fn adopt(json: bool, yes: bool) -> Result<ExitCode> {
         before: None,
         after: Some(text.clone()),
     }));
+    changes.extend(plan.edits.iter().cloned());
     if !confirm(json, yes, &changes)? {
         return Ok(ExitCode::SUCCESS);
     }
@@ -66,6 +67,7 @@ fn describe(ctx: &Context, candidate: &Candidate) -> String {
     match candidate.kind {
         Kind::Comment => format!("{lines} → removed, comments only"),
         Kind::Duplicate => format!("{lines} → removed, already in {module}"),
+        Kind::Include => format!("{lines} → {module} (adds this host)"),
         _ if candidate.local => format!("{lines} → {module} (this host only)"),
         _ => format!("{lines} → {module}"),
     }
@@ -147,6 +149,10 @@ fn item_line(ctx: &Context, item: &QueueItem) -> String {
     let target = match &item.module {
         Some(module) if item.local => {
             format!("{} (this host only)", adopt::display(module, &ctx.home))
+        }
+        // Only a module another host adopted exists before accepting.
+        Some(module) if ctx.paths.repo().join(module).exists() => {
+            format!("{} (adds this host)", adopt::display(module, &ctx.home))
         }
         Some(module) => adopt::display(module, &ctx.home),
         None => "comments only".into(),
@@ -239,7 +245,7 @@ pub fn restore(json: bool, yes: bool, id: u32) -> Result<ExitCode> {
         changes.push(FileChange {
             path: path.clone(),
             before: Some(text.clone()),
-            after: None,
+            after: undo.module_after.clone(),
         });
     }
     if !confirm(json, yes, &changes)? {

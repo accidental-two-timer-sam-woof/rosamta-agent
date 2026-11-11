@@ -565,6 +565,86 @@ fn structured_content_stays_in_its_shells() {
     );
 }
 
+const MY_OS: &str = if cfg!(target_os = "macos") {
+    "macos"
+} else {
+    "linux"
+};
+const OTHER_OS: &str = if cfg!(target_os = "macos") {
+    "linux"
+} else {
+    "macos"
+};
+
+/// The bun module as host `mbp` on `os` would have adopted it from
+/// `.zshrc`, for `shells`.
+fn bun_from_mbp(os: &str, shells: &str) -> String {
+    let home = hooked(&[(".zshrc", BUN)]);
+    run(&home, &["adopt", "--yes"]);
+    read(&home, ".local/share/rosamta/repo/modules/adopted/bun.toml")
+        .replace("hosts = [\"test\"]", "hosts = [\"mbp\"]")
+        .replace(&format!("os = [\"{MY_OS}\"]"), &format!("os = [\"{os}\"]"))
+        .replace("shells = [\"zsh\"]", &format!("shells = [{shells}]"))
+}
+
+#[test]
+fn the_same_lines_on_a_second_host_join_its_module() {
+    if !has("zsh") {
+        return;
+    }
+    let home = hooked(&[(".zshrc", BUN)]);
+    home.write(
+        "modules/adopted/bun.toml",
+        &bun_from_mbp(OTHER_OS, "\"zsh\""),
+    );
+    let listing = run(&home, &["review"]);
+    assert!(
+        listing.contains("modules/adopted/bun.toml (adds this host)"),
+        "{listing}"
+    );
+    let out = run(&home, &["adopt", "--yes"]);
+    let bun = || read(&home, ".local/share/rosamta/repo/modules/adopted/bun.toml");
+    let module = bun();
+    assert!(module.contains("hosts = [\"mbp\", \"test\"]"), "{module}");
+    assert!(
+        module.contains(&format!("os = [\"{OTHER_OS}\", \"{MY_OS}\"]")),
+        "{module}"
+    );
+    assert_eq!(adopted(&home).len(), 1);
+    assert!(!read(&home, ".zshrc").contains("BUN_INSTALL"));
+    assert_eq!(
+        repo_git(&home, &["log", "-1", "--format=%s"]).trim(),
+        "adopt(zsh): include bun from ~/.zshrc on test"
+    );
+
+    let id = out
+        .lines()
+        .find_map(|line| line.strip_prefix("Adopted "))
+        .and_then(|rest| rest.split(':').next())
+        .unwrap()
+        .to_string();
+    run(&home, &["restore", &id, "--yes"]);
+    assert!(read(&home, ".zshrc").contains("BUN_INSTALL"));
+    let module = bun();
+    assert!(module.contains("hosts = [\"mbp\"]\n"), "{module}");
+}
+
+#[test]
+fn the_same_lines_from_another_shell_get_their_own_module() {
+    if !has("zsh") {
+        return;
+    }
+    let home = hooked(&[(".zshrc", BUN)]);
+    let theirs = bun_from_mbp(MY_OS, "\"bash\"");
+    home.write("modules/adopted/bun.toml", &theirs);
+    run(&home, &["adopt", "--yes"]);
+    assert_eq!(adopted(&home).len(), 2);
+    assert_eq!(
+        read(&home, ".local/share/rosamta/repo/modules/adopted/bun.toml"),
+        theirs
+    );
+}
+
 /// The same line in two files: adopting the zsh one leaves `.profile`'s,
 /// since a zsh snippet does nothing for sh.
 #[test]
