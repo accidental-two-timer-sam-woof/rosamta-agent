@@ -641,7 +641,8 @@ fn an_rc_file_edited_after_reading_is_not_overwritten() {
     assert!(home.repo().join("modules/adopted/bun.toml").exists());
 }
 
-/// Structured content keeps to the shells that read its file.
+/// Structured content keeps to the shells that read its file: login bash
+/// runs `.profile` through the `.bash_profile` rosamta seeds, zsh never does.
 #[test]
 fn structured_content_stays_in_its_shells() {
     if !has("zsh") || !has("sh") {
@@ -663,10 +664,79 @@ fn structured_content_stays_in_its_shells() {
     let zsh = module("ONLY_ZSH");
     assert!(zsh.contains("shells = [\"zsh\"]"), "{zsh}");
     let posix = module("EVERY_POSIX");
+    assert!(posix.contains("shells = [\"sh\", \"bash\"]"), "{posix}");
+}
+
+/// `.profile` lines go only to the shells that run them: here bash reads its
+/// own `.bash_profile` and zsh never reads `.profile`, so a line that fails
+/// there (a missing `~/.cargo/env`) does not stop the adoption.
+#[test]
+fn profile_lines_stay_with_the_shells_that_read_them() {
+    if !has("zsh") || !has("sh") {
+        return;
+    }
+    let home = hooked(&[
+        (".bash_profile", "export EDITOR=vim\n"),
+        (".profile", ". \"$HOME/.cargo/env\"\n"),
+        (".zshrc", "export ONLY_ZSH=1\n"),
+    ]);
+    run(&home, &["adopt", "--yes"]);
+    let dir = home.repo().join("modules/adopted");
+    let cargo = fs::read_dir(&dir)
+        .unwrap()
+        .map(|entry| fs::read_to_string(entry.unwrap().path()).unwrap())
+        .find(|text| text.contains(".cargo/env"))
+        .expect("the .profile line was adopted");
+    assert!(cargo.contains("[raw]\nsh = "), "{cargo}");
     assert!(
-        posix.contains("shells = [\"sh\", \"bash\", \"zsh\"]"),
-        "{posix}"
+        !cargo.contains("\nbash = ") && !cargo.contains("\nzsh = "),
+        "{cargo}"
     );
+}
+
+/// Interactive bash reads `.bashrc`, so a `.profile` it runs is bash's too.
+#[test]
+fn a_bashrc_that_runs_the_profile_makes_bash_a_reader() {
+    if !has("bash") || !has("sh") {
+        return;
+    }
+    let home = hooked(&[
+        (".bash_profile", "export EDITOR=vim\n"),
+        (".bashrc", ". \"$HOME\"/.profile\n"),
+        (".profile", "export ONE=1\n"),
+    ]);
+    run(&home, &["adopt", "--yes"]);
+    let one = fs::read_dir(home.repo().join("modules/adopted"))
+        .unwrap()
+        .map(|entry| fs::read_to_string(entry.unwrap().path()).unwrap())
+        .find(|text| text.contains("ONE"))
+        .expect("the .profile line was adopted");
+    assert!(one.contains("shells = [\"sh\", \"bash\"]"), "{one}");
+}
+
+/// A `.bash_profile` line that runs `.profile` moves into a module on the
+/// first adoption; bash still reads `.profile` through it, so what lands in
+/// `.profile` later is adopted for bash too.
+#[test]
+fn bash_keeps_reading_the_profile_after_its_source_line_moves() {
+    if !has("bash") || !has("sh") {
+        return;
+    }
+    let home = hooked(&[
+        (".bash_profile", "source ~/.profile\n"),
+        (".profile", "export ONE=1\n"),
+    ]);
+    run(&home, &["adopt", "--yes"]);
+    let profile = home.root.join(".profile");
+    let text = fs::read_to_string(&profile).unwrap();
+    fs::write(&profile, format!("{text}export TWO=2\n")).unwrap();
+    run(&home, &["adopt", "--yes"]);
+    let two = fs::read_dir(home.repo().join("modules/adopted"))
+        .unwrap()
+        .map(|entry| fs::read_to_string(entry.unwrap().path()).unwrap())
+        .find(|text| text.contains("TWO"))
+        .expect("the second .profile line was adopted");
+    assert!(two.contains("shells = [\"sh\", \"bash\"]"), "{two}");
 }
 
 const MY_OS: &str = if cfg!(target_os = "macos") {
