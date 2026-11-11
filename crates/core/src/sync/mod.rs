@@ -512,8 +512,14 @@ fn pull_locked(ctx: &Context, commit_edits: bool) -> Result<Pulled> {
             applied: None,
         });
     }
-    // Judged against how shells start now, so only new errors stop it.
-    match apply::around_shells(ctx, || apply::apply_after(ctx, &[], || Ok(()))) {
+    // Judged against how shells start now, so only new errors stop it; when
+    // nothing a shell loads came in, no shell is started.
+    let applied = match apply::plan(ctx).map(|plan| plan.is_up_to_date()) {
+        Ok(true) => apply::apply(ctx),
+        Ok(false) => apply::around_shells(ctx, || apply::apply_after(ctx, &[], || Ok(()))),
+        Err(err) => Err(err),
+    };
+    match applied {
         Ok(applied) => {
             record_pull(ctx, Attempt::ok())?;
             Ok(Pulled {
