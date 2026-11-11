@@ -943,9 +943,9 @@ limitations under the License.
 
 ## Apache License 2.0
 
-- rosamta 0.1.0-rc.1
-- rosamta-core 0.1.0-rc.1
-- rosamta-gui 0.1.0-rc.1
+- rosamta 0.1.0-rc.2
+- rosamta-core 0.1.0-rc.2
+- rosamta-gui 0.1.0-rc.2
 - constant_time_eq 0.6.1
 - gpui-kit-assets 0.9.1
 - gpui-kit 0.9.1
