@@ -16,8 +16,8 @@
 
 ## 4. recent 與 include
 
-- [ ] 4.1 core：每個 module 與 dotfile 加入 repo 的時間、不在本機載入的項目、放寬計畫與執行（`toml_edit`、一個 commit、套用失敗時還原）
-- [ ] 4.2 CLI：`rsmt recent`、`rsmt include <名稱>... | --all`，確認、`--yes`、`--json` 與結束碼；測試
+- [x] 4.1 core：每個 module 與 dotfile 加入 repo 的時間、不在本機載入的項目、放寬計畫與執行（`toml_edit`、一個 commit、套用失敗時還原）
+- [x] 4.2 CLI：`rsmt recent`、`rsmt include <名稱>... | --all`，確認、`--yes`、`--json` 與結束碼；測試
 
 ## 5. App
 
