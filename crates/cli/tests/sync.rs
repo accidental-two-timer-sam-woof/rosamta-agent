@@ -128,7 +128,9 @@ fn a_secret_stops_publish_before_anything_leaves() {
         .arg("publish")
         .assert()
         .code(1)
-        .stderr(predicate::str::contains("modules/env.toml:2 (github-pat)"));
+        .stderr(predicate::str::contains(
+            "modules/env.toml:2 (github-pat; allow.toml: ",
+        ));
     assert_eq!(remote_log(&hosts), before);
     // Not committed either: removing the line is all it takes.
     assert_eq!(
@@ -149,9 +151,53 @@ fn a_secret_stops_publish_before_anything_leaves() {
         .arg("publish")
         .assert()
         .code(1)
-        .stderr(predicate::str::contains("modules/env.toml:2 (github-pat)"));
+        .stderr(predicate::str::contains(
+            "modules/env.toml:2 (github-pat; allow.toml: ",
+        ));
     assert_eq!(remote_log(&hosts), before);
     assert_eq!(state(&hosts.a)["unpushed"], 1);
+}
+
+#[test]
+fn what_allow_toml_lists_is_published() {
+    let hosts = hosts();
+    let key = "GH = \"ghp_0123456789abcdefghijABCDEFGHIJ012345\"";
+    hosts
+        .a
+        .write("modules/env.toml", &format!("[env]\n{key}\n"));
+    let out = hosts.a.cmd("rsmt").arg("publish").output().unwrap();
+    let stderr = String::from_utf8_lossy(&out.stderr).into_owned();
+    let hash = stderr.split("allow.toml: ").nth(1).unwrap_or_default();
+    let hash = hash.split(')').next().unwrap_or_default();
+
+    // A list that does not read stops publishing rather than letting all through.
+    hosts.a.write("allow.toml", "line = []\n");
+    hosts
+        .a
+        .cmd("rsmt")
+        .arg("publish")
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("allow.toml"))
+        .stderr(predicate::str::contains("allow.toml: unknown field `line`"));
+
+    hosts
+        .a
+        .write("allow.toml", &format!("lines = [\"{hash}\"]\n"));
+    run(&hosts.a, &["publish"]);
+    assert_eq!(state(&hosts.a)["unpushed"], 0);
+
+    // A file listed whole is not checked; the same line elsewhere still is.
+    hosts
+        .a
+        .write("modules/other.toml", &format!("[env]\n{key} # other\n"));
+    hosts.a.cmd("rsmt").arg("publish").assert().code(1);
+    hosts.a.write(
+        "allow.toml",
+        &format!("files = [\"modules/other.toml\"]\nlines = [\"{hash}\"]\n"),
+    );
+    run(&hosts.a, &["publish"]);
+    assert_eq!(state(&hosts.a)["unpushed"], 0);
 }
 
 #[test]
@@ -592,7 +638,9 @@ fn a_pull_a_secret_stops_is_recorded_as_a_pull() {
         .arg("pull")
         .assert()
         .code(1)
-        .stderr(predicate::str::contains("modules/env.toml:2 (github-pat)"));
+        .stderr(predicate::str::contains(
+            "modules/env.toml:2 (github-pat; allow.toml: ",
+        ));
     let state = state(&hosts.a);
     assert_eq!(state["pull"]["outcome"], "blocked");
     assert_eq!(state["pull"]["files"][0], "modules/env.toml");

@@ -14,7 +14,7 @@ use std::path::{Path, PathBuf};
 use serde::Serialize;
 
 pub use recognize::{Dialect, Recognizer, Structured, recognize, recognizers};
-pub use secret::{looks_secret, secret_rule};
+pub use secret::{Allowed, looks_secret, secret_rule};
 pub use segment::{Source, Watched, watched_files};
 pub use store::{Adoption, Limits, QueueItem};
 
@@ -66,6 +66,9 @@ pub struct Candidate {
     pub module: Option<PathBuf>,
     /// Looks like a secret, so the module stays on this host.
     pub local: bool,
+    /// Holds a literal that may be a secret no rule knows.
+    #[serde(skip)]
+    unsure: bool,
     #[serde(skip)]
     source: Source,
     #[serde(skip)]
@@ -81,6 +84,11 @@ pub struct Candidate {
 impl Candidate {
     pub fn shell(&self) -> Shell {
         self.source.owner()
+    }
+
+    /// Whether adopting would put a literal that may be a secret in the repo.
+    fn unsure(&self) -> bool {
+        self.unsure && !self.local && matches!(self.kind, Kind::Structured | Kind::Snippet)
     }
 }
 
@@ -139,6 +147,7 @@ pub fn scan(ctx: &Context) -> Result<Vec<Candidate>> {
     let store = Store::new(ctx.paths.state());
     let adoptions = store.adoptions()?;
     let ignored = store.ignored()?;
+    let allowed = Allowed::load(&ctx.paths.repo())?;
     let repo_modules = apply::load_modules(&ctx.paths.repo())?;
     let mut existing = repo_modules.clone();
     existing.extend(apply::load_local_modules(&ctx.paths)?);
@@ -216,6 +225,7 @@ pub fn scan(ctx: &Context) -> Result<Vec<Candidate>> {
                 name: None,
                 module: None,
                 local: false,
+                unsure: false,
                 source: watched.source,
                 shells: watched.shells.clone(),
                 whole_file: watched.whole_file,
@@ -292,7 +302,8 @@ pub fn scan(ctx: &Context) -> Result<Vec<Candidate>> {
             };
             // Only the shells that read the file ran it before.
             module.shells = shells.to_vec();
-            let local = secret::looks_secret(&text);
+            let local = allowed.rule(&text).is_some();
+            candidate.unsure = allowed.unsure(&text);
             if let Some((name, old)) =
                 shared::find(&repo_modules, &module, &facts, order).filter(|_| !local)
             {
@@ -1241,8 +1252,9 @@ pub struct Reviewed {
     pub adopted: Vec<Adoption>,
 }
 
-/// Scan and act on the host's adopt policy: `auto` adopts, `ask` queues,
-/// `off` does nothing. Content adopted before is removed under `auto` and `ask`.
+/// Scan and act on the host's adopt policy: `auto` adopts what it is sure
+/// holds no secret and queues the rest, `ask` queues, `off` does nothing.
+/// Content adopted before is removed under `auto` and `ask`.
 pub fn refresh(ctx: &Context) -> Result<Reviewed> {
     // A broken scripts.toml leaves its items as they were; validate reports it.
     let _ = crate::scripts::review::sync_queue(ctx);
@@ -1259,9 +1271,23 @@ pub fn refresh(ctx: &Context) -> Result<Reviewed> {
         return Ok(Reviewed::default());
     }
     let candidates = scan(ctx)?;
+    // `auto` still asks about a literal that could be a key no rule knows:
+    // adopting it would publish it with nobody having looked. What follows
+    // it in its file waits with it: adopted, it would run where the hook
+    // is, ahead of the line it may read from.
+    let mut waiting: Vec<PathBuf> = Vec::new();
     let (now_adopt, ask): (Vec<Candidate>, Vec<Candidate>) =
         candidates.into_iter().partition(|candidate| {
-            host.adopt == AdoptPolicy::Auto || candidate.kind == Kind::Duplicate
+            if candidate.kind == Kind::Duplicate {
+                return true;
+            }
+            let waits = host.adopt != AdoptPolicy::Auto
+                || candidate.unsure()
+                || waiting.contains(&candidate.file);
+            if waits && !waiting.contains(&candidate.file) {
+                waiting.push(candidate.file.clone());
+            }
+            !waits
         });
     let adopted = adopt(ctx, &now_adopt, Scope::Host)?;
     let old = store.queue()?;

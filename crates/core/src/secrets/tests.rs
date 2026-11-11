@@ -7,10 +7,15 @@ use super::*;
 fn tool(dir: &Path, name: &str, cases: &str) {
     let path = dir.join(name);
     let script = format!(
-        "#!/bin/sh\necho \"{name} $*\" >> \"$(dirname \"$0\")/calls\"\ncase \"$1\" in\n{cases}\nesac\n"
+        "#!/bin/sh\n[ \"$1\" = --ready ] && exit 0\necho \"{name} $*\" >> \"$(dirname \"$0\")/calls\"\ncase \"$1\" in\n{cases}\nesac\n"
     );
     std::fs::write(&path, script).unwrap();
     std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
+    // A child forked by another test thread holds the write fd until it execs.
+    while let Err(err) = Command::new(&path).arg("--ready").status() {
+        assert_eq!(err.kind(), std::io::ErrorKind::ExecutableFileBusy, "{err}");
+        std::thread::sleep(Duration::from_millis(10));
+    }
 }
 
 const ITEM: &str = r#"{"name":"GitHub","notes":"n","fields":[{"name":"token","value":"ghp_1"}]"#;

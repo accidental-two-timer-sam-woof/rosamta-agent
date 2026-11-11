@@ -329,7 +329,15 @@ fn publish_locked(ctx: &Context, commit_edits: bool) -> Result<Published> {
 fn secret_blocked(ctx: &Context, hits: &[Hit], unpushed: Option<u32>) -> Error {
     let lines: Vec<String> = hits
         .iter()
-        .map(|hit| format!("  {}:{} ({})", hit.file, hit.line, hit.rule))
+        .map(|hit| {
+            let (file, line, rule) = (&hit.file, hit.line, hit.rule);
+            let allow = hit
+                .hash
+                .as_ref()
+                .map(|hash| format!("; allow.toml: {hash}"))
+                .unwrap_or_default();
+            format!("  {file}:{line} ({rule}{allow})")
+        })
         .collect();
     let text = format!(
         "publishing stopped: possible secret in\n{}",
@@ -387,10 +395,11 @@ pub(crate) fn commit_scanned(ctx: &Context, paths: &[&str], message: Option<&str
         return Ok(false);
     }
     git::run(&repo_dir, &limit(&["add", "--all"]))?;
-    let hits = scan::staged(&repo_dir, paths)?;
-    if !hits.is_empty() {
+    // Nothing stays staged either when the check itself fails (a broken allow.toml).
+    let hits = scan::staged(&repo_dir, paths);
+    if !matches!(&hits, Ok(hits) if hits.is_empty()) {
         git::run(&repo_dir, &limit(&["reset", "--quiet"]))?;
-        return Err(secret_blocked(ctx, &hits, None));
+        return Err(secret_blocked(ctx, &hits?, None));
     }
     let message = message.map_or_else(|| edit_message(&status), str::to_string);
     match git::commit_staged(&repo_dir, &message, paths) {

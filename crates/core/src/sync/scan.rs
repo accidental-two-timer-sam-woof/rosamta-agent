@@ -6,7 +6,7 @@ use std::sync::OnceLock;
 use regex::Regex;
 use serde::Serialize;
 
-use crate::adopt::secret_rule;
+use crate::adopt::{Allowed, secret_rule};
 use crate::error::Result;
 use crate::git;
 
@@ -18,6 +18,10 @@ pub struct Hit {
     pub file: String,
     pub line: usize,
     pub rule: &'static str,
+    /// What `allow.toml` lists to let this line through. `None` when the
+    /// rule matched across lines: listing one of them would turn the rule
+    /// off wherever that line appears.
+    pub hash: Option<String>,
 }
 
 /// Plain patches with zero context, whatever the user's diff settings;
@@ -65,9 +69,10 @@ pub(crate) fn scan(repo: &Path, range: &[&str]) -> Result<Vec<Hit>> {
     revs.extend_from_slice(range);
     let commits = git::run(repo, &revs)?;
     let hosts = host_ids(repo, commits.lines().map(|sha| format!("{sha}:")));
+    let allowed = Allowed::load(repo)?;
     Ok(unencrypted(
         repo,
-        check(&added_lines(&git::run(repo, &args)?), &hosts),
+        check(&added_lines(&git::run(repo, &args)?), &hosts, &allowed),
     ))
 }
 
@@ -80,9 +85,10 @@ pub(crate) fn staged(repo: &Path, paths: &[&str]) -> Result<Vec<Hit>> {
         args.extend_from_slice(paths);
     }
     let hosts = host_ids(repo, [":".to_string()]);
+    let allowed = Allowed::load(repo)?;
     Ok(unencrypted(
         repo,
-        check(&added_lines(&git::run(repo, &args)?), &hosts),
+        check(&added_lines(&git::run(repo, &args)?), &hosts, &allowed),
     ))
 }
 
@@ -192,11 +198,13 @@ fn without_host_ids(text: &str, hosts: &[String]) -> String {
 }
 
 /// Check each file's added lines together, so rules spanning lines (private
-/// keys) still match; report the first line that matches on its own.
-fn check(files: &[Added], hosts: &[String]) -> Vec<Hit> {
-    let matched = |text: &str| secret_rule(&without_host_ids(text, hosts));
+/// keys) still match; report the first line that matches on its own. What
+/// `allowed` lists is left out.
+fn check(files: &[Added], hosts: &[String], allowed: &Allowed) -> Vec<Hit> {
+    let matched = |text: &str| secret_rule(&without_host_ids(&allowed.checked(text), hosts));
     files
         .iter()
+        .filter(|added| !allowed.file(&added.file))
         .filter_map(|added| {
             let text: Vec<&str> = added.lines.iter().map(|(_, text)| text.as_str()).collect();
             let text = text.join("\n");
@@ -206,17 +214,23 @@ fn check(files: &[Added], hosts: &[String]) -> Vec<Hit> {
                 return None;
             }
             let rule = matched(&text)?;
-            let line = added
+            // A line that matches the rule alone is the one to allow. A rule
+            // that needs several lines (a private key) has none, even when
+            // one of them matches another rule.
+            let own = added
                 .lines
                 .iter()
-                .find(|(_, text)| matched(text).is_some())
-                .unwrap_or(&added.lines[0])
-                .0;
+                .find(|(_, text)| matched(text) == Some(rule));
+            let (line, hash) = match own {
+                Some((line, text)) => (*line, Some(Allowed::hash(text))),
+                None => (added.lines[0].0, None),
+            };
             Some(Hit {
                 commit: added.commit.clone(),
                 file: added.file.clone(),
                 line,
                 rule,
+                hash,
             })
         })
         .collect()
@@ -448,13 +462,102 @@ deleted file mode 100644
     #[test]
     fn hits_name_file_line_and_rule() {
         assert_eq!(
-            check(&added_lines(LOG), &[]),
+            check(&added_lines(LOG), &[], &Allowed::default()),
             [Hit {
                 commit: "1111".into(),
                 file: "modules/env.toml".into(),
                 line: 3,
                 rule: "github-pat",
+                hash: Some(Allowed::hash(
+                    "GH = \"ghp_0123456789abcdefghijABCDEFGHIJ012345\""
+                )),
             }]
+        );
+    }
+
+    /// The hash a blocked line is reported with lets it through, even when a
+    /// registered host ID in it is taken out before the rules run.
+    #[test]
+    fn a_listed_line_with_a_host_id_is_let_through() {
+        let (host, other) = ("mac-zk3q9lmp2vr8ty6wb1nc4xj7", "mac-q8w3zr5ty1pk7vn2lx9bj4");
+        let line = format!("hosts = [\"{host}\", \"{other}\"]");
+        let added = [Added {
+            commit: "1111".into(),
+            file: "rosamta.toml".into(),
+            lines: vec![(2, line.clone())],
+        }];
+        let hosts = [host.to_string()];
+        let hits = check(&added, &hosts, &Allowed::default());
+        assert_eq!(hits.len(), 1, "{hits:?}");
+        let hash = hits[0].hash.clone().unwrap();
+        assert_eq!(hash, Allowed::hash(&line));
+
+        let dir = tempfile::tempdir().unwrap();
+        let list = format!("lines = [\"{hash}\"]\n");
+        std::fs::write(dir.path().join(Allowed::MANIFEST), list).unwrap();
+        let allowed = Allowed::load(dir.path()).unwrap();
+        assert_eq!(check(&added, &hosts, &allowed), []);
+    }
+
+    /// A key on the line after its name matches only with both lines:
+    /// neither line's hash is offered.
+    #[test]
+    fn a_hit_across_lines_has_no_line_to_allow() {
+        let lines = [
+            "datadog_api_key:",
+            "  0123456789abcdef0123456789abcdef01234567",
+        ];
+        assert!(lines.iter().all(|line| secret_rule(line).is_none()));
+        let added = [Added {
+            commit: "1111".into(),
+            file: "config.yml".into(),
+            lines: (1..).zip(lines.map(String::from)).collect(),
+        }];
+        let hits = check(&added, &[], &Allowed::default());
+        assert_eq!(hits.len(), 1, "{hits:?}");
+        assert_eq!((hits[0].line, &hits[0].hash), (1, &None));
+
+        // A line that matches another rule alone does not stand in for it.
+        let key = "export MY_API_KEY=abc123";
+        let mut added = added;
+        added[0].lines.push((3, key.into()));
+        let across = hits[0].rule;
+        let hits = check(&added, &[], &Allowed::default());
+        assert_eq!(
+            (hits[0].line, hits[0].rule, &hits[0].hash),
+            (1, across, &None)
+        );
+
+        // Alone in the file, that line is the hit, with its hash.
+        added[0].lines.drain(..2);
+        let hits = check(&added, &[], &Allowed::default());
+        assert_eq!(
+            (hits[0].line, hits[0].rule, hits[0].hash.clone()),
+            (3, "secret-name", Some(Allowed::hash(key)))
+        );
+    }
+
+    #[test]
+    fn a_private_key_is_not_reported_as_one_of_its_lines() {
+        // Each body line alone looks like a high-entropy string.
+        let body = [
+            "u8jzPde0IgxLd6GncfBAepfJBd0Kh8oOOL8dKLzd+ocJ2isAjIhKtJ0RlgLKOmxgJTeKdN",
+            "nFRIBXuDL7DxtpYlSXpfKtHF4vUCsM+ehGAkWvj7FAc9QeWJKY40uvSwMFLZDe1f8rESQe",
+            "dUStPKR0CsTy4Qwb8DwkNhFdnXsiVpzz63FfkCzJr4i0B3JrTAwR4y9ojfljoQoaF1Llqs",
+        ];
+        let mut lines = vec![format!("-----BEGIN {} KEY-----", "OPENSSH PRIVATE")];
+        lines.extend(body.map(String::from));
+        lines.push(format!("-----END {} KEY-----", "OPENSSH PRIVATE"));
+        assert_eq!(secret_rule(body[0]), Some("high-entropy"));
+        let added = [Added {
+            commit: "1111".into(),
+            file: "home/.ssh/id_test".into(),
+            lines: (1..).zip(lines).collect(),
+        }];
+        let hits = check(&added, &[], &Allowed::default());
+        assert_eq!(
+            (hits[0].line, hits[0].rule, &hits[0].hash),
+            (1, "private-key", &None)
         );
     }
 }
