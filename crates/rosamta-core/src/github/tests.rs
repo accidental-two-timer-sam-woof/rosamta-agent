@@ -185,6 +185,13 @@ fn a_new_github_repo_waits_for_the_local_repo() {
     let outcome = init(&created).unwrap();
     let url = git::run(&outcome.repo, &["remote", "get-url", "origin"]).unwrap();
     assert_eq!(url, "git@github.com:me/dotfiles.git\n");
+
+    // A repo that was already here stays when GitHub refuses.
+    std::fs::remove_file(paths.host_config()).unwrap();
+    git::run(&outcome.repo, &["remote", "remove", "origin"]).unwrap();
+    let refused = mock(&[(422, r#"{"message":"name already exists on this account"}"#)]);
+    assert!(init(&refused).is_err());
+    assert!(paths.repo().join("rosamta.toml").exists());
 }
 
 #[test]

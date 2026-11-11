@@ -299,12 +299,15 @@ pub fn init_new(
 ) -> Result<InitOutcome> {
     // Local steps fail first: once the GitHub repo exists, a retry stops at
     // "name already exists".
+    let fresh = !paths.repo().exists();
     let outcome = repo::init_new(paths)?;
     let created = match github.create_repo(token, name) {
         Ok(created) => created,
         Err(err) => {
             // Only what `repo::init_new` just made, so a retry starts clean.
-            let _ = std::fs::remove_dir_all(&outcome.repo);
+            if fresh {
+                let _ = std::fs::remove_dir_all(&outcome.repo);
+            }
             return Err(err);
         }
     };
