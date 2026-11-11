@@ -79,6 +79,21 @@ pub(crate) fn run_foreign(dir: &Path, args: &[&str]) -> Result<String> {
     check(args, output)
 }
 
+/// Which of `paths` the repo's or the user's ignore rules leave out.
+pub(crate) fn ignored(dir: &Path, paths: &[String]) -> Result<Vec<String>> {
+    if paths.is_empty() {
+        return Ok(Vec::new());
+    }
+    let mut args = vec!["check-ignore", "--"];
+    args.extend(paths.iter().map(String::as_str));
+    let output = git().arg("-C").arg(dir).args(&args).output();
+    match output {
+        // 1: none is ignored.
+        Ok(output) if output.status.code() == Some(1) => Ok(Vec::new()),
+        output => Ok(check(&args, output)?.lines().map(str::to_string).collect()),
+    }
+}
+
 /// Whether `git args` exits with 0; for questions such as `diff --quiet`.
 pub(crate) fn succeeds(dir: &Path, args: &[&str]) -> Result<bool> {
     let output = git().arg("-C").arg(dir).args(args).output();

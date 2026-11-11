@@ -402,6 +402,7 @@ pub(crate) fn plan(inputs: &Inputs) -> Result<Plan> {
     for (source, target, attrs, script) in scripts {
         planner.script(source, target, &attrs, script)?;
     }
+    planner.git_ignored()?;
     planner.nesting()?;
     Ok(planner.plan)
 }
@@ -579,23 +580,25 @@ impl Planner<'_> {
         }
         let mut bytes = self.read(source)?;
         if attrs.encrypted {
+            // Without the repo key it could not be sealed again: chezmoi is
+            // not asked for a passphrase for nothing.
+            if !self.inputs.can_encrypt {
+                self.plan.needs_key = true;
+                self.report(
+                    source,
+                    Some(target),
+                    Outcome::Manual,
+                    Reason::Encrypted,
+                    None,
+                );
+                return Ok(());
+            }
             let decrypted = match self.inputs.chezmoi {
                 Some(chezmoi) => chezmoi.decrypt(&self.inputs.root.join(source)),
                 None => Err(Error::Usage("chezmoi is not installed".into())),
             };
             match decrypted {
-                Ok(plain) if self.inputs.can_encrypt => bytes = plain,
-                Ok(_) => {
-                    self.plan.needs_key = true;
-                    self.report(
-                        source,
-                        Some(target),
-                        Outcome::Manual,
-                        Reason::Encrypted,
-                        None,
-                    );
-                    return Ok(());
-                }
+                Ok(plain) => bytes = plain,
                 Err(err) => {
                     self.report(
                         source,
@@ -764,6 +767,41 @@ impl Planner<'_> {
                 None,
             );
         }
+    }
+
+    /// The user's git ignores some names, such as `.env`: those would be
+    /// declared but never committed.
+    fn git_ignored(&mut self) -> Result<()> {
+        let home = |path: &str| format!("home/{path}");
+        let paths: Vec<String> = self
+            .plan
+            .dotfiles
+            .iter()
+            .map(|new| home(&new.entry.path))
+            .chain(self.plan.scripts.iter().map(|new| new.source.clone()))
+            .collect();
+        let ignored = crate::git::ignored(&self.inputs.ctx.paths.repo(), &paths)?;
+        if ignored.is_empty() {
+            return Ok(());
+        }
+        self.plan
+            .dotfiles
+            .retain(|new| !ignored.contains(&home(&new.entry.path)));
+        self.plan
+            .scripts
+            .retain(|new| !ignored.contains(&new.source));
+        for item in &mut self.plan.report.items {
+            let path = match (item.outcome, item.reason, &item.target) {
+                (Outcome::Imported, Reason::Dotfile, Some(target)) => home(target),
+                (Outcome::Imported, Reason::Script, Some(target)) => target.clone(),
+                _ => continue,
+            };
+            if ignored.contains(&path) {
+                item.outcome = Outcome::Manual;
+                item.reason = Reason::GitIgnored;
+            }
+        }
+        Ok(())
     }
 
     /// Where the converted template does not give what chezmoi gives here:

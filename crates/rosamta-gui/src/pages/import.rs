@@ -82,6 +82,7 @@ fn why(reason: Reason) -> &'static str {
         Reason::Format => "import.why_format",
         Reason::Special => "import.why_special",
         Reason::Link => "import.why_link",
+        Reason::GitIgnored => "import.why_git_ignored",
         Reason::MayBeEmpty => "import.why_may_be_empty",
         Reason::Exists => "import.why_exists",
         // Not the reason of an item that was not imported.

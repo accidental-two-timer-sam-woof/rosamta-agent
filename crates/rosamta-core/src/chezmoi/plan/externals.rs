@@ -116,6 +116,10 @@ impl Planner<'_> {
             .map(|(key, _)| key.as_str())
             .filter(|key| !allowed.contains(key))
             .collect();
+        // Arguments that change what is cloned, such as `--recurse-submodules`.
+        if clone_args(entry).iter().any(|arg| !harmless(arg)) {
+            extra.push("clone.args");
+        }
         let checksum = entry.get("checksum").and_then(Value::as_object);
         if checksum.is_some_and(|sums| sums.keys().any(|key| key != "sha256")) {
             extra.push("checksum");
@@ -252,14 +256,37 @@ impl Planner<'_> {
     }
 }
 
+fn clone_args(entry: &Value) -> Vec<&str> {
+    entry
+        .pointer("/clone/args")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(Value::as_str)
+        .collect()
+}
+
+/// A clone argument rosamta's clone does without: the branch is kept, and
+/// the others only make the clone smaller or quieter.
+fn harmless(arg: &str) -> bool {
+    let name = arg.split('=').next().unwrap_or(arg);
+    !arg.starts_with('-')
+        || [
+            "--branch",
+            "-b",
+            "--depth",
+            "--single-branch",
+            "--no-single-branch",
+            "--filter",
+            "--quiet",
+            "-q",
+        ]
+        .contains(&name)
+}
+
 /// `--branch x` or `-b x` in `clone.args`.
 fn branch(entry: &Value) -> Option<String> {
-    let args: Vec<&str> = entry
-        .pointer("/clone/args")?
-        .as_array()?
-        .iter()
-        .filter_map(Value::as_str)
-        .collect();
+    let args = clone_args(entry);
     args.iter().enumerate().find_map(|(index, arg)| {
         if let Some(name) = arg.strip_prefix("--branch=") {
             return Some(name.to_string());

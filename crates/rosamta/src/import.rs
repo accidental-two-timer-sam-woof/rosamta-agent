@@ -33,6 +33,7 @@ pub fn chezmoi(json: bool, source: Option<&Path>, dry_run: bool) -> Result<ExitC
         return Ok(ExitCode::SUCCESS);
     }
     let lock = adopt::lock(&ctx)?;
+    chezmoi::writable(&ctx)?;
     // Without a terminal, encrypted files are left to convert by hand.
     if ctx.interactive && chezmoi::needs_key(&chezmoi::source_dir(&ctx, &options)?)? {
         ensure_key(&ctx, json)?;
@@ -109,6 +110,7 @@ fn why(reason: Reason) -> &'static str {
         Reason::Format => "unsupported file format",
         Reason::Special => "chezmoi-only file",
         Reason::Link => "a symlink in the source directory",
+        Reason::GitIgnored => "ignored by git",
         Reason::Hostname => "hostnames became host IDs",
         Reason::EveryApply => "ran on every chezmoi apply; now runs when it changes",
         Reason::ScriptDir => "now runs in the home directory",

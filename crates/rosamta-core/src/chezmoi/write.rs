@@ -35,28 +35,37 @@ const PATHS: [&str; 7] = [
     ASIDE,
 ];
 
-/// Write the plan and commit it, then record what is only this host's:
-/// vars and the scripts chezmoi ran. A failure leaves the repo as it was.
-pub(crate) fn write(ctx: &Context, root: &Path, plan: Plan) -> Result<Report> {
-    let repo = ctx.paths.repo();
-    let status = |paths: &[&str]| {
-        let mut args = vec!["status", "--porcelain", "--untracked-files=all", "--"];
-        args.extend_from_slice(paths);
-        crate::git::run(&repo, &args)
-    };
-    // Otherwise they would be committed with the import, or undone with it.
-    if !status(&PATHS)?.trim().is_empty() {
+/// Fails when the repo has changes that would be committed with the
+/// import, or undone with it.
+pub(crate) fn writable(repo: &Path) -> Result<()> {
+    let mut args = vec!["status", "--porcelain", "--untracked-files=all", "--"];
+    args.extend_from_slice(&PATHS);
+    let staged = !crate::git::succeeds(repo, &["diff", "--cached", "--quiet"])?;
+    if staged || !crate::git::run(repo, &args)?.trim().is_empty() {
         return Err(Error::Usage(
             "the repo has changes that are not published yet; run `rsmt publish` first".into(),
         ));
     }
-    let scripts = match write_repo(ctx, root, &plan) {
-        Ok(scripts) => scripts,
-        Err(err) => {
-            undo(&repo);
-            return Err(err);
-        }
-    };
+    Ok(())
+}
+
+/// Write the plan, record what is only this host's (vars and the scripts
+/// chezmoi ran), then commit. A failure leaves the repo as it was; the
+/// host's records do no harm without the commit.
+pub(crate) fn write(ctx: &Context, root: &Path, plan: Plan) -> Result<Report> {
+    let repo = ctx.paths.repo();
+    writable(&repo)?;
+    let written = write_repo(ctx, root, &plan)
+        .and_then(|scripts| record(ctx, &plan, &scripts))
+        .and_then(|()| commit(ctx, &plan));
+    if let Err(err) = written {
+        undo(&repo);
+        return Err(err);
+    }
+    Ok(plan.report)
+}
+
+fn record(ctx: &Context, plan: &Plan, scripts: &[Script]) -> Result<()> {
     let host = crate::adopt::host_config(ctx)?;
     let vars: Vec<(String, String)> = plan
         .vars
@@ -67,8 +76,25 @@ pub(crate) fn write(ctx: &Context, root: &Path, plan: Plan) -> Result<Report> {
     if !vars.is_empty() {
         crate::host::set_vars(&ctx.paths, &vars)?;
     }
-    remember_scripts(ctx, &scripts)?;
-    Ok(plan.report)
+    remember_scripts(ctx, scripts)
+}
+
+fn commit(ctx: &Context, plan: &Plan) -> Result<()> {
+    let repo = ctx.paths.repo();
+    // A key made for this import goes with the files it seals.
+    let paths: Vec<&str> = PATHS
+        .into_iter()
+        .chain([crate::dotfiles::crypt::REPO_KEY])
+        .filter(|path| repo.join(path).exists())
+        .collect();
+    let message = format!(
+        "import(chezmoi): {} dotfiles, {} scripts, {} externals\n\n{}",
+        plan.dotfiles.len(),
+        plan.scripts.len(),
+        plan.externals.len(),
+        plan.report.summary()
+    );
+    crate::sync::commit_scanned(ctx, &paths, Some(&message)).map(drop)
 }
 
 /// Put the import's paths back as committed; they were clean before it.
@@ -170,18 +196,6 @@ fn write_repo(ctx: &Context, root: &Path, plan: &Plan) -> Result<Vec<Script>> {
         let bytes = std::fs::read(&from).map_err(Error::read(&from))?;
         put(&to, &bytes, 0o644)?;
     }
-    let paths: Vec<&str> = PATHS
-        .into_iter()
-        .filter(|path| repo.join(path).exists())
-        .collect();
-    let message = format!(
-        "import(chezmoi): {} dotfiles, {} scripts, {} externals\n\n{}",
-        plan.dotfiles.len(),
-        plan.scripts.len(),
-        plan.externals.len(),
-        plan.report.summary()
-    );
-    crate::sync::commit_scanned(ctx, &paths, Some(&message))?;
     Ok(scripts)
 }
 

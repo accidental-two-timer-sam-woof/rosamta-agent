@@ -418,7 +418,7 @@ rsmt import chezmoi             # 匯入並建立一個 commit
 - 腳本改為 `onchange` 並記為這台主機已執行過，`include … | sha256sum` 改為 `watch`。
 - `git-repo` 與 `archive` 類型的外部內容寫入 `externals.toml`，git repo 鎖定在目前 clone 的版本。
 - 轉不了的項目（`modify_`、`symlink_`、`exact_` 目錄、不支援的 template 寫法等）不宣告，原檔複製到 repo 的 `chezmoi-import/`。shell 設定檔不匯入，內容由接管處理。
-- source 中的 symlink 不讀取。repo 有尚未推送的變更時不匯入；匯入失敗時 repo 回到匯入前的內容。
+- source 中的 symlink 不讀取，git 忽略的路徑（例如全域 excludes 中的 `.env`）不匯入。repo 有尚未推送的變更時不匯入；匯入失敗時 repo 回到匯入前的內容。
 - 每個項目的結果與原因列在輸出與 commit 內容中，`--json` 以原因代碼輸出。
 
 ### 同步到其他主機
