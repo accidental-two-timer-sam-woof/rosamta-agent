@@ -603,12 +603,22 @@ impl Daemon {
         if self.host.pull != SyncPolicy::Auto {
             return;
         }
+        let started = crate::time::now();
         // Hand edits that did not apply stay unpublished; pulling may fix them.
         match sync::sync_per_policy(&self.ctx, self.repo_problem.is_some()) {
             Ok(_) => {}
             // No remote yet, or no repo: nothing to sync with.
             Err(err) if err.is_usage() => {}
             Err(err) => self.log(&err.to_string()),
+        }
+        // Pulled settings that did not apply hold back dotfiles, as a repo
+        // edit that did not apply does.
+        if let Some(pull) = sync::load_state(self.ctx.paths.state())
+            .ok()
+            .and_then(|state| state.pull)
+            .filter(|pull| pull.applying && pull.at >= started)
+        {
+            self.repo_problem = Some(("apply_failed", pull.reason.unwrap_or_default()));
         }
         // A pull applies dotfiles too.
         self.queue_applied_items();
