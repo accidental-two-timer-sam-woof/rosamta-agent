@@ -63,9 +63,9 @@ const PUSH_TRIES: u32 = 3;
 const PUSH_RETRY_MAX: Duration = Duration::from_secs(15 * 60);
 /// How often a problem the notification service did not take is shown again.
 const NOTIFY_RETRY: Duration = Duration::from_secs(60);
-/// How many times: a desktop's service is up minutes after login, a
-/// server's never.
-const NOTIFY_TRIES: u32 = 10;
+/// For how long: a desktop's service is up minutes after login, a server's
+/// never.
+const NOTIFY_GIVE_UP: Duration = Duration::from_secs(10 * 60);
 
 /// Directories to watch: the parents of watched files, without recursion,
 /// so an installer writing a new file and renaming it over the old one is
@@ -323,7 +323,11 @@ pub fn run(
         ..Daemon::new(
             ctx,
             host,
-            Box::new(notify::GiveUp::after(NOTIFY_TRIES, notifier)),
+            Box::new(notify::GiveUp::new(
+                notifier,
+                NOTIFY_GIVE_UP,
+                NOTIFY_RETRY * 3,
+            )),
         )
     };
     let mut watching = BTreeSet::new();

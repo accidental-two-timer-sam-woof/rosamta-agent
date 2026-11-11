@@ -569,26 +569,46 @@ fn pulled_settings_that_do_not_apply_are_not_deployed() {
 }
 
 #[test]
-fn a_note_the_service_never_takes_counts_as_shown_after_some_tries() {
-    let note = |body: &str| Note {
-        body: body.into(),
-        items: Vec::new(),
-        view_only: false,
-    };
+fn a_note_the_service_never_takes_counts_as_shown_after_a_while() {
     let up = Arc::new(Mutex::new(false));
     let shown = Arc::default();
     let late = Late {
         up: Arc::clone(&up),
         shown: Arc::clone(&shown),
     };
-    let notifier = notify::GiveUp::after(3, Box::new(late));
-    let tries: Vec<bool> = (0..4).map(|_| notifier.show(&note("a"))).collect();
-    // The third miss ends it; a note after that starts over.
-    assert_eq!(tries, [false, false, true, false]);
-    assert!(!notifier.show(&note("b")));
+    let (limit, pause) = (Duration::from_secs(600), Duration::from_secs(180));
+    let notifier = notify::GiveUp::new(Box::new(late), limit, pause);
+    let start = Instant::now();
+    let at = |seconds: u64| start + Duration::from_secs(seconds);
+    // A burst of tries uses up no time.
+    assert!((0..50).all(|_| !notifier.done("a", at(0))));
+    assert!(
+        (60..600)
+            .step_by(60)
+            .all(|second| !notifier.done("a", at(second)))
+    );
+    assert!(notifier.done("a", at(600)));
+    // A note that reads the same afterwards starts over, as does one not
+    // tried for a while: it is another note with the same words.
+    assert!(!notifier.done("a", at(660)));
+    assert!(!notifier.done("b", at(660)));
+    assert!(!notifier.done("b", at(900)));
+    assert!(
+        (1000..1500)
+            .step_by(100)
+            .all(|second| !notifier.done("b", at(second)))
+    );
+    assert!(notifier.done("b", at(1500)));
+
+    let note = Note {
+        body: "c".into(),
+        items: Vec::new(),
+        view_only: false,
+    };
+    assert!(!notifier.show(&note));
     *up.lock().unwrap() = true;
-    assert!(notifier.show(&note("b")));
-    assert_eq!(*shown.lock().unwrap(), ["b"]);
+    assert!(notifier.show(&note));
+    assert_eq!(*shown.lock().unwrap(), ["c"]);
 }
 
 /// Shows nothing until `up` is set, as before the desktop's notification
