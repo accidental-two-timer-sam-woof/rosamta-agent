@@ -59,11 +59,13 @@ pub fn uses_secrets(names: &HashSet<String>) -> bool {
 /// The command names `secret()` is called with; `None` when the word
 /// `secret` appears anywhere, text and strings included, other than as a
 /// call whose first argument is a quoted name alone, so any command may
-/// run. Finding expression boundaries is left to the template parser.
+/// run. Finding expression boundaries is left to the template parser; a
+/// name holds only the characters of a command name, so it never hides
+/// another call.
 pub fn secret_names(source: &str) -> Option<BTreeSet<String>> {
     static CALL: OnceLock<Regex> = OnceLock::new();
     let call = CALL.get_or_init(|| {
-        Regex::new(r#"\bsecret\b(?:\s*\(\s*(?:"([^"\\]*)"|'([^'\\]*)')\s*,)?"#).unwrap()
+        Regex::new(r#"\bsecret\b(?:\s*\(\s*(?:"([\w-]+)"|'([\w-]+)')\s*,)?"#).unwrap()
     });
     call.captures_iter(source)
         .map(|caps| Some(caps.get(1).or(caps.get(2))?.as_str().to_string()))
@@ -339,6 +341,10 @@ mod tests {
         assert_eq!(names("{{ secret(\"fetch\", \"secret\") }}"), None);
         assert_eq!(
             names("# secret token\n{{ secret(\"fetch\", \"x\") }}"),
+            None
+        );
+        assert_eq!(
+            names("secret(\"{{ secret('fetch', 'npm') }}\", \"config\")"),
             None
         );
     }
