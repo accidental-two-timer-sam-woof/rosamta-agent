@@ -1044,6 +1044,19 @@ fn a_failed_commit_keeps_the_adoption_record() {
     fs::write(home.root.join(".zshrc"), format!("{zshrc}{BUN}")).unwrap();
     assert!(review(&home).is_empty());
     assert_eq!(read(&home, ".zshrc"), zshrc);
+    // A refusal from the remote is over once a push works, though bun's
+    // module is still uncommitted.
+    let state = ".local/state/rosamta/sync.json";
+    assert!(read(&home, state).contains("commit failed"));
+    write(
+        &home,
+        state,
+        r#"{"publish":{"at":1,"outcome":"blocked","reason":"origin refused access"},"pull":null,"unpushed":1}"#,
+    );
+    fs::write(home.root.join(".zshrc"), format!("{zshrc}\nexport FOO=1\n")).unwrap();
+    run(&home, &["adopt", "--yes"]);
+    let sync: serde_json::Value = serde_json::from_str(&read(&home, state)).unwrap();
+    assert_eq!(sync["publish"]["outcome"], "ok", "{sync}");
 }
 
 #[test]
