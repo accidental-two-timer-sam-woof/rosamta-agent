@@ -56,9 +56,13 @@ pub(crate) fn scan(repo: &Path, range: &[&str]) -> Result<Vec<Hit>> {
 }
 
 /// Lines added by the staged changes.
-pub(crate) fn staged(repo: &Path) -> Result<Vec<Hit>> {
+pub(crate) fn staged(repo: &Path, paths: &[&str]) -> Result<Vec<Hit>> {
     let mut args = vec!["-c", "core.quotePath=false", "diff", "--cached"];
     args.extend(PATCH);
+    if !paths.is_empty() {
+        args.push("--");
+        args.extend_from_slice(paths);
+    }
     Ok(unencrypted(
         repo,
         check(&added_lines(&git::run(repo, &args)?)),
@@ -179,7 +183,7 @@ mod tests {
             secret_rule(body).is_some(),
             "the body must look like a secret"
         );
-        assert_eq!(staged(repo).unwrap(), []);
+        assert_eq!(staged(repo, &[]).unwrap(), []);
         crate::git::run(repo, &["commit", "--quiet", "--no-verify", "-m", "v2"]).unwrap();
         assert_eq!(scan(repo, &["HEAD~1..HEAD"]).unwrap(), []);
     }
@@ -250,7 +254,10 @@ deleted file mode 100644
         let files =
             |hits: Vec<Hit>| -> Vec<String> { hits.into_iter().map(|hit| hit.file).collect() };
         git::run(repo, &["add", "--all"]).unwrap();
-        assert_eq!(files(staged(repo).unwrap()), ["marked.bin", "nul.toml"]);
+        assert_eq!(
+            files(staged(repo, &[]).unwrap()),
+            ["marked.bin", "nul.toml"]
+        );
         commit("binary");
         assert_eq!(
             files(scan(repo, &["HEAD~1..HEAD"]).unwrap()),

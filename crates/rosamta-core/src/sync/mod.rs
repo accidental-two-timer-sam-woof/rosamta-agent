@@ -364,9 +364,9 @@ pub(crate) fn commit_scanned(ctx: &Context, paths: &[&str], message: Option<&str
         return Ok(false);
     }
     git::run(&repo_dir, &limit(&["add", "--all"]))?;
-    let hits = scan::staged(&repo_dir)?;
+    let hits = scan::staged(&repo_dir, paths)?;
     if !hits.is_empty() {
-        git::run(&repo_dir, &["reset", "--quiet"])?;
+        git::run(&repo_dir, &limit(&["reset", "--quiet"]))?;
         return Err(secret_blocked(ctx, &hits, None));
     }
     let message = message.map_or_else(|| edit_message(&status), str::to_string);

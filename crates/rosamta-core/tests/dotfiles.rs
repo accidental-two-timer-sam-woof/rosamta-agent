@@ -826,6 +826,25 @@ mod manage {
     }
 
     #[test]
+    fn add_leaves_other_staged_changes_out_of_its_commit() {
+        let home = committed();
+        home.repo_write("modules/wip.toml", "[env]\nWIP = \"1\"\n");
+        git(&home.repo(), &["add", "modules/wip.toml"]);
+        write(&home.at(".npmrc"), "save-exact = true\n");
+        manage::add(&home.ctx, &[home.at(".npmrc")], Deploy::Link, false).unwrap();
+        let log = log(&home);
+        assert!(log.starts_with("add(home): .npmrc\n"), "{log}");
+        assert!(!log.contains("wip.toml"), "{log}");
+        let out = Command::new("git")
+            .arg("-C")
+            .arg(home.repo())
+            .args(["diff", "--cached", "--name-only"])
+            .output()
+            .unwrap();
+        assert_eq!(String::from_utf8(out.stdout).unwrap(), "modules/wip.toml\n");
+    }
+
+    #[test]
     fn forget_keeps_a_source_another_dotfile_uses() {
         let home = Home::new("ask");
         home.repo_write("home/.config/ghostty/config", "theme = dark\n");
