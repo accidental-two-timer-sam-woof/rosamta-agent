@@ -371,11 +371,15 @@ pub fn include(ctx: &Context, items: &[Item], changes: &[FileChange]) -> Result<
         }
         Ok(())
     };
-    // A module limited to no shell loads in every one.
-    let shells: Vec<Shell> = if items.iter().any(|item| item.shells.is_empty()) {
+    // Only modules reach shell scripts; one limited to no shell loads in all.
+    let modules: Vec<&Item> = items
+        .iter()
+        .filter(|item| item.kind == Kind::Module)
+        .collect();
+    let shells: Vec<Shell> = if modules.iter().any(|item| item.shells.is_empty()) {
         Shell::ALL.to_vec()
     } else {
-        items
+        modules
             .iter()
             .flat_map(|item| item.shells.iter().chain(&item.widening.shells))
             .copied()
