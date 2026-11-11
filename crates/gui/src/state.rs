@@ -167,6 +167,7 @@ pub fn load() -> Snapshot {
             .iter()
             .flat_map(|shell| shell.missing.iter().cloned())
             .collect();
+        out.problems.extend(problems::invalid(&repo_dir));
         out.problems.extend(problems::current(&ctx, host, &missing));
     }
     out

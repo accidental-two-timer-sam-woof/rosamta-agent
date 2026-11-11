@@ -1,13 +1,13 @@
 //! What needs the user on this host: one list for the background service's
 //! notifications and for the app.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use crate::apply::Context;
 use crate::config::{HostConfig, SyncPolicy};
 use crate::i18n::{self, Lang};
 use crate::sync::{self, Attempt, Outcome};
-use crate::{adopt, dotfiles};
+use crate::{adopt, dotfiles, validate};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Problem {
@@ -108,4 +108,43 @@ pub fn current(ctx: &Context, host: &HostConfig, missing_hooks: &[PathBuf]) -> V
         });
     }
     problems
+}
+
+/// The first error `rsmt validate` finds in the repo: nothing is applied
+/// while it is there.
+pub fn invalid(repo: &Path) -> Option<Problem> {
+    let reason = match validate::validate(repo) {
+        Err(err) => err.to_string(),
+        Ok(report) => {
+            let (file, issue) = report
+                .files
+                .iter()
+                .find_map(|file| Some((file, file.errors.first()?)))?;
+            let line = issue
+                .line
+                .map(|line| format!(":{line}"))
+                .unwrap_or_default();
+            format!("{}{line}: {}", file.path.display(), issue.message)
+        }
+    };
+    Some(Problem::new("invalid", reason))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_module_that_does_not_parse_is_a_problem() {
+        let dir = tempfile::tempdir().unwrap();
+        let repo = dir.path();
+        std::fs::write(repo.join("rosamta.toml"), "format = 1\n").unwrap();
+        std::fs::create_dir(repo.join("modules")).unwrap();
+        std::fs::write(repo.join("modules/a.toml"), "[env]\nA = \"1\"\n").unwrap();
+        assert_eq!(invalid(repo), None);
+        std::fs::write(repo.join("modules/a.toml"), "[env\n").unwrap();
+        let problem = invalid(repo).unwrap();
+        assert_eq!(problem.kind, "invalid");
+        assert!(problem.arg.starts_with("modules/a.toml"), "{}", problem.arg);
+    }
 }

@@ -26,7 +26,7 @@ use crate::hooks::HookEnv;
 use crate::i18n::{self, Lang};
 use crate::problems::{self, Problem};
 use crate::sync::{self, Outcome};
-use crate::{dotfiles, generated, host, validate};
+use crate::{dotfiles, generated, host};
 
 pub use notify::{Action, Note, Notifier};
 
@@ -606,21 +606,8 @@ impl Daemon {
     }
 
     fn apply_repo(&self) -> std::result::Result<(), (&'static str, String)> {
-        let repo = self.ctx.paths.repo();
-        let report = validate::validate(&repo).map_err(|err| ("invalid", err.to_string()))?;
-        if let Some((file, issue)) = report
-            .files
-            .iter()
-            .find_map(|file| Some((file, file.errors.first()?)))
-        {
-            let line = issue
-                .line
-                .map(|line| format!(":{line}"))
-                .unwrap_or_default();
-            return Err((
-                "invalid",
-                format!("{}{line}: {}", file.path.display(), issue.message),
-            ));
+        if let Some(problem) = problems::invalid(&self.ctx.paths.repo()) {
+            return Err(("invalid", problem.arg));
         }
         // A host that never applied keeps its shells as they are.
         if generated::current_id(&self.ctx.paths.generated()).is_none() {
