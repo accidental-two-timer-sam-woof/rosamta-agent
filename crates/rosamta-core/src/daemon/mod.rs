@@ -56,6 +56,8 @@ const LOG_LIMIT: u64 = 1 << 20;
 /// How often a template waiting for rbw tries again; unlocking rbw sends
 /// no event.
 const RBW_RETRY: Duration = Duration::from_secs(60);
+/// Seconds between pushes of commits that could not reach the remote.
+const PUSH_RETRY: Duration = Duration::from_secs(60);
 
 /// Directories to watch: the parents of watched files, without recursion,
 /// so an installer writing a new file and renaming it over the old one is
@@ -249,6 +251,9 @@ struct Daemon {
     batch_since: Option<Instant>,
     next_sync: Instant,
     next_rbw_retry: Instant,
+    /// When waiting commits were last pushed again; a pull that fails first
+    /// leaves no newer publish attempt to wait from.
+    pushed_again: Option<Instant>,
     /// Retries left for a sync after waking that found no network.
     wake_retries: &'static [Duration],
     clock: (Instant, SystemTime),
@@ -367,6 +372,7 @@ impl Daemon {
         Self {
             next_sync: Instant::now(),
             next_rbw_retry: Instant::now() + RBW_RETRY,
+            pushed_again: None,
             wake_retries: &[],
             host,
             lang: Lang::system(),
@@ -655,6 +661,9 @@ impl Daemon {
                 _ => self.wake_retries = &[],
             }
         }
+        if self.push_due() {
+            self.push_again();
+        }
         if now.0 >= self.next_rbw_retry {
             self.next_rbw_retry = now.0 + RBW_RETRY;
             if self.waits_for_rbw() {
@@ -680,6 +689,37 @@ impl Daemon {
                 })
             })
         })
+    }
+
+    /// Commits wait because the remote could not be reached, and a minute
+    /// has passed since that try.
+    fn push_due(&self) -> bool {
+        self.host.publish == SyncPolicy::Auto
+            && self
+                .pushed_again
+                .is_none_or(|at| at.elapsed() >= PUSH_RETRY)
+            && sync::load_state(self.ctx.paths.state()).is_ok_and(|state| {
+                state.unpushed > 0
+                    && state.publish.as_ref().is_some_and(|attempt| {
+                        attempt.outcome == Outcome::Offline
+                            && crate::time::now() >= attempt.at + PUSH_RETRY.as_secs()
+                    })
+            })
+    }
+
+    /// Push the waiting commits; with pulling on, as a whole sync.
+    fn push_again(&mut self) {
+        self.pushed_again = Some(Instant::now());
+        if self.host.pull == SyncPolicy::Auto {
+            self.sync_now();
+            return;
+        }
+        let pushed =
+            adopt::lock(&self.ctx).and_then(|lock| sync::publish_if_auto(&self.ctx, &lock));
+        if let Err(err) = pushed {
+            self.log(&err.to_string());
+        }
+        self.report_problems();
     }
 
     /// Whether a sync from `started` on could not reach the remote.
@@ -835,6 +875,11 @@ impl Daemon {
                 let reason = attempt.reason.clone().unwrap_or_default();
                 let first = reason.lines().next().unwrap_or_default().to_string();
                 problems.push(match (attempt.outcome, pull) {
+                    (Outcome::Offline, false)
+                        if self.host.publish == SyncPolicy::Auto && state.unpushed > 0 =>
+                    {
+                        ("offline", state.unpushed.to_string())
+                    }
                     (Outcome::Ok | Outcome::Offline, _) => continue,
                     (Outcome::Conflict, _) => ("conflict", attempt.files.join(", ")),
                     (Outcome::Failed, _) if reason.contains("upgrade rosamta") => {
@@ -857,17 +902,23 @@ impl Daemon {
         let mut keys: Vec<String> = Vec::new();
         for (kind, reason) in &problems {
             // The daemon's own apply can fail the same way a pull's did.
-            let key = format!("{kind}:{reason}");
+            // Being offline is one problem however many commits wait.
+            let key = if *kind == "offline" {
+                "offline:".to_string()
+            } else {
+                format!("{kind}:{reason}")
+            };
             if keys.contains(&key) {
                 continue;
             }
             if !state.notified.contains(&key) {
-                let arg = if *kind == "conflict" {
-                    "files"
-                } else {
-                    "reason"
+                let (text, arg) = match *kind {
+                    "conflict" => ("problem.conflict", "files"),
+                    "offline" if reason == "1" => ("problem.offline_one", "count"),
+                    "offline" => ("problem.offline", "count"),
+                    _ => (&*format!("problem.{kind}"), "reason"),
                 };
-                let body = i18n::text(self.lang, &format!("problem.{kind}"), &[(arg, reason)]);
+                let body = i18n::text(self.lang, text, &[(arg, reason)]);
                 self.log(&format!("notified: {body}"));
                 self.notifier.show(&Note {
                     body,
