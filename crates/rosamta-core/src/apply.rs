@@ -289,15 +289,27 @@ pub struct Applied {
     pub shells: Vec<Shell>,
     pub skipped: Vec<String>,
     pub hooks_changed: Vec<PathBuf>,
+    pub externals: Vec<crate::externals::Step>,
     pub dotfiles: Vec<crate::dotfiles::Step>,
 }
 
-/// Render, smoke-test, then switch; then deploy dotfiles. On any failure
-/// the current version stays and no dotfile is touched. The caller holds
-/// the adopt lock.
+/// Download externals; render, smoke-test, then switch; then deploy
+/// dotfiles. If the shells fail their check, the current version stays and
+/// no dotfile is touched. The caller holds the adopt lock.
 pub fn apply(ctx: &Context) -> Result<Applied> {
     migrate(ctx)?;
-    with_dotfiles(ctx, finish(ctx, &[])?)
+    after_externals(ctx, || finish(ctx, &[]))
+}
+
+/// What shells may load comes first: on a new host the module loading
+/// oh-my-zsh needs it downloaded before the smoke test.
+pub fn after_externals(ctx: &Context, shells: impl FnOnce() -> Result<Applied>) -> Result<Applied> {
+    let externals = crate::externals::apply(ctx)?;
+    let applied = Applied {
+        externals,
+        ..shells()?
+    };
+    with_dotfiles(ctx, applied)
 }
 
 /// Deploy dotfiles after the shells switched.
@@ -351,6 +363,7 @@ fn finish(ctx: &Context, baselines: &[(Shell, Vec<Smoke>)]) -> Result<Applied> {
         shells: plan.shells.clone(),
         skipped: plan.skipped.clone(),
         hooks_changed,
+        externals: Vec::new(),
         dotfiles: Vec::new(),
     };
     if applied.up_to_date {

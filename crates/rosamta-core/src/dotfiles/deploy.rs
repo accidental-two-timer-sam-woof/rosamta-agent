@@ -210,6 +210,8 @@ fn plan_with(ctx: &Context, render_all: bool) -> Result<Vec<Planned>> {
             Work::Nothing,
         ));
     }
+    // A broken externals.toml is reported on its own; dotfiles still deploy.
+    let gits = crate::externals::deploy::git_paths(ctx).unwrap_or_default();
     for (path, choice) in selected
         .iter()
         .filter(|(path, _)| !failed.contains_key(*path))
@@ -221,6 +223,17 @@ fn plan_with(ctx: &Context, render_all: bool) -> Result<Vec<Planned>> {
                 Some(format!("declared {count} times for this host")),
                 Work::Nothing,
             ),
+            // Deployed now, it would make a directory the external then conflicts with.
+            Choice::Use(_)
+                if let Some(outer) = crate::externals::deploy::missing_parent(ctx, &gits, path) =>
+            {
+                step(
+                    path,
+                    Action::Skipped,
+                    Some(format!("waits for external `{}`", outer.display())),
+                    Work::Nothing,
+                )
+            }
             Choice::Use(entry) => plan_entry(&env, path, entry).unwrap_or_else(|err| {
                 step(path, Action::Failed, Some(err.to_string()), Work::Nothing)
             }),

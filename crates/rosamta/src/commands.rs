@@ -8,6 +8,7 @@ use rosamta_core::apply::{self, Context};
 use rosamta_core::config::Shell;
 use rosamta_core::daemon::service;
 use rosamta_core::dotfiles::{self, Action, Step};
+use rosamta_core::externals;
 use rosamta_core::hooks::FileChange;
 use rosamta_core::{Error, Result};
 
@@ -17,12 +18,14 @@ pub fn apply(json: bool, dry_run: bool) -> Result<ExitCode> {
     let mut ctx = Context::from_env()?;
     if dry_run {
         let plan = apply::plan(&ctx)?;
+        let externals = externals::plan(&ctx)?;
         let dotfiles = dotfiles::plan(&ctx)?;
         warn_skipped(&plan.skipped);
         if json {
             let steps: Vec<&Step> = dotfiles.iter().map(|planned| &planned.step).collect();
             print_json(&DryRun {
                 plan: &plan,
+                externals: &externals,
                 dotfiles: steps,
             });
             return Ok(ExitCode::SUCCESS);
@@ -31,11 +34,14 @@ pub fn apply(json: bool, dry_run: bool) -> Result<ExitCode> {
             .iter()
             .filter(|planned| planned.step.action != Action::Unchanged)
             .collect();
-        if plan.is_up_to_date() && changed.is_empty() {
+        if plan.is_up_to_date() && changed.is_empty() && settled(&externals) {
             println!("Already up to date");
         }
         if !plan.is_up_to_date() {
             print!("{}", apply::diff(&plan, &ctx.paths.generated()));
+        }
+        for step in &externals {
+            print_external(&ctx, step);
         }
         for planned in changed {
             print_step(&ctx, &planned.step);
@@ -65,11 +71,20 @@ pub fn apply(json: bool, dry_run: bool) -> Result<ExitCode> {
         apply::apply(&ctx)?
     };
     warn_skipped(&applied.skipped);
+    // An external left as it is waits on nothing in the review queue.
     let failed = wrong_passphrase
         || applied
             .dotfiles
             .iter()
-            .any(|step| step.action == Action::Failed);
+            .any(|step| step.action == Action::Failed)
+        || applied.externals.iter().any(|step| {
+            matches!(
+                step.action,
+                externals::Action::Failed
+                    | externals::Action::Changed
+                    | externals::Action::Conflict
+            )
+        });
     if json {
         print_json(&applied);
     } else {
@@ -78,8 +93,11 @@ pub fn apply(json: bool, dry_run: bool) -> Result<ExitCode> {
             .iter()
             .filter(|step| step.action != Action::Unchanged)
             .collect();
-        if applied.up_to_date && changed.is_empty() {
+        if applied.up_to_date && changed.is_empty() && settled(&applied.externals) {
             println!("Already up to date");
+        }
+        for step in &applied.externals {
+            print_external(&ctx, step);
         }
         if !applied.up_to_date {
             let shells: Vec<&str> = applied.shells.iter().map(|shell| shell.name()).collect();
@@ -168,7 +186,31 @@ fn ask(question: &str) -> Result<String> {
 struct DryRun<'a> {
     #[serde(flatten)]
     plan: &'a apply::Plan,
+    externals: &'a [externals::Step],
     dotfiles: Vec<&'a Step>,
+}
+
+fn settled(steps: &[externals::Step]) -> bool {
+    steps
+        .iter()
+        .all(|step| step.action == externals::Action::Unchanged)
+}
+
+fn print_external(ctx: &Context, step: &externals::Step) {
+    use externals::Action;
+    let path = adopt::display(&ctx.home.join(&step.path), &ctx.home);
+    let reason = step.reason.as_deref().unwrap_or_default();
+    match (step.action, reason) {
+        (Action::Unchanged, _) => {}
+        (Action::Downloaded, _) => println!("Downloaded {path}"),
+        (Action::Updated, "") => println!("Updated {path}"),
+        (Action::Updated, reason) => println!("Updated {path}: {reason}"),
+        (Action::Released, _) => println!("Released {path}"),
+        (Action::Changed, reason) => eprintln!("warning: not updated {path}: {reason}"),
+        (Action::Conflict, reason) => eprintln!("warning: not downloaded {path}: {reason}"),
+        (Action::Skipped, reason) => println!("Skipped {path}: {reason}"),
+        (Action::Failed, reason) => eprintln!("error: {path}: {reason}"),
+    }
 }
 
 fn print_step(ctx: &Context, step: &Step) {

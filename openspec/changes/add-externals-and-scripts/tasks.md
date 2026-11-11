@@ -9,7 +9,7 @@
 - [x] 2.1 `externals.toml` 的型別、`rsmt schema externals`、`rsmt validate`（格式、鎖定值、路徑互相包含與 `git` external 內的例外）；以測試驗證各種回報
 - [x] 2.2 git external：暫存目錄 fetch、checkout、改名，以及上表的各狀態（乾淨、修改、HEAD 移動、網址改變、已存在的 clone）；以本機 bare repo 的整合測試驗證
 - [x] 2.3 壓縮檔 external：下載上限與逾時、先驗 SHA-256、tar.gz／tar／zip 解壓與 `strip`、拒絕跳出目標的項目、替換與內容雜湊；以本機產生的壓縮檔與惡意項目測試驗證
-- [ ] 2.4 接進套用：smoke test 之前處理、外層 `git` external 不在時略過內層與其中的 dotfile、結果與 `--dry-run`／`--json` 輸出、拉取時同樣處理且失敗不算拉取失敗；以整合測試驗證
+- [x] 2.4 接進套用：smoke test 之前處理、外層 `git` external 不在時略過內層與其中的 dotfile、結果與 `--dry-run`／`--json` 輸出、拉取時同樣處理且失敗不算拉取失敗；以整合測試驗證
 - [ ] 2.5 `rsmt externals update [<path>...]`：更新鎖定值、commit、依推送偏好推送、再套用；以本機 bare repo 驗證有更新與沒有更新兩種情況，README 新增 externals 一節
 
 ## 3. Scripts
