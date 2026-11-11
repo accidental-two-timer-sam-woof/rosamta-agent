@@ -6,7 +6,7 @@
 ## Requirements
 
 ### Requirement: Detect likely secrets
-接管時 rosamta SHALL 以已知 token 格式與高熵字串規則檢查每個段落。值為字面字串的變數，名稱含 `KEY`、`TOKEN`、`SECRET`、`PASSWORD`、`PASSWD`、`PASSPHRASE`、`CREDENTIAL`、`PWD`，或全大寫且最後一段是 `AUTH`、`OAUTH`、`PAT`、`PASS`、`DSN`、`CREDS` 時，SHALL 也視為疑似秘密；值是開關（`true`、`false`、`yes`、`no`、`on`、`off`）或路徑時 SHALL 不算；值是數字時，3 位以內一律不算，4 到 6 位只有在名稱以 `_` 分開的每一段都不是以上述的字結尾時才不算（`KEYTIMEOUT=1000`、`MAX_TOKENS=4096` 不算，`DB_PASSWORD=482913` 算）。以 `/` 開頭、只由 base64 字元組成且各段不像名稱的值 SHALL 不視為路徑。`$` 只有在後面接著名稱、`{`、`(`、`[`、引號或特殊參數時才視為展開，其餘視為字面值的一部分。網址中 `://使用者:密碼@` 的字面密碼 SHALL 視為疑似秘密。
+接管時 rosamta SHALL 以已知 token 格式與高熵字串規則檢查每個段落。值為字面字串的變數，名稱含 `KEY`、`TOKEN`、`SECRET`、`PASSWORD`、`PASSWD`、`PASSPHRASE`、`CREDENTIAL`、`PWD`，或全大寫且最後一段是 `AUTH`、`OAUTH`、`PAT`、`PASS`、`DSN`、`CREDS` 時，SHALL 也視為疑似秘密；值不可能是秘密時 SHALL 不算（見 Plain values）。網址中 `://使用者:密碼@` 的字面密碼 SHALL 視為疑似秘密。
 
 #### Scenario: Known token format
 - **WHEN** 一段內容含有 `export OPENAI_API_KEY=sk-` 開頭的字串
@@ -23,6 +23,25 @@
 #### Scenario: Reference is not a secret
 - **WHEN** 一段內容是 `export GITHUB_TOKEN="$(cat ~/.config/gh/token)"`
 - **THEN** 該段不因變數名稱被標記，因為值不是字面字串
+
+### Requirement: Plain values
+名稱像秘密的變數，值是開關（`true`、`false`、`yes`、`no`、`on`、`off`）、路徑或短數字時 SHALL 不視為疑似秘密。數字在 3 位以內一律不算；4 到 6 位只有在名稱以 `_` 分開的每一段都不是以秘密的字結尾時才不算。以 `/` 開頭、只由 base64 字元組成且各段不像名稱的值 SHALL 不視為路徑。`$` 只有在後面接著名稱、`{`、`(`、`[`、引號或特殊參數時才視為展開，其餘視為字面值的一部分。
+
+#### Scenario: A number that is a setting
+- **WHEN** rc 檔新增 `export KEYTIMEOUT=1000` 或 `export MAX_TOKENS=4096`
+- **THEN** 不被標記為疑似秘密
+
+#### Scenario: A number that is the secret
+- **WHEN** rc 檔新增 `export DB_PASSWORD=482913`
+- **THEN** 被標記為疑似秘密
+
+#### Scenario: Base64 that starts with a slash
+- **WHEN** rc 檔新增名稱為 `AWS_SECRET_ACCESS_KEY` 的變數，值以 `/` 開頭且只由 base64 字元組成
+- **THEN** 被標記為疑似秘密，不當成路徑
+
+#### Scenario: A dollar that stays
+- **WHEN** rc 檔新增 `export DB_PASSWORD=Summer2024$`
+- **THEN** 被標記為疑似秘密
 
 ### Requirement: Unsure literals wait for a decision
 接管偏好為「自動」時，沒有被標記為疑似秘密、但含有 16 個字元以上且不是由單字組成的字面值（例如一般名稱下的 hex 字串）的段落，SHALL 不自動接管，而是放進待處理清單，由使用者決定。
