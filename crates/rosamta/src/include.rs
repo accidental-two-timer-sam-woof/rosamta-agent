@@ -4,7 +4,7 @@ use std::process::ExitCode;
 
 use rosamta_core::apply::Context;
 use rosamta_core::hooks::FileChange;
-use rosamta_core::include::{self, Blocked, Item};
+use rosamta_core::include::{self, Blocked, Item, Unlisted};
 use rosamta_core::scope::{self, Widening};
 use rosamta_core::{Error, Result, adopt, time};
 use serde::Serialize;
@@ -24,12 +24,21 @@ pub fn recent(json: bool) -> Result<ExitCode> {
         println!("Everything in the repo loads on this host");
         return Ok(ExitCode::SUCCESS);
     }
+    let added: Vec<String> = items
+        .iter()
+        .map(|item| {
+            item.added
+                .map_or_else(|| "not committed".into(), time::date)
+        })
+        .collect();
     let width = items.iter().map(|item| item.name.len()).max().unwrap_or(0);
-    for item in &items {
-        let added = item
-            .added
-            .map_or_else(|| "not committed".into(), time::date);
-        let mut line = format!("{:<width$}  {added:<10}  {}", item.name, scope_of(item));
+    let date_width = added.iter().map(String::len).max().unwrap_or(0);
+    for (item, added) in items.iter().zip(&added) {
+        let mut line = format!(
+            "{:<width$}  {added:<date_width$}  {}",
+            item.name,
+            scope_of(item)
+        );
         if let Some(blocked) = &item.blocked {
             line.push_str(&format!(" ({})", why(blocked)));
         }
@@ -99,17 +108,17 @@ pub fn include(json: bool, names: &[String], all: bool, yes: bool) -> Result<Exi
     Ok(ExitCode::SUCCESS)
 }
 
-/// The listed item `name` stands for; a usage error when it is not in the
-/// repo or already loads here.
+/// The listed item `name` stands for; a usage error saying why it is not
+/// listed otherwise.
 fn find(ctx: &Context, recent: &[Item], name: &str) -> Result<Item> {
     let shown = include::shown(ctx, name);
     if let Some(item) = recent.iter().find(|item| item.name == shown) {
         return Ok(item.clone());
     }
-    Err(Error::Usage(if include::in_repo(ctx, &shown)? {
-        format!("{shown} already loads on this host")
-    } else {
-        format!("{shown} is not in the repo")
+    Err(Error::Usage(match include::unlisted(ctx, &shown)? {
+        Unlisted::Loaded => format!("{shown} already loads on this host"),
+        Unlisted::Disabled => format!("{shown} is turned off"),
+        Unlisted::Missing => format!("{shown} is not in the repo"),
     }))
 }
 

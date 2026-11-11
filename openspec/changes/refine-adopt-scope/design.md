@@ -54,7 +54,7 @@
 
 ### recent 與 include
 
-- 加入時間：一次 `git log --diff-filter=A --name-only --format=%ct -- modules home` 取得每個檔案第一次加入 repo 的時間；dotfile 以 `source` 檔案為準，`create` 部署也一樣。
+- 加入時間：一次 `git log --no-renames --diff-filter=A --name-only` 取得每個檔案最近一次加入 repo 的時間（移除後再加入、搬到其他資料夾都從那時算起）；dotfile 以 `source` 為準，目錄取其中最早的檔案。同一路徑有多個不在本機部署的 dotfile 項目時，列出加入本機需要放寬最少的一項，相同時取最新的。
 - 是否在本機載入：module 以 `render::select`，dotfile 以同一套 `when` 判斷。
 - 放寬：依 spec 的規則算出每項要加入的值，先全部列出；確認後以 `toml_edit` 修改 module 檔案與 `dotfiles.toml`，建立一個 commit，然後套用（`apply::apply_after`，失敗時還原檔案），依推送偏好推送。
 - `--json` 輸出每項的名稱、種類、加入時間、套用範圍與要放寬的條件；需要確認的指令在 `--json` 下必須加 `--yes`，與 `rsmt adopt` 相同。
