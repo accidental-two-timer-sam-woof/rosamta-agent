@@ -288,7 +288,7 @@ fn publish_locked(ctx: &Context, commit_edits: bool) -> Result<Published> {
             args.push("--set-upstream");
         }
         args.extend([remote.name.as_str(), refspec.as_str()]);
-        match git::run(&repo_dir, &args) {
+        match git::run_remote(&repo_dir, &args) {
             Ok(_) => published.pushed = pushed,
             Err(Error::Git { message, .. })
                 if !retry && git::classify(&message) == Failure::Rejected =>
@@ -467,7 +467,7 @@ fn pull_locked(ctx: &Context, commit_edits: bool) -> Result<Pulled> {
     }
     let mut remote = Remote::required(&repo_dir)?;
     if let Err(Error::Git { message, .. }) =
-        git::run(&repo_dir, &["fetch", "--quiet", &remote.name])
+        git::run_remote(&repo_dir, &["fetch", "--quiet", &remote.name])
     {
         let unpushed = remote.unpushed(&repo_dir)?;
         return Err(remote_failure(ctx, true, &remote, unpushed, message));

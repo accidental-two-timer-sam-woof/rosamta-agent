@@ -16,7 +16,15 @@ const FOREGROUND: [&str; 4] = [
 
 /// Long enough to clone a large repo, short enough that the background
 /// service is not held for good.
-const FOREIGN_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(600);
+const TIMEOUT: std::time::Duration = std::time::Duration::from_secs(600);
+
+/// A transfer over HTTP that stalls gives up before `TIMEOUT` does.
+const STALLED: [&str; 4] = [
+    "-c",
+    "http.lowSpeedLimit=1000",
+    "-c",
+    "http.lowSpeedTime=60",
+];
 
 /// Set when rosamta runs from a git hook; each would point git at that
 /// repository instead of the one `-C` names.
@@ -59,24 +67,33 @@ pub(crate) fn run_foreign(dir: &Path, args: &[&str]) -> Result<String> {
             "core.fsmonitor=false",
             "-c",
             "core.hooksPath=/dev/null",
-            "-c",
-            "http.lowSpeedLimit=1000",
-            "-c",
-            "http.lowSpeedTime=60",
         ])
+        .args(STALLED)
         .arg("-C")
         .arg(dir)
         .args(args);
-    let output =
-        crate::process::output_with_timeout(&mut cmd, FOREIGN_TIMEOUT).and_then(|output| {
-            output.ok_or_else(|| {
-                std::io::Error::other(format!(
-                    "gave up after {} minutes",
-                    FOREIGN_TIMEOUT.as_secs() / 60
-                ))
-            })
-        });
-    check(args, output)
+    check(args, bounded(&mut cmd, TIMEOUT))
+}
+
+/// `run` for a command that reaches the repo's own remote. Without a
+/// terminal nobody can stop a stalled transfer, and the caller holds the
+/// adopt lock, so it gets a deadline; in a terminal the user can, and ssh
+/// may ask for a passphrase there.
+pub(crate) fn run_remote(dir: &Path, args: &[&str]) -> Result<String> {
+    use std::io::IsTerminal;
+    let mut cmd = git();
+    cmd.args(STALLED).arg("-C").arg(dir).args(args);
+    if std::io::stdin().is_terminal() {
+        return check(args, cmd.output());
+    }
+    check(args, bounded(&mut cmd, TIMEOUT))
+}
+
+/// The output of `cmd`, or an error once `timeout` has passed.
+fn bounded(cmd: &mut Command, timeout: std::time::Duration) -> std::io::Result<Output> {
+    crate::process::output_with_timeout(cmd, timeout)?.ok_or_else(|| {
+        std::io::Error::other(format!("gave up after {} minutes", timeout.as_secs() / 60))
+    })
 }
 
 /// Which of `paths` the repo's or the user's ignore rules leave out.
@@ -148,7 +165,9 @@ pub(crate) fn classify(message: &str) -> Failure {
         "error: 403",
         "Host key verification failed",
     ];
-    const OFFLINE: [&str; 9] = [
+    const OFFLINE: [&str; 10] = [
+        // rosamta's own deadline for a transfer that stalls.
+        "gave up after",
         "Could not resolve host",
         "Could not read from remote repository",
         "unable to access",
@@ -362,6 +381,28 @@ pub(crate) mod tests {
             Err(Error::Git { message, .. }) => classify(&message),
             other => panic!("expected a git failure, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn a_transfer_that_stalls_gives_up_and_counts_as_offline() {
+        isolate();
+        let dir = tempfile::tempdir().unwrap();
+        // An ssh that never answers.
+        let mut cmd = git();
+        cmd.arg("-C").arg(dir.path()).args([
+            "-c",
+            "core.sshCommand=sh -c 'sleep 30' --",
+            "ls-remote",
+            "ssh://host.invalid/repo",
+        ]);
+        let started = std::time::Instant::now();
+        let timeout = std::time::Duration::from_millis(300);
+        let Err(Error::Git { message, .. }) = check(&["ls-remote"], bounded(&mut cmd, timeout))
+        else {
+            panic!("expected the deadline to end it");
+        };
+        assert!(started.elapsed() < std::time::Duration::from_secs(10));
+        assert_eq!(classify(&message), Failure::Offline, "{message}");
     }
 
     /// A bare remote and two clones of it.
