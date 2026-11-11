@@ -365,17 +365,25 @@ pub fn around_shells(ctx: &Context, shells: impl FnOnce() -> Result<Applied>) ->
     Ok(applied)
 }
 
-/// Whether `before` scripts wait to run, which may install or sign in to a
-/// secret source the templates use.
-pub fn before_scripts_pending(ctx: &Context) -> bool {
+/// Whether externals to download or `before` scripts wait to run ahead of
+/// the dotfiles: either may install or sign in to a secret source the
+/// templates use.
+pub fn setup_pending(ctx: &Context) -> bool {
+    use crate::externals::Action;
     use crate::scripts::{Timing, apply as scripts};
-    crate::adopt::host_config(ctx)
+    let externals = crate::externals::plan(ctx).map_or(true, |steps| {
+        steps
+            .iter()
+            .any(|step| matches!(step.action, Action::Downloaded | Action::Updated))
+    });
+    let scripts = crate::adopt::host_config(ctx)
         .and_then(|host| scripts::pending(ctx, &host))
         .map_or(true, |pending| {
             pending
                 .iter()
                 .any(|pending| pending.script.timing == Timing::Before)
-        })
+        });
+    externals || scripts
 }
 
 /// Deploy dotfiles after the shells switched.
