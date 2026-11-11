@@ -811,6 +811,32 @@ fn a_nested_shell_runs_env_snippets_again_but_not_the_exports() {
     }
 }
 
+/// The env loader sources a snippet in two branches (first shell, nested
+/// shell); ejected code holds it once.
+#[test]
+fn ejected_env_snippets_are_pasted_once() {
+    let home = Home::new();
+    home.cmd("rsmt").arg("init").assert().success();
+    home.write(
+        "modules/opts.toml",
+        "phase = \"env\"\n[raw]\nbash = 'EJECTED=1'\nzsh = 'EJECTED=1'\n",
+    );
+    apply(&home);
+    eject(&home);
+    let pasted: Vec<(&str, usize)> = rc_files(&home)
+        .into_iter()
+        .filter_map(|(rel, content)| {
+            let count = String::from_utf8(content?)
+                .unwrap()
+                .matches("EJECTED=1")
+                .count();
+            (count > 0).then_some((rel, count))
+        })
+        .collect();
+    assert!(!pasted.is_empty());
+    assert!(pasted.iter().all(|(_, count)| *count == 1), "{pasted:?}");
+}
+
 #[test]
 fn ejected_code_keeps_return_local_and_env_once() {
     let home = Home::new();
