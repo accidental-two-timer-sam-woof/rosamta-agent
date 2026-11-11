@@ -1,6 +1,6 @@
 # Third-party notices
 
-rosamta includes the following crates, and the secret detection rules listed last. Regenerate this file with `cargo about generate --workspace about.md.hbs -o THIRD_PARTY_NOTICES.md`.
+rosamta includes the following crates, and the secret detection rules listed last. Regenerate this file with `cargo about generate --workspace -c packaging/about.toml packaging/about.md.hbs -o THIRD_PARTY_NOTICES.md`.
 
 ## BSD Zero Clause License
 
@@ -12416,7 +12416,7 @@ the following restrictions:
 
 ## gitleaks rules
 
-`crates/rosamta-core/rules/gitleaks.toml` is the default rule set of [gitleaks](https://github.com/gitleaks/gitleaks) v8.30.1, MIT License.
+`crates/core/rules/gitleaks.toml` is the default rule set of [gitleaks](https://github.com/gitleaks/gitleaks) v8.30.1, MIT License.
 
 ```
 MIT License

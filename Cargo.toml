@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members = ["crates/rosamta-core", "crates/rosamta", "crates/rosamta-gui"]
+members = ["crates/core", "crates/cli", "crates/gui"]
 
 [workspace.package]
 version = "0.1.0-rc.1"
@@ -9,4 +9,4 @@ license = "Apache-2.0"
 repository = "https://github.com/accidental-two-timer-sam-woof/rosamta-agent"
 
 [workspace.dependencies]
-rosamta-core = { path = "crates/rosamta-core" }
+rosamta-core = { path = "crates/core" }
