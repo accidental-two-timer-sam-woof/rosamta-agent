@@ -18,6 +18,7 @@ pub mod host;
 pub mod i18n;
 pub mod include;
 pub mod paths;
+pub mod problems;
 mod process;
 pub mod render;
 pub mod repo;

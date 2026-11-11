@@ -115,6 +115,11 @@ fn signing(message: &str) -> String {
     format!("commit signing failed: {message}")
 }
 
+/// The name of the remote a sync uses, if the repo has one.
+pub(crate) fn remote_name(repo_dir: &Path) -> Option<String> {
+    Some(Remote::find(repo_dir).ok()??.name)
+}
+
 /// The remote and branch this repo publishes to.
 struct Remote {
     name: String,
@@ -642,6 +647,18 @@ mod tests {
 
     use super::*;
     use crate::paths::Paths;
+
+    /// A repo may name its one remote something other than `origin`.
+    #[test]
+    fn the_remote_shown_is_the_one_a_sync_uses() {
+        git::tests::isolate();
+        let dir = tempfile::tempdir().unwrap();
+        git::run(dir.path(), &["init", "--quiet"]).unwrap();
+        assert_eq!(repo::remote(dir.path()), None);
+        let url = "https://example.com/dotfiles.git";
+        git::run(dir.path(), &["remote", "add", "backup", url]).unwrap();
+        assert_eq!(repo::remote(dir.path()).as_deref(), Some(url));
+    }
 
     /// With `publish = "manual"` the background service's sync only pulls.
     #[test]

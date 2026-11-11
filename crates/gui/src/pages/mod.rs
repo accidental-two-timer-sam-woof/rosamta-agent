@@ -1,25 +1,24 @@
 //! Pages, and the pieces they share.
 
-pub mod dotfiles;
 pub mod history;
 pub mod import;
-pub mod modules;
-pub mod overview;
+pub mod library;
 pub mod review;
 pub mod settings;
 pub mod setup;
 
-use gpui_kit::component::button::{Button, ButtonCustomVariant, ButtonGroup, ButtonVariants};
-use gpui_kit::component::{ActiveTheme, Selectable, h_flex, v_flex};
-use gpui_kit::prelude::FluentBuilder as _;
+use gpui_kit::assets::IconName;
+use gpui_kit::component::button::{Button, ButtonCustomVariant, ButtonVariants};
+use gpui_kit::component::tab::{Tab, TabBar};
+use gpui_kit::component::tooltip::Tooltip;
+use gpui_kit::component::{ActiveTheme, Icon, Sizable, TitleBar, h_flex, v_flex};
 use gpui_kit::*;
 
-use crate::theme::{Palette, palette, space::*};
+use crate::theme::{Palette, font, palette, radius, size, space::*};
 
-/// Badge colors by meaning.
+/// Badge colors by the state they stand for.
 #[derive(Clone, Copy)]
 pub enum Tone {
-    Accent,
     Ok,
     Warn,
     Plain,
@@ -28,29 +27,27 @@ pub enum Tone {
 impl Tone {
     fn colors(self, p: &Palette) -> (Hsla, Hsla) {
         match self {
-            Tone::Accent => (p.accent_soft, p.accent),
             Tone::Ok => (p.ok_soft, p.ok),
             Tone::Warn => (p.warn_soft, p.warn),
-            Tone::Plain => (p.code, p.muted),
+            Tone::Plain => (p.chip, p.muted),
         }
     }
 }
 
-/// A status or type label, the same width in every row.
+/// A state, in a capsule the same width in every row.
 pub fn badge(text: SharedString, tone: Tone, cx: &App) -> impl IntoElement {
     let (bg, fg) = tone.colors(&palette(cx));
     div()
         .flex_none()
-        .w(px(badge_width()))
+        .min_w(px(badge_width()))
         .px(px(S8))
         .h(px(S20))
         .line_height(px(S20))
-        .rounded(px(S4))
+        .rounded_full()
         .bg(bg)
         .text_color(fg)
-        .text_xs()
+        .text_size(px(font::CAPTION))
         .text_center()
-        .truncate()
         .child(text)
 }
 
@@ -65,13 +62,16 @@ fn badge_width() -> f32 {
 pub fn count_badge(count: usize, cx: &App) -> impl IntoElement {
     let p = palette(cx);
     div()
-        .h(px(S20))
-        .line_height(px(S20))
-        .px(px(S8))
+        .flex_none()
+        .min_w(px(S20))
+        .h(px(18.))
+        .line_height(px(18.))
+        .px(px(6.))
         .rounded_full()
         .bg(p.accent)
         .text_color(p.surface)
-        .text_xs()
+        .text_size(px(font::CAPTION))
+        .text_center()
         .child(count.to_string())
 }
 
@@ -85,81 +85,97 @@ pub fn dot(running: bool, cx: &App) -> impl IntoElement {
         .bg(if running { p.ok } else { p.line_strong })
 }
 
-/// A page's title, with its actions on the right.
-pub fn header(title: SharedString, actions: impl IntoElement, cx: &App) -> impl IntoElement {
-    h_flex()
-        .flex_none()
-        .px(px(S40))
-        .pt(px(S32))
-        .pb(px(S24))
-        .gap(px(S12))
-        .child(
-            div()
-                .flex_1()
-                .text_xl()
-                .font_weight(FontWeight::SEMIBOLD)
-                .text_color(palette(cx).text)
-                .child(title),
-        )
-        .child(actions)
-}
-
-/// A page: its header and scrolling content.
-pub fn page(
-    id: &'static str,
+/// The bar over a page: its title, what switches the view, and the page's
+/// actions at the trailing end. It is the window's title bar: it drags the
+/// window, and holds the window's buttons where the system draws none.
+pub fn toolbar(
     title: SharedString,
-    actions: impl IntoElement,
-    body: impl IntoElement,
+    leading: impl IntoElement,
+    trailing: impl IntoElement,
+    sidebar: bool,
     cx: &App,
 ) -> impl IntoElement {
-    v_flex()
-        .size_full()
-        .child(header(title, actions, cx))
+    let p = palette(cx);
+    // Without the sidebar, macOS draws the window's buttons over this bar.
+    let inset = if cfg!(target_os = "macos") && !sidebar {
+        88.
+    } else {
+        S40
+    };
+    TitleBar::new()
+        .h(px(size::TOOLBAR))
+        .pl(px(inset))
+        .pr(px(S24))
+        .bg(p.bg)
+        .border_color(p.line)
         .child(
-            div()
-                .id(id)
+            h_flex()
                 .flex_1()
-                .min_h_0()
-                .overflow_y_scroll()
-                .px(px(S40))
-                .pb(px(S48))
-                .child(body),
+                .min_w_0()
+                .gap(px(S12))
+                .child(
+                    div()
+                        .flex_none()
+                        .text_size(px(font::TITLE))
+                        .font_weight(FontWeight::SEMIBOLD)
+                        .child(title),
+                )
+                .child(leading)
+                .child(div().flex_1())
+                .child(trailing),
         )
+}
+
+/// A page's scrolling content, under its toolbar.
+pub fn body(id: &'static str, content: impl IntoElement) -> impl IntoElement {
+    div()
+        .id(id)
+        .flex_1()
+        .min_h_0()
+        .overflow_y_scroll()
+        .px(px(S40))
+        .pt(px(S24))
+        .pb(px(S32))
+        .child(content)
+}
+
+/// The frame around a group of rows.
+pub fn frame(cx: &App) -> Div {
+    let p = palette(cx);
+    v_flex()
+        .rounded(px(radius::BOX))
+        .border_1()
+        .border_color(p.line)
+        .bg(p.surface)
+        .overflow_hidden()
 }
 
 /// A titled group of rows.
-pub fn section(title: SharedString, body: impl IntoElement, cx: &App) -> impl IntoElement {
-    let p = palette(cx);
+pub fn section(title: SharedString, rows: impl IntoElement, cx: &App) -> Div {
     v_flex()
         .gap(px(S12))
-        .child(
-            div()
-                .text_sm()
-                .font_weight(FontWeight::SEMIBOLD)
-                .text_color(p.muted)
-                .child(title),
-        )
-        .child(
-            v_flex()
-                .rounded(px(S8))
-                .border_1()
-                .border_color(p.line)
-                .bg(p.surface)
-                .overflow_hidden()
-                // Hides the last row's rule under the frame.
-                .child(div().mb(px(-1.)).child(body)),
-        )
+        .child(heading(title, cx))
+        // Hides the last row's rule under the frame.
+        .child(frame(cx).child(div().mb(px(-1.)).child(rows)))
 }
 
-/// The main action: a filled capsule in the accent color.
+pub fn heading(title: SharedString, cx: &App) -> impl IntoElement {
+    div()
+        .px(px(S4))
+        .font_weight(FontWeight::SEMIBOLD)
+        .text_color(palette(cx).muted)
+        .child(title)
+}
+
+/// The main action: a filled capsule in the accent color. One per screen,
+/// at the trailing end.
 pub fn prominent(button: Button) -> Button {
-    button.primary().rounded_full().shadow_sm()
+    button.primary().rounded_full()
 }
 
-/// Every other action: a translucent capsule with a hairline edge, like
-/// glass over the page. gpui-kit edges a custom button in its color and
-/// fills it with a fifth of that color at rest.
-pub fn glass(button: Button, cx: &App) -> Button {
+/// Any other action: a capsule with a hairline edge. gpui-kit edges a
+/// custom button in its color and fills it with a fifth of that at rest.
+pub fn bordered(button: Button, cx: &App) -> Button {
     let p = palette(cx);
     let white = |alpha| hsla(0., 0., 1., alpha);
     let (hover, active) = if cx.theme().is_dark() {
@@ -169,141 +185,243 @@ pub fn glass(button: Button, cx: &App) -> Button {
     };
     button.rounded_full().border_1().custom(
         ButtonCustomVariant::new(cx)
-            .color(p.line)
+            .color(p.line_strong)
             .foreground(p.text)
             .hover(hover)
             .active(active),
     )
 }
 
-/// A quiet action: text only until hovered.
-pub fn ghost(button: Button) -> Button {
+/// An action that dismisses: text only until hovered.
+pub fn borderless(button: Button) -> Button {
     button.ghost().rounded_full()
 }
 
-/// A choice of one value: a capsule track holding a pill per option.
-pub fn segments(group: ButtonGroup, cx: &App) -> ButtonGroup {
-    group
-        .p(px(2.))
-        .gap(px(2.))
+/// An action shown as its icon alone; pointing at it says what it does.
+pub fn icon_button(id: impl Into<ElementId>, icon: IconName, tip: SharedString) -> Button {
+    Button::new(id)
+        .icon(icon)
+        .ghost()
+        .small()
         .rounded_full()
-        .bg(palette(cx).line)
+        .tooltip(tip)
 }
 
-/// One option of `segments`: the chosen one is a raised pill. Its colors
-/// are the button's own so they hold while the choice is disabled.
-pub fn segment(button: Button, selected: bool, cx: &App) -> Button {
-    let button = button.selected(selected).ghost().rounded_full();
-    if !selected {
-        return button;
-    }
-    let p = palette(cx);
-    let pill = if cx.theme().is_dark() {
-        hsla(0., 0., 1., 0.14)
-    } else {
-        p.surface
-    };
-    button.bg(pill).text_color(p.text).shadow_sm()
+/// A property shown as an icon; pointing at it says what it means.
+pub fn hint(
+    id: impl Into<ElementId>,
+    icon: IconName,
+    tip: SharedString,
+    cx: &App,
+) -> impl IntoElement {
+    div()
+        .id(id)
+        .flex_none()
+        .w(px(S20))
+        .flex()
+        .justify_center()
+        .child(Icon::new(icon).size(px(14.)).text_color(palette(cx).muted))
+        .tooltip(move |window, cx| Tooltip::new(tip.clone()).build(window, cx))
 }
 
-/// One line inside a section, ruled from the next.
+/// A choice of one value or view; the chosen one slides under its label.
+/// `options` are each label and whether it can be chosen.
+pub fn segmented(
+    id: impl Into<ElementId>,
+    options: impl IntoIterator<Item = (SharedString, bool)>,
+    selected: usize,
+    on_pick: impl Fn(&usize, &mut Window, &mut App) + 'static,
+) -> TabBar {
+    TabBar::new(id)
+        .segmented()
+        .selected_index(selected)
+        .children(
+            options
+                .into_iter()
+                .map(|(label, enabled)| Tab::new().label(label).disabled(!enabled)),
+        )
+        .on_click(on_pick)
+}
+
+/// One line inside a frame, ruled from the next.
 pub fn row(cx: &App) -> Div {
-    let p = palette(cx);
     h_flex()
         .min_h(px(S40))
         .px(px(S16))
-        .py(px(S8))
-        .gap(px(S16))
-        .text_sm()
+        .py(px(S4))
+        .gap(px(S12))
         .border_b_1()
-        .border_color(p.line)
-}
-
-/// A label column for label–value rows.
-pub fn label(text: SharedString, cx: &App) -> impl IntoElement {
-    div()
-        .flex_none()
-        .w(px(160.))
-        .text_color(palette(cx).muted)
-        .child(text)
+        .border_color(palette(cx).line)
 }
 
 pub fn mono(text: impl Into<SharedString>, cx: &App) -> Div {
     div()
         .font_family(cx.theme().mono_font_family.clone())
-        .text_xs()
+        .text_size(px(font::MONO))
         .child(text.into())
 }
 
-/// Text in the middle of an empty list.
+/// Text in the middle of where a list or a detail would be.
 pub fn empty(text: SharedString, cx: &App) -> impl IntoElement {
     div()
-        .py(px(S48))
-        .text_center()
-        .text_sm()
+        .size_full()
+        .min_h(px(160.))
+        .flex()
+        .items_center()
+        .justify_center()
         .text_color(palette(cx).muted)
         .child(text)
 }
 
-/// A unified diff, added and removed lines tinted.
+/// A named block of a detail: a header bar with what it is about and its
+/// action, over its content.
+pub fn card(
+    title: SharedString,
+    subject: Option<SharedString>,
+    action: Option<AnyElement>,
+    content: impl IntoElement,
+    cx: &App,
+) -> Div {
+    let p = palette(cx);
+    frame(cx)
+        .child(
+            h_flex()
+                .min_h(px(S40))
+                .pl(px(S16))
+                .pr(px(S8))
+                .gap(px(S12))
+                .bg(p.well)
+                .border_b_1()
+                .border_color(p.line)
+                .child(
+                    div()
+                        .flex_none()
+                        .font_weight(FontWeight::SEMIBOLD)
+                        .child(title),
+                )
+                .child(div().flex_1().min_w_0().children(
+                    subject.map(|subject| mono(subject, cx).truncate().text_color(p.muted)),
+                ))
+                .children(action),
+        )
+        .child(content)
+}
+
+/// One numbered line of code: its number, an added or removed mark, the text.
+fn line(number: Option<u32>, mark: &str, text: &str, cx: &App) -> Div {
+    h_flex()
+        .items_start()
+        .min_h(px(S20))
+        .line_height(px(S20))
+        .child(
+            div()
+                .flex_none()
+                .w(px(44.))
+                .pr(px(S12))
+                .text_right()
+                .text_color(palette(cx).muted)
+                .children(number.map(|number| number.to_string())),
+        )
+        .child(
+            div()
+                .flex_none()
+                .w(px(S16))
+                .child(SharedString::from(mark.to_string())),
+        )
+        .child(
+            div()
+                .flex_1()
+                .min_w_0()
+                .child(SharedString::from(text.to_string())),
+        )
+}
+
+fn listing(cx: &App) -> Div {
+    v_flex()
+        .py(px(S8))
+        .overflow_hidden()
+        .font_family(cx.theme().mono_font_family.clone())
+        .text_size(px(font::MONO))
+}
+
+/// A whole file, its lines numbered.
+pub fn code(text: &str, cx: &App) -> impl IntoElement {
+    listing(cx).children(
+        text.lines()
+            .zip(1..)
+            .map(|(text, number)| line(Some(number), "", text, cx)),
+    )
+}
+
+/// A unified diff: lines numbered, added and removed ones tinted.
 pub fn diff(text: &str, cx: &App) -> impl IntoElement {
     let p = palette(cx);
-    let font = cx.theme().mono_font_family.clone();
-    v_flex()
-        .rounded(px(S8))
-        .bg(p.code)
-        .py(px(S8))
-        .font_family(font)
-        .text_xs()
-        .children(without_header(text).map(|line| {
-            let tint = if line.starts_with('+') {
-                Some((p.ok_soft, p.ok))
-            } else if line.starts_with('-') {
-                Some((p.warn_soft, p.warn))
-            } else {
-                None
+    listing(cx).children(numbered(text).into_iter().map(|(number, text)| {
+        let Some(number) = number else {
+            return line(None, "", "⋯", cx).text_color(p.muted);
+        };
+        let (mark, rest) = text.split_at(text.len().min(1));
+        let row = line(Some(number), mark.trim(), rest, cx);
+        match mark {
+            "+" => row.bg(p.ok_soft).text_color(p.ok),
+            "-" => row.bg(p.danger_soft).text_color(p.danger),
+            _ => row,
+        }
+    }))
+}
+
+/// A diff's lines from the first hunk on, each with its number in the file
+/// it is from: the old one for removed and unchanged lines, the new one for
+/// added lines. A line without a number is the gap between two hunks.
+fn numbered(text: &str) -> Vec<(Option<u32>, &str)> {
+    let (mut old, mut new) = (0, 0);
+    let mut out = Vec::new();
+    for text in text.lines().skip_while(|line| !line.starts_with("@@")) {
+        if let Some(header) = text.strip_prefix("@@ -") {
+            // `@@ -old[,count] +new[,count] @@`
+            let start = |part: Option<&str>| {
+                let digits = part?.trim_start_matches('+').split(',').next()?;
+                digits.parse::<u32>().ok()
             };
-            let muted =
-                line.starts_with("@@") || line.starts_with("+++") || line.starts_with("---");
-            div()
-                .px(px(S12))
-                .whitespace_nowrap()
-                .when_some(tint, |line, (bg, fg)| line.bg(bg).text_color(fg))
-                .when(muted, |line| line.text_color(p.muted))
-                .child(SharedString::from(line.to_string()))
-        }))
-}
-
-/// The lines from the first hunk on: the title already names the file.
-fn without_header(text: &str) -> impl Iterator<Item = &str> {
-    text.lines().skip_while(|line| !line.starts_with("@@"))
-}
-
-/// A code block for whole files.
-pub fn code(text: &str, cx: &App) -> impl IntoElement {
-    let p = palette(cx);
-    v_flex()
-        .rounded(px(S8))
-        .bg(p.code)
-        .px(px(S12))
-        .py(px(S8))
-        .font_family(cx.theme().mono_font_family.clone())
-        .text_xs()
-        .children(text.lines().map(|line| {
-            div()
-                .min_h(px(S16))
-                .child(SharedString::from(line.to_string()))
-        }))
+            let mut parts = header.split(' ');
+            (old, new) = (
+                start(parts.next()).unwrap_or(1),
+                start(parts.next()).unwrap_or(1),
+            );
+            if !out.is_empty() {
+                out.push((None, ""));
+            }
+        } else if text.starts_with('+') {
+            out.push((Some(new), text));
+            new += 1;
+        } else if !text.starts_with('\\') {
+            // Not "\ No newline at end of file".
+            out.push((Some(old), text));
+            old += 1;
+            new += u32::from(!text.starts_with('-'));
+        }
+    }
+    out
 }
 
 #[cfg(test)]
 mod tests {
-    use super::without_header;
+    use super::numbered;
 
     #[test]
-    fn diffs_keep_removed_lines_that_look_like_headers() {
-        let text = "--- a\n+++ b\n@@ -1,2 +1,1 @@\n--- comment\n+++ added\n";
-        let lines: Vec<&str> = without_header(text).collect();
-        assert_eq!(lines, ["@@ -1,2 +1,1 @@", "--- comment", "+++ added"]);
+    fn diff_lines_are_numbered_by_the_file_they_are_from() {
+        let text = "--- a\n+++ b\n@@ -6,3 +6,2 @@\n keep\n--- comment\n+++ added\n\\ No newline at end of file\n@@ -20 +19,2 @@\n last\n+more\n";
+        assert_eq!(
+            numbered(text),
+            [
+                (Some(6), " keep"),
+                // Removed and added lines that look like a diff's header.
+                (Some(7), "--- comment"),
+                (Some(7), "+++ added"),
+                (None, ""),
+                (Some(20), " last"),
+                (Some(20), "+more"),
+            ]
+        );
     }
 }

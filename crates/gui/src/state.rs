@@ -12,6 +12,7 @@ use rosamta_core::daemon::instance;
 use rosamta_core::daemon::service::{self, Service};
 use rosamta_core::dotfiles::{self, Choice};
 use rosamta_core::host;
+use rosamta_core::problems::{self, Problem};
 use rosamta_core::repo::{self, CommitInfo};
 use rosamta_core::sync::{self, SyncState};
 
@@ -48,12 +49,16 @@ pub struct DotfileRow {
 
 #[derive(Clone)]
 pub struct Snapshot {
+    /// Read from core at least once: until then nothing is known.
+    pub loaded: bool,
     /// This host has `host.toml` and a repo.
     pub ready: bool,
     pub host: Option<HostConfig>,
-    pub host_file: PathBuf,
     pub home: PathBuf,
     pub queue: Vec<QueueItem>,
+    /// What needs the user besides the queue, as the background service
+    /// would notify it.
+    pub problems: Vec<Problem>,
     pub sync: SyncState,
     pub running: bool,
     pub started_at: Option<u64>,
@@ -64,8 +69,6 @@ pub struct Snapshot {
     pub dotfiles: Vec<DotfileRow>,
     pub commits: Vec<CommitInfo>,
     pub snapshots: Vec<CommitInfo>,
-    /// The first thing that could not be read.
-    pub problem: Option<String>,
     /// Before setup: chezmoi has a source to import.
     pub chezmoi: bool,
 }
@@ -73,11 +76,12 @@ pub struct Snapshot {
 impl Snapshot {
     pub fn empty() -> Self {
         Snapshot {
+            loaded: false,
             ready: false,
             host: None,
-            host_file: PathBuf::new(),
             home: PathBuf::new(),
             queue: Vec::new(),
+            problems: Vec::new(),
             sync: SyncState::default(),
             running: false,
             started_at: None,
@@ -88,7 +92,6 @@ impl Snapshot {
             dotfiles: Vec::new(),
             commits: Vec::new(),
             snapshots: Vec::new(),
-            problem: None,
             chezmoi: false,
         }
     }
@@ -97,20 +100,23 @@ impl Snapshot {
 /// Read everything core keeps for this host.
 pub fn load() -> Snapshot {
     let mut out = Snapshot::empty();
+    out.loaded = true;
     let ctx = match Context::from_env() {
         Ok(ctx) => ctx,
         Err(err) => {
-            out.problem = Some(err.to_string());
+            out.problems.push(unread(&err));
             return out;
         }
     };
+    // The first thing that could not be read.
+    let mut unreadable = None;
     let mut note = |err: rosamta_core::Error| {
-        out.problem.get_or_insert(err.to_string());
+        unreadable.get_or_insert_with(|| unread(&err));
     };
     let repo_dir = ctx.paths.repo();
     out.home = ctx.home.clone();
-    out.host_file = ctx.paths.host_config();
-    out.ready = out.host_file.is_file() && repo_dir.join(".git").exists();
+    let host_file = ctx.paths.host_config();
+    out.ready = host_file.is_file() && repo_dir.join(".git").exists();
     let state = ctx.paths.state();
     out.running = instance::running(state).unwrap_or(false);
     out.started_at = instance::load(state)
@@ -128,7 +134,7 @@ pub fn load() -> Snapshot {
         out.chezmoi = chezmoi::source_dir(&ctx, &options).is_ok();
         return out;
     }
-    match host::load(&out.host_file) {
+    match host::load(&host_file) {
         Ok(host) => out.host = Some(host),
         Err(err) => note(err),
     }
@@ -154,7 +160,22 @@ pub fn load() -> Snapshot {
     }
     out.commits = repo::recent_commits(&repo_dir, 20);
     out.snapshots = repo::recent_commits(&state.join("snapshots"), 20);
+    out.problems.extend(unreadable);
+    if let Some(host) = &out.host {
+        let missing: Vec<PathBuf> = out
+            .shells
+            .iter()
+            .flat_map(|shell| shell.missing.iter().cloned())
+            .collect();
+        out.problems.extend(problems::invalid(&repo_dir));
+        out.problems.extend(problems::current(&ctx, host, &missing));
+    }
     out
+}
+
+/// Something core keeps could not be read.
+fn unread(err: &rosamta_core::Error) -> Problem {
+    Problem::new("read", crate::text::plain(&err.to_string()).to_string())
 }
 
 fn modules(ctx: &Context) -> rosamta_core::Result<Vec<ModuleRow>> {
