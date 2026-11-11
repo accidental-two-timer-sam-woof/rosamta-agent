@@ -1091,8 +1091,7 @@ pub struct ShellStatus {
     pub version: Option<(u32, u32)>,
     /// Startup files holding rosamta's block.
     pub hooked: Vec<PathBuf>,
-    /// Startup files that lost the block apply keeps there, so this shell
-    /// no longer loads rosamta.
+    /// Startup files that lost rosamta's block.
     pub missing: Vec<PathBuf>,
 }
 
@@ -1119,17 +1118,13 @@ pub fn shells(ctx: &Context) -> Result<Vec<ShellStatus>> {
         .collect()
 }
 
-/// [`ShellStatus::missing`] of every shell, for the layout in `env`.
 pub fn missing_hooks(ctx: &Context, env: &HookEnv) -> Vec<PathBuf> {
     kept_hooked(ctx, &ctx.installed())
         .into_iter()
-        // A file whose markers do not pair up is apply's to report.
         .flat_map(|shell| hooks::missing(shell, env).unwrap_or_default())
         .collect()
 }
 
-/// Shells apply keeps hooked: installed and supported, served by the
-/// current version, and not unhooked.
 fn kept_hooked(ctx: &Context, installed: &[Detected]) -> Vec<Shell> {
     let generated_dir = ctx.paths.generated();
     let Some(id) = generated::current_id(&generated_dir) else {
