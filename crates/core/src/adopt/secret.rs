@@ -36,8 +36,7 @@ fn known_format(text: &str) -> Option<&'static str> {
 fn literal_assignments() -> &'static [Regex; 2] {
     static RULES: OnceLock<[Regex; 2]> = OnceLock::new();
     RULES.get_or_init(|| {
-        let quoted = r#"(?:'[^']+'|"(?:[^"$`\\]|\\.)+")"#;
-        let value = format!(r#"(?:{quoted}|(?:[^\s'"$`\\;()]|\\.)+)"#);
+        let (quoted, value) = (QUOTED, VALUE);
         let start = r"(?m)^\s*";
         let end = r"\s*(?:;|#|$)";
         [
@@ -53,7 +52,28 @@ fn literal_assignments() -> &'static [Regex; 2] {
     })
 }
 
-const SECRET_NAMES: [&str; 4] = ["KEY", "TOKEN", "SECRET", "PASSWORD"];
+/// A quoted literal, and a quoted or bare one: no expansion inside.
+const QUOTED: &str = r#"(?:'[^']+'|"(?:[^"$`\\]|\\.)+")"#;
+const VALUE: &str = r#"(?:'[^']+'|"(?:[^"$`\\]|\\.)+"|(?:[^\s'"$`\\;()]|\\.)+)"#;
+
+/// The names of every `NAME=literal` word in `command`, as in
+/// `export A=1 TOKEN=x` or `local -r KEY=x`.
+fn assigned_words(command: &str) -> impl Iterator<Item = &str> {
+    static WORD: OnceLock<Regex> = OnceLock::new();
+    let word = WORD
+        .get_or_init(|| Regex::new(&format!(r"(?:^|\s)([A-Za-z_][A-Za-z0-9_]*)={VALUE}")).unwrap());
+    word.captures_iter(command).filter_map(move |caps| {
+        // A value that goes on, as in `KEY=a$b` or `KEY="a"$b`, expands.
+        let rest = &command[caps.get(0)?.end()..];
+        rest.chars()
+            .next()
+            .is_none_or(|c| c.is_whitespace() || c == '#')
+            .then(|| caps.get(1).map(|name| name.as_str()))
+            .flatten()
+    })
+}
+
+const SECRET_NAMES: [&str; 6] = ["KEY", "TOKEN", "SECRET", "PASSWORD", "PASSWD", "PASSPHRASE"];
 /// Shannon entropy above this, over at least `MIN_LEN` characters, is suspicious.
 const MIN_ENTROPY: f64 = 4.0;
 const MIN_LEN: usize = 20;
@@ -82,12 +102,22 @@ fn secret_name(text: &str) -> bool {
         .flat_map(|part| part.split("&&"))
         .flat_map(|part| part.split("||"));
     std::iter::once(text).chain(commands).any(|text| {
-        literal_assignments().iter().any(|rule| {
-            rule.captures_iter(text).any(|caps| {
-                let name = caps[1].to_ascii_uppercase();
+        let leading = literal_assignments()
+            .iter()
+            .flat_map(|rule| rule.captures_iter(text).filter_map(|caps| caps.get(1)))
+            .any(|name| {
+                let name = name.as_str().to_ascii_uppercase();
                 SECRET_NAMES.iter().any(|word| name.contains(word))
-            })
-        })
+            });
+        // Later words are often shell locals such as `key_bindings` or
+        // `VI_KEYMAP`: only an upper-case name with the word as a part counts.
+        leading
+            || !text.trim_start().starts_with('#')
+                && assigned_words(text).any(|name| {
+                    name.bytes()
+                        .all(|b| b.is_ascii_uppercase() || b.is_ascii_digit() || b == b'_')
+                        && name.split('_').any(|part| SECRET_NAMES.contains(&part))
+                })
     })
 }
 
@@ -245,6 +275,19 @@ mod tests {
         ));
         assert!(!looks_secret("export SSH_KEY_PATH=$HOME/.ssh/id"));
         assert!(!looks_secret("export TOKEN_FILE=`cat x`"));
+        assert!(looks_secret("export A=1 API_TOKEN=abc123"));
+        assert!(looks_secret("declare -x DB_PASSWORD=hunter2"));
+        assert!(looks_secret("local -r SIGNING_KEY='abc'"));
+        assert!(looks_secret("env DEPLOY_TOKEN=abc ./deploy"));
+        assert!(looks_secret("export GPG_PASSPHRASE=correct-horse"));
+        assert!(!looks_secret("export A=1 SSH_KEY_PATH=$HOME/.ssh/id"));
+        assert!(!looks_secret("export A=1 API_TOKEN=abc$SUFFIX"));
+        assert!(!looks_secret("export A=1 API_TOKEN=\"abc\"$(cat x)"));
+        assert!(!looks_secret("typeset -g VI_KEYMAP=main"));
+        assert!(!looks_secret(
+            "local key_bindings=\"/usr/share/fzf/key-bindings.zsh\""
+        ));
+        assert!(!looks_secret("# parse valid KEY=VALUE pairs"));
     }
 
     /// The pre-push scan reads module TOML, where `=` has spaces around it.
