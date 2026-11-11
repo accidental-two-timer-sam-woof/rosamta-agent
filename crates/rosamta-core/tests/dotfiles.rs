@@ -470,6 +470,36 @@ fn restore_original_keeps_links_and_modes() {
     );
 }
 
+/// A snapshot taken before links and modes were kept writes through the
+/// link that is there, as restores did then.
+#[test]
+fn restore_original_writes_old_snapshots_through_links() {
+    let home = Home::new("ask");
+    write(&home.at("dots/zshrc"), "old\n");
+    std::os::unix::fs::symlink("dots/zshrc", home.at(".zshrc")).unwrap();
+    let snapshots = rosamta_core::snapshot::Snapshots::new(home.ctx.paths.state(), &home.ctx.home);
+    snapshots.save(&[home.at(".zshrc")], "test").unwrap();
+    fs::remove_file(snapshots.dir().join("original-meta.json")).unwrap();
+    write(&home.at("dots/zshrc"), "old\nhooked\n");
+    assert_eq!(
+        rosamta_core::apply::plan_restore(&home.ctx).unwrap().len(),
+        1
+    );
+
+    rosamta_core::apply::restore_original(&home.ctx).unwrap();
+
+    assert_eq!(
+        fs::read_link(home.at(".zshrc")).unwrap(),
+        Path::new("dots/zshrc")
+    );
+    assert_eq!(read(&home.at("dots/zshrc")), "old\n");
+    assert!(
+        rosamta_core::apply::plan_restore(&home.ctx)
+            .unwrap()
+            .is_empty()
+    );
+}
+
 #[test]
 fn eject_leaves_regular_files() {
     let home = Home::new("ask");
