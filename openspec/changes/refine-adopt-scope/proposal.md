@@ -11,7 +11,7 @@
 - 跨主機合併：本機接管到的內容與 repo 中只套用到其他主機的 module 相同（正規化後完全一致、來源 shell 相同）時，把本機加進該 module 的套用範圍，不另建 module；內容不同則照常另建。
 - `rsmt recent` 列出其他主機最近新增、本機還沒套用的 module 與 dotfile；`rsmt include` 把本機加進它們的套用範圍，需要放寬 OS、架構或 shell 時先列出並確認。
 - 沒有網路而無法推送時通知一次；有尚未推送的 commit 時每分鐘重試推送，成功後恢復原本的間隔。
-- App：總覽顯示其他主機最近新增的項目數，並可勾選加入本機；待處理頁顯示合併時對既有 module 的變更。
+- App：待處理頁列出其他主機最近新增的項目，並可加入本機；待處理頁顯示合併時對既有 module 的變更。
 - **BREAKING**：從 `.zshrc`、`.bashrc` 等檔案新接管的結構化內容不再套用到其他 shell；既有的 module 不改寫。
 
 ## Capabilities
@@ -28,7 +28,7 @@
 - `daemon`: 有尚未推送的 commit 時每分鐘重試。
 - `notifications`: 離線通知。
 - `config-repo`: `rsmt recent` 與 `rsmt include`。
-- `gui`: 總覽的最近新增項目、待處理頁的合併項目。
+- `gui`: 待處理頁的最近新增項目與合併項目。
 
 ## Impact
 
