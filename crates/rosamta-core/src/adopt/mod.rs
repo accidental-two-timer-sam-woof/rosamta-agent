@@ -233,6 +233,7 @@ pub fn scan(ctx: &Context) -> Result<Vec<Candidate>> {
             }
             let module = structured(ctx, &segment, &watched, &recognizers, barrier);
             if let Some(module) = &module
+                && settles(&loaded, shells, module)
                 && let Some((name, _)) = loaded
                     .iter()
                     .find(|(_, m)| runs_in(m, shells) && covers(m, module))
@@ -461,16 +462,33 @@ fn covers(existing: &Module, new: &Module) -> bool {
             .aliases
             .iter()
             .all(|(name, value)| existing.aliases.get(name) == Some(value))
-        && new
-            .path
-            .prepend
+        && in_order(&existing.path.prepend, &new.path.prepend)
+        && in_order(&existing.path.append, &new.path.append)
+}
+
+/// Whether `want` appears in `have` in the same order, gaps allowed.
+fn in_order(have: &[String], want: &[String]) -> bool {
+    let mut have = have.iter();
+    want.iter().all(|dir| have.any(|entry| entry == dir))
+}
+
+/// True when the modules that load here end up with each variable and alias
+/// `new` sets as `new` sets it: a later module may set another value.
+fn settles(loaded: &[(String, Module)], shells: &[Shell], new: &Module) -> bool {
+    let last = |get: &dyn Fn(&Module) -> Option<&String>| {
+        loaded
             .iter()
-            .all(|dir| existing.path.prepend.contains(dir))
+            .filter(|(_, module)| runs_in(module, shells))
+            .filter_map(|(_, module)| get(module))
+            .last()
+    };
+    new.env
+        .iter()
+        .all(|(name, value)| last(&|module| module.env.get(name)) == Some(value))
         && new
-            .path
-            .append
+            .aliases
             .iter()
-            .all(|dir| existing.path.append.contains(dir))
+            .all(|(name, value)| last(&|module| module.aliases.get(name)) == Some(value))
 }
 
 const GENERIC: [&str; 9] = [
