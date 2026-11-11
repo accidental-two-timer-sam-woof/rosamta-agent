@@ -948,10 +948,11 @@ pub(crate) fn unchanged(path: &Path, before: Option<&str>) -> Result<()> {
 
 /// Undo `change` in a file that may have been edited since rosamta wrote
 /// it: what rosamta took out goes back, and what was added since stays.
-fn give_back(scratch: &Path, change: &FileChange) -> Result<()> {
+/// Returns what the file holds now and what to write, writing nothing.
+fn given_back(scratch: &Path, change: &FileChange) -> Result<(Option<String>, Option<String>)> {
     let (before, after) = (change.before.as_deref(), change.after.as_deref());
     if unchanged(&change.path, after).is_ok() {
-        return replace(&change.path, after, before);
+        return Ok((change.after.clone(), change.before.clone()));
     }
     let current = read(&change.path)?;
     let merged = merge_back(
@@ -960,7 +961,28 @@ fn give_back(scratch: &Path, change: &FileChange) -> Result<()> {
         after.unwrap_or_default(),
         &current,
     )?;
-    replace(&change.path, Some(&current), Some(&merged))
+    Ok((Some(current), Some(merged)))
+}
+
+/// [`given_back`] for every file or for none: nothing is written until
+/// each file's text is known, and a failed write undoes the earlier ones.
+fn give_back_all(scratch: &Path, changes: &[&FileChange]) -> bool {
+    let Ok(texts) = changes
+        .iter()
+        .map(|change| given_back(scratch, change))
+        .collect::<Result<Vec<_>>>()
+    else {
+        return false;
+    };
+    for (done, (change, (now, back))) in changes.iter().zip(&texts).enumerate() {
+        if replace(&change.path, now.as_deref(), back.as_deref()).is_err() {
+            for (change, (now, back)) in changes.iter().zip(&texts).take(done) {
+                let _ = replace(&change.path, back.as_deref(), now.as_deref());
+            }
+            return false;
+        }
+    }
+    true
 }
 
 /// `current`, which grew out of `after`, with the changes from `after` back
@@ -1081,9 +1103,7 @@ pub fn execute(ctx: &Context, plan: Plan) -> Result<Vec<Adoption>> {
             // since, before the modules holding them go: a line in neither
             // would be lost to new shells, a line in both would run twice.
             let scratch = ctx.paths.state().join("merge");
-            let restored = replaced
-                .iter()
-                .all(|change| give_back(&scratch, change).is_ok());
+            let restored = give_back_all(&scratch, &replaced);
             if restored {
                 for change in &edited {
                     let _ = replace(
@@ -1640,6 +1660,28 @@ mod tests {
         }
         assert!(merged.starts_with("export A=1\n") && merged.ends_with("export Z=1\n"));
         assert_eq!(std::fs::read_dir(dir.path()).unwrap().count(), 0);
+    }
+
+    /// A file that cannot be given back keeps the others as they are, so no
+    /// line ends up in both a file and the module that stays.
+    #[test]
+    fn lines_go_back_to_every_file_or_to_none() {
+        let dir = tempfile::tempdir().unwrap();
+        let zshrc = dir.path().join(".zshrc");
+        std::fs::write(&zshrc, "export A=1\n").unwrap();
+        let unreadable = dir.path().join(".bashrc");
+        std::fs::create_dir(&unreadable).unwrap();
+        let change = |path: &Path| FileChange {
+            path: path.to_path_buf(),
+            before: Some("export A=1\nexport BUN=1\n".into()),
+            after: Some("export A=1\n".into()),
+        };
+        let (first, second) = (change(&zshrc), change(&unreadable));
+        assert!(!give_back_all(
+            &dir.path().join("merge"),
+            &[&first, &second]
+        ));
+        assert_eq!(std::fs::read_to_string(&zshrc).unwrap(), "export A=1\n");
     }
 
     fn module(text: &str) -> Module {
