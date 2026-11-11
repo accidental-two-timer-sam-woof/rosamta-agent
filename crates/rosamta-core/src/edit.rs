@@ -71,6 +71,14 @@ pub(crate) fn write_private(path: &Path, text: &str) -> Result<()> {
 pub(crate) fn write_atomic(path: &Path, text: &str) -> Result<()> {
     use std::io::Write;
     use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
+    // A link to a file that is not there (a dotfiles folder not cloned yet)
+    // stays a link: writing the file would replace it.
+    if path.is_symlink() && !path.exists() {
+        return Err(Error::Usage(format!(
+            "{} links to a file that does not exist",
+            path.display()
+        )));
+    }
     let target = std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
     let name = target
         .file_name()
@@ -220,6 +228,11 @@ mod tests {
         assert_eq!(std::fs::read_to_string(&real).unwrap(), "new\n");
         let mode = std::fs::metadata(&real).unwrap().permissions().mode();
         assert_eq!(mode & 0o777, 0o600);
+
+        // A link whose file is missing stays a link.
+        std::fs::remove_file(&real).unwrap();
+        assert!(write_atomic(&link, "new\n").is_err());
+        assert!(link.symlink_metadata().unwrap().file_type().is_symlink());
     }
 
     #[test]
