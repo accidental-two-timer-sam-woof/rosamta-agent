@@ -855,6 +855,30 @@ fn secrets_never_join_another_hosts_module() {
     );
 }
 
+/// A secret snippet adopted into a local module comes back as a duplicate
+/// of that local module, which then outlives restoring the first adoption.
+#[test]
+fn a_local_snippet_added_again_depends_on_its_local_module() {
+    if !has("zsh") {
+        return;
+    }
+    let login = "\nsome-cli login --key sk-proj-Zk3q9LmP2vR8tY6wB1nC4xJ7aa >/dev/null 2>&1 || :\n";
+    let home = hooked(&[(".zshrc", login)]);
+    let out = run(&home, &["adopt", "--yes"]);
+    let zshrc = read(&home, ".zshrc");
+    fs::write(home.root.join(".zshrc"), format!("{zshrc}{login}")).unwrap();
+    assert!(review(&home).is_empty());
+    let adoptions: serde_json::Value = serde_json::from_str(&adoptions_json(&home)).unwrap();
+    let records = adoptions["adoptions"].as_array().unwrap();
+    assert!(
+        records.len() == 2 && records.iter().all(|record| record["local"] == true),
+        "{adoptions}"
+    );
+    let module = records[0]["module"].as_str().unwrap().to_string();
+    run(&home, &["restore", &adopted_id(&out), "--yes"]);
+    assert!(Path::new(&module).exists(), "{module}");
+}
+
 #[test]
 fn the_same_lines_from_another_shell_get_their_own_module() {
     if !has("zsh") {
