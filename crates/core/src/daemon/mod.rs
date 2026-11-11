@@ -24,8 +24,9 @@ use crate::dotfiles::review::{self, Reason, WaitingFor};
 use crate::error::Result;
 use crate::hooks::HookEnv;
 use crate::i18n::{self, Lang};
+use crate::problems::{self, Problem};
 use crate::sync::{self, Outcome};
-use crate::{dotfiles, generated, host, validate};
+use crate::{dotfiles, generated, host};
 
 pub use notify::{Action, Note, Notifier};
 
@@ -605,21 +606,8 @@ impl Daemon {
     }
 
     fn apply_repo(&self) -> std::result::Result<(), (&'static str, String)> {
-        let repo = self.ctx.paths.repo();
-        let report = validate::validate(&repo).map_err(|err| ("invalid", err.to_string()))?;
-        if let Some((file, issue)) = report
-            .files
-            .iter()
-            .find_map(|file| Some((file, file.errors.first()?)))
-        {
-            let line = issue
-                .line
-                .map(|line| format!(":{line}"))
-                .unwrap_or_default();
-            return Err((
-                "invalid",
-                format!("{}{line}: {}", file.path.display(), issue.message),
-            ));
+        if let Some(problem) = problems::invalid(&self.ctx.paths.repo()) {
+            return Err(("invalid", problem.arg));
         }
         // A host that never applied keeps its shells as they are.
         if generated::current_id(&self.ctx.paths.generated()).is_none() {
@@ -966,78 +954,27 @@ impl Daemon {
     /// Notify each current problem once; one that cleared may notify again
     /// if it comes back.
     fn report_problems(&mut self) {
-        let mut problems: Vec<(&'static str, String)> = self.repo_problem.iter().cloned().collect();
+        let mut problems: Vec<Problem> = self
+            .repo_problem
+            .iter()
+            .map(|(kind, reason)| Problem::new(kind, reason.clone()))
+            .collect();
         let missing = apply::missing_hooks(&self.ctx, &self.env);
-        if !missing.is_empty() {
-            let files: Vec<String> = missing
-                .iter()
-                .map(|path| adopt::display(path, &self.ctx.home))
-                .collect();
-            problems.push(("hooks_missing", files.join(", ")));
-        }
-        if dotfiles::needs_key(&self.ctx).unwrap_or(false) {
-            problems.push(("locked", String::new()));
-        }
-        if let Ok(state) = sync::load_state(self.ctx.paths.state()) {
-            // Edits that could not be committed stop the pull with the
-            // publish attempt itself: one problem, notified as publishing.
-            let pull = state
-                .pull
-                .as_ref()
-                .filter(|pull| state.publish.as_ref() != Some(*pull));
-            for (attempt, pull) in [(state.publish.as_ref(), false), (pull, true)] {
-                let Some(attempt) = attempt else {
-                    continue;
-                };
-                let reason = attempt.reason.clone().unwrap_or_default();
-                let first = reason.lines().next().unwrap_or_default().to_string();
-                problems.push(match (attempt.outcome, pull) {
-                    (Outcome::Offline, false)
-                        if self.host.publish == SyncPolicy::Auto && state.unpushed > 0 =>
-                    {
-                        ("offline", state.unpushed.to_string())
-                    }
-                    (Outcome::Ok | Outcome::Offline, _) => continue,
-                    (Outcome::Conflict, _) => ("conflict", attempt.files.join(", ")),
-                    (Outcome::Failed, _) if reason.contains("upgrade rosamta") => {
-                        ("upgrade", String::new())
-                    }
-                    (Outcome::Failed, true) if attempt.applying => ("apply_failed", first),
-                    (Outcome::Failed, true) => ("pull_failed", first),
-                    (Outcome::Failed, false) => ("publish_failed", first),
-                    (Outcome::Blocked, true) => ("pull_blocked", first),
-                    (Outcome::Blocked, false) => ("publish_blocked", first),
-                });
-            }
-        }
-        // Pull and Publish can stop for the same reason.
-        problems.dedup();
+        problems.extend(problems::current(&self.ctx, &self.host, &missing));
         let state_dir = self.ctx.paths.state().to_path_buf();
         let Ok(Some(mut state)) = instance::load(&state_dir) else {
             return;
         };
         let mut keys: Vec<String> = Vec::new();
         let mut seen: Vec<String> = Vec::new();
-        for (kind, reason) in &problems {
+        for problem in &problems {
             // The daemon's own apply can fail the same way a pull's did.
-            // Being offline is one problem however many commits wait.
-            let key = if *kind == "offline" {
-                "offline:".to_string()
-            } else {
-                format!("{kind}:{reason}")
-            };
+            let key = problem.key();
             if keys.contains(&key) {
                 continue;
             }
             if !state.notified.contains(&key) {
-                let (text, arg) = match *kind {
-                    "conflict" => ("problem.conflict", "files"),
-                    "hooks_missing" => ("problem.hooks_missing", "files"),
-                    "offline" if reason == "1" => ("problem.offline_one", "count"),
-                    "offline" => ("problem.offline", "count"),
-                    _ => (&*format!("problem.{kind}"), "reason"),
-                };
-                let body = i18n::text(self.lang, text, &[(arg, reason)]);
+                let body = problem.text(self.lang);
                 if self.unshown.insert(key.clone()) {
                     self.log(&format!("notified: {body}"));
                 }

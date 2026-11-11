@@ -283,9 +283,11 @@ pub(crate) fn join_with(
     )
 }
 
-/// The URL of `origin`, if the repo has one.
+/// The URL of the remote a sync uses, if the repo has one.
 pub fn remote(repo_dir: &Path) -> Option<String> {
-    git::run(repo_dir, &["remote", "get-url", "origin"])
+    // Off a branch (in a rebase) a sync has no remote; `origin` is still the repo's.
+    let name = crate::sync::remote_name(repo_dir).unwrap_or_else(|| "origin".into());
+    git::run(repo_dir, &["remote", "get-url", &name])
         .ok()
         .map(|url| url.trim().to_string())
         .filter(|url| !url.is_empty())

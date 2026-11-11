@@ -1,10 +1,14 @@
-//! Items to review: the list, and for the selected one its diff and what
-//! accepting it would write.
+//! What needs the user: problems, items to decide on, and items that wait.
+//! The list, and for the selected row what it is about.
 
-use std::path::Path;
+use std::collections::hash_map::DefaultHasher;
+use std::hash::{Hash, Hasher};
+use std::path::{Path, PathBuf};
 
-use gpui_kit::component::button::{Button, ButtonGroup};
-use gpui_kit::component::{Disableable, h_flex, v_flex};
+use gpui_kit::assets::IconName;
+use gpui_kit::component::button::{Button, ButtonVariant};
+use gpui_kit::component::notification::Notification;
+use gpui_kit::component::{Disableable, Icon, WindowExt, h_flex, v_flex};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 use rosamta_core::adopt::{self, QueueItem, Scope};
@@ -13,25 +17,30 @@ use rosamta_core::dotfiles::{
     self,
     review::{Reason, WaitingFor},
 };
+use rosamta_core::problems::Problem;
 use rosamta_core::repo;
 use rosamta_core::scripts::{Run, apply::Why, review::ScriptItem, run::log_path};
 
-use super::{Tone, badge, code, diff, empty, header, mono};
+use super::{
+    bordered, borderless, card, code, diff, empty, frame, icon_button, mono, prominent, segmented,
+    toolbar,
+};
 use crate::actions;
-use crate::app::Rosamta;
-use crate::text::{t, tf, when};
-use crate::theme::{palette, space::*};
+use crate::app::{Rosamta, Selection};
+use crate::text::{lang, t, tf, when};
+use crate::theme::{FADE, font, palette, radius, size, space::*};
 
 /// What the selected item would change, read in the background.
 pub enum Detail {
     Rc {
-        /// Unified diffs of the rc files.
-        files: Vec<String>,
+        /// The rc files and their unified diffs.
+        files: Vec<(PathBuf, String)>,
         /// New module files: where, and their content.
         modules: Vec<(String, String)>,
     },
     Dotfile(String),
     Script {
+        path: PathBuf,
         text: String,
         /// The end of the last run's log, if it ran.
         log: Option<String>,
@@ -44,7 +53,10 @@ const SHOWN: usize = 64 * 1024;
 
 fn script_detail(core: &Core, script: &ScriptItem) -> rosamta_core::Result<Detail> {
     let path = core.paths.repo().join(&script.source);
-    let text = std::fs::read(&path).map_err(|source| rosamta_core::Error::Read { path, source })?;
+    let text = std::fs::read(&path).map_err(|source| rosamta_core::Error::Read {
+        path: path.clone(),
+        source,
+    })?;
     let log = std::fs::read(log_path(core, &script.source))
         .ok()
         .map(|log| {
@@ -59,6 +71,7 @@ fn script_detail(core: &Core, script: &ScriptItem) -> rosamta_core::Result<Detai
             String::from_utf8_lossy(&log[start..]).into_owned()
         });
     Ok(Detail::Script {
+        path,
         text: String::from_utf8_lossy(&text[..text.len().min(SHOWN)]).into_owned(),
         log,
     })
@@ -83,7 +96,8 @@ pub fn detail(item: &QueueItem, scope: Scope) -> Detail {
             .iter()
             .map(|change| {
                 let name = adopt::display(&change.path, &core.home);
-                apply::unified(&name, change.before.as_deref(), change.after.as_deref())
+                let text = apply::unified(&name, change.before.as_deref(), change.after.as_deref());
+                (change.path.clone(), text)
             })
             .collect();
         let (repo_dir, local) = (core.paths.repo(), core.paths.local());
@@ -101,22 +115,14 @@ pub fn detail(item: &QueueItem, scope: Scope) -> Detail {
             .collect();
         Ok(Detail::Rc { files, modules })
     };
-    read().unwrap_or_else(|err| Detail::Error(err.to_string()))
+    read().unwrap_or_else(|err| Detail::Error(crate::text::plain(&err.to_string()).to_string()))
 }
 
-pub fn item_badge(item: &QueueItem) -> (&'static str, Tone) {
-    if let Some(script) = &item.script {
-        return match script.why {
-            Why::Failed => ("badge.failed", Tone::Warn),
-            Why::New | Why::Changed => ("badge.script", Tone::Accent),
-        };
-    }
-    match item.dotfile.as_ref().map(|dotfile| dotfile.reason) {
-        Some(Reason::Conflict) => ("badge.conflict", Tone::Warn),
-        Some(Reason::Changed) => ("badge.changed", Tone::Accent),
-        Some(Reason::Waiting) => ("badge.waiting", Tone::Plain),
-        None => ("badge.adopt", Tone::Accent),
-    }
+/// Not a decision: the item cannot be made until something else happens.
+pub fn waits(item: &QueueItem) -> bool {
+    item.dotfile
+        .as_ref()
+        .is_some_and(|dotfile| dotfile.waiting.is_some())
 }
 
 pub fn waiting_text(waiting: &WaitingFor) -> SharedString {
@@ -142,295 +148,563 @@ pub fn item_title(item: &QueueItem, home: &Path) -> String {
     }
 }
 
-pub fn item_meta(item: &QueueItem, home: &Path) -> String {
-    let mut parts = Vec::new();
+/// What happened, in one line.
+fn item_what(item: &QueueItem, home: &Path) -> SharedString {
     if let Some(script) = &item.script {
-        parts.push(t(match script.run {
+        let run = t(match script.run {
             Run::Once => "item.run_once",
             Run::Onchange => "item.run_onchange",
-        }));
-        parts.push(t(match script.why {
+        });
+        let why = t(match script.why {
             Why::New => "item.why_new",
             Why::Changed => "item.why_changed",
             Why::Failed => "item.why_failed",
-        }));
-    } else if item.dotfile.is_none() {
-        parts.push(adopt::display(&item.file, home).into());
-        let (start, end) = (item.start.to_string(), item.end.to_string());
-        let lines = if item.start == item.end {
-            tf("item.line", &[("start", &start)])
-        } else {
-            tf("item.lines", &[("start", &start), ("end", &end)])
-        };
-        parts.push(lines);
+        });
+        return format!("{run} · {why}").into();
     }
-    if item.detected_at > 0 {
-        parts.push(when(item.detected_at).into());
+    let Some(dotfile) = &item.dotfile else {
+        let file = adopt::display(&item.file, home);
+        return tf("item.new_content", &[("file", &file)]);
+    };
+    match (&dotfile.waiting, dotfile.reason) {
+        (Some(waiting), _) => waiting_text(waiting),
+        (None, Reason::Conflict) => t("item.both_changed"),
+        (None, _) => t("item.local_changed"),
     }
-    parts.join(" · ")
+}
+
+fn time(at: u64) -> Option<String> {
+    (at > 0).then(|| when(at))
+}
+
+/// A problem's short name; its full text is what the notification says.
+fn problem_title(problem: &Problem) -> SharedString {
+    t(&format!("problem_title.{}", problem.kind))
+}
+
+/// What a problem is about, in one line.
+fn problem_what(problem: &Problem, unpushed: u32) -> SharedString {
+    if problem.kind == "offline" {
+        return tf("status.unpushed", &[("count", &unpushed.to_string())]);
+    }
+    if problem.arg.is_empty() {
+        return problem.text(lang()).into();
+    }
+    problem.arg.clone().into()
+}
+
+/// Trying again can clear it: the next sync publishes and pulls again.
+fn retryable(problem: &Problem) -> bool {
+    problem.attempt.is_some() && problem.kind != "upgrade"
+}
+
+/// One row of the list: a name and when, then what happened. A selected
+/// row differs by its background alone.
+fn list_row(
+    id: impl Into<ElementId>,
+    selected: bool,
+    title: String,
+    at: Option<String>,
+    what: SharedString,
+    cx: &App,
+) -> Stateful<Div> {
+    let p = palette(cx);
+    v_flex()
+        .id(id)
+        .px(px(14.))
+        .py(px(10.))
+        .gap(px(S2))
+        .border_b_1()
+        .border_color(p.line)
+        .cursor_pointer()
+        .when(selected, |row| row.bg(p.accent_soft))
+        .when(!selected, |row| row.hover(|style| style.bg(p.well)))
+        .child(
+            h_flex()
+                .gap(px(S8))
+                .child(
+                    div()
+                        .flex_1()
+                        .min_w_0()
+                        .truncate()
+                        .font_weight(FontWeight::SEMIBOLD)
+                        .child(title),
+                )
+                .children(at.map(|at| {
+                    div()
+                        .flex_none()
+                        .text_size(px(font::CAPTION))
+                        .text_color(p.muted)
+                        .child(at)
+                })),
+        )
+        .child(
+            div()
+                .truncate()
+                .text_size(px(font::MONO))
+                .text_color(p.muted)
+                .child(what),
+        )
+}
+
+/// A block of the list: its icon, name and count over its rows, in a frame
+/// of its own. What only waits is framed with dashes.
+fn group(
+    icon: IconName,
+    tint: Hsla,
+    title: &str,
+    rows: Vec<Stateful<Div>>,
+    waiting: bool,
+    cx: &App,
+) -> Option<impl IntoElement> {
+    if rows.is_empty() {
+        return None;
+    }
+    let p = palette(cx);
+    let count = rows.len().to_string();
+    // The last row's rule hides under the frame.
+    let rows = div().mb(px(-1.)).children(rows);
+    let rows = if waiting {
+        v_flex()
+            .rounded(px(radius::BOX))
+            .border_1()
+            .border_dashed()
+            .border_color(p.line_strong)
+            .overflow_hidden()
+            .child(rows)
+    } else {
+        frame(cx).child(rows)
+    };
+    Some(
+        v_flex()
+            .gap(px(S8))
+            .child(
+                h_flex()
+                    .px(px(S4))
+                    .gap(px(6.))
+                    .child(Icon::new(icon).size(px(14.)).text_color(tint))
+                    .child(
+                        div()
+                            .flex_1()
+                            .font_weight(FontWeight::SEMIBOLD)
+                            .child(t(title)),
+                    )
+                    .child(div().text_color(p.muted).child(count)),
+            )
+            .child(rows),
+    )
 }
 
 pub fn render(app: &Rosamta, cx: &mut Context<Rosamta>) -> impl IntoElement {
     let p = palette(cx);
     let snap = &app.snap;
-    let body = if snap.queue.is_empty() {
-        div()
-            .px(px(S32))
-            .child(empty(t("item.empty"), cx))
-            .into_any_element()
-    } else {
-        let list = v_flex()
-            .id("review-list")
-            .w(px(320.))
-            .flex_none()
-            .h_full()
-            .overflow_y_scroll()
-            .border_t_1()
-            .border_r_1()
-            .border_color(p.line)
-            .children(snap.queue.iter().map(|item| {
-                let id = item.id;
-                let selected = app.selected == Some(id);
-                let (key, tone) = item_badge(item);
-                v_flex()
-                    .id(("item", id))
-                    .px(px(S16))
-                    .py(px(S12))
-                    .gap(px(S4))
-                    .border_b_1()
-                    .border_color(p.line)
-                    .cursor_pointer()
-                    .relative()
-                    .when(selected, |card| {
-                        card.bg(p.panel).child(
-                            div()
-                                .absolute()
-                                .left_0()
-                                .top_0()
-                                .bottom_0()
-                                .w(px(S4))
-                                .bg(p.accent),
-                        )
-                    })
-                    .when(!selected, |card| card.hover(|style| style.bg(p.panel)))
-                    .child(
-                        h_flex()
-                            .gap(px(S8))
-                            .text_sm()
-                            .child(badge(t(key), tone, cx))
-                            .child(
-                                div()
-                                    .min_w_0()
-                                    .truncate()
-                                    .child(item_title(item, &snap.home)),
-                            ),
-                    )
-                    .child(
-                        div()
-                            .text_xs()
-                            .text_color(p.muted)
-                            .truncate()
-                            .child(item_meta(item, &snap.home)),
-                    )
-                    .on_click(cx.listener(move |this, _, _, cx| this.select(id, cx)))
-            }));
-        h_flex()
+    if snap.queue.is_empty() && snap.problems.is_empty() {
+        return v_flex()
             .size_full()
-            .items_start()
-            .child(list)
-            .children(selected(app, cx))
-            .into_any_element()
+            .child(toolbar(t("nav.review"), div(), div(), true, cx))
+            .child(empty(t("item.empty"), cx));
+    }
+    let problems = snap
+        .problems
+        .iter()
+        .enumerate()
+        .map(|(index, problem)| {
+            let row = Selection::Problem(problem.key());
+            let at = problem
+                .attempt
+                .as_ref()
+                .and_then(|attempt| time(attempt.at));
+            list_row(
+                ("problem", index),
+                app.selected.as_ref() == Some(&row),
+                problem_title(problem).to_string(),
+                at,
+                problem_what(problem, snap.sync.unpushed),
+                cx,
+            )
+            .on_click(cx.listener(move |this, _, _, cx| this.select(row.clone(), cx)))
+        })
+        .collect();
+    let item_row = |item: &QueueItem, cx: &mut Context<Rosamta>| {
+        let id = item.id;
+        list_row(
+            ("item", id),
+            app.selected == Some(Selection::Item(id)),
+            item_title(item, &snap.home),
+            time(item.detected_at),
+            item_what(item, &snap.home),
+            cx,
+        )
+        .on_click(cx.listener(move |this, _, _, cx| this.select(Selection::Item(id), cx)))
     };
+    let (waiting, decide): (Vec<&QueueItem>, Vec<&QueueItem>) =
+        snap.queue.iter().partition(|item| waits(item));
+    let decide = decide.into_iter().map(|item| item_row(item, cx)).collect();
+    let waiting = waiting.into_iter().map(|item| item_row(item, cx)).collect();
+    let list = v_flex()
+        .id("review-list")
+        .w(px(size::LIST))
+        .flex_none()
+        .h_full()
+        .overflow_y_scroll()
+        .bg(p.well)
+        .border_r_1()
+        .border_color(p.line)
+        .pl(px(S24))
+        .pr(px(S16))
+        .py(px(S20))
+        .gap(px(S24))
+        .children(group(
+            IconName::TriangleAlert,
+            p.warn,
+            "item.problems",
+            problems,
+            false,
+            cx,
+        ))
+        .children(group(
+            IconName::CircleQuestionMark,
+            p.accent,
+            "item.decide",
+            decide,
+            false,
+            cx,
+        ))
+        .children(group(
+            IconName::Clock,
+            p.muted,
+            "item.waiting",
+            waiting,
+            true,
+            cx,
+        ));
+    let (actions, shown) = match (app.selected_item(), app.selected_problem()) {
+        (Some(item), _) => (
+            item_actions(app, item, cx).into_any_element(),
+            item_detail(app, item, cx).into_any_element(),
+        ),
+        (None, Some(problem)) => (
+            problem_actions(app, problem, cx).into_any_element(),
+            problem_detail(app, problem, cx).into_any_element(),
+        ),
+        (None, None) => (div().into_any_element(), div().into_any_element()),
+    };
+    // Fades in when another row is chosen and when its content arrives, not
+    // when the same content is read again.
+    let mut hasher = DefaultHasher::new();
+    (&app.selected, app.detail.is_some()).hash(&mut hasher);
+    let shown = div()
+        .id("review-detail")
+        .flex_1()
+        .min_w_0()
+        .h_full()
+        .overflow_y_scroll()
+        .px(px(S40))
+        .py(px(S24))
+        .child(shown)
+        .with_animation(
+            ElementId::NamedInteger("review-detail".into(), hasher.finish()),
+            Animation::new(FADE).with_easing(ease_in_out),
+            |detail, delta| detail.opacity(delta),
+        );
     v_flex()
         .size_full()
-        .child(header(t("nav.review"), div(), cx))
-        .child(div().flex_1().min_h_0().child(body))
+        .child(toolbar(t("nav.review"), div(), actions, true, cx))
+        .child(
+            h_flex()
+                .flex_1()
+                .min_h_0()
+                .items_start()
+                .child(list)
+                .child(shown),
+        )
 }
 
-fn selected(app: &Rosamta, cx: &mut Context<Rosamta>) -> Option<impl IntoElement> {
-    let p = palette(cx);
-    let item = app
-        .snap
-        .queue
-        .iter()
-        .find(|item| Some(item.id) == app.selected)?;
+/// The selected item's choices, the main one last.
+fn item_actions(app: &Rosamta, item: &QueueItem, cx: &mut Context<Rosamta>) -> impl IntoElement {
     let id = item.id;
-    let busy = app.busy;
-    let waiting = item
-        .dotfile
-        .as_ref()
-        .and_then(|dotfile| dotfile.waiting.as_ref());
-    let ignore = super::ghost(Button::new("ignore"))
+    let busy = app.busy.is_some();
+    let row = h_flex().gap(px(S8));
+    if waits(item) {
+        return row;
+    }
+    let ignore = borderless(Button::new("ignore"))
         .label(t("action.ignore"))
         .disabled(busy)
         .on_click(cx.listener(move |this, _, window, cx| {
-            this.run(window, cx, move |core| actions::ignore(core, id));
+            this.run(window, cx, "ignore", move |core| actions::ignore(core, id));
         }));
-    let buttons = if let Some(shown) = item.script.clone() {
+    if let Some(shown) = item.script.clone() {
         // Marking it as run is what ignoring a script does.
-        h_flex()
-            .gap(px(S8))
+        return row
             .child(
-                super::glass(Button::new("mark-run"), cx)
+                borderless(Button::new("mark-run"))
                     .label(t("item.mark_run"))
                     .disabled(busy)
                     .on_click(cx.listener({
                         let shown = shown.clone();
                         move |this, _, window, cx| {
                             let shown = shown.clone();
-                            this.run(window, cx, move |core| actions::mark_run(core, id, shown));
+                            this.run(window, cx, "mark-run", move |core| {
+                                actions::mark_run(core, id, shown)
+                            });
                         }
                     })),
             )
             .child(
-                super::prominent(Button::new("run"))
+                prominent(Button::new("run"))
                     .label(t("action.run"))
-                    .loading(busy)
-                    .on_click(cx.listener(move |this, _, window, cx| {
-                        let shown = shown.clone();
-                        this.run(window, cx, move |core| actions::run_script(core, id, shown));
-                    })),
-            )
-    } else if item.dotfile.is_some() {
-        h_flex()
-            .gap(px(S8))
-            .child(
-                super::glass(Button::new("discard"), cx)
-                    .label(t("item.use_repo"))
+                    .loading(app.busy == Some("run"))
                     .disabled(busy)
                     .on_click(cx.listener(move |this, _, window, cx| {
-                        this.run(window, cx, move |core| actions::discard(core, id));
+                        let shown = shown.clone();
+                        this.run(window, cx, "run", move |core| {
+                            actions::run_script(core, id, shown)
+                        });
                     })),
-            )
+            );
+    }
+    if item.dotfile.is_some() {
+        let file = item_title(item, &app.snap.home);
+        return row
+            .child(ignore)
             .child(
-                super::prominent(Button::new("keep"))
-                    .label(t("item.keep_local"))
-                    .loading(busy)
-                    .on_click(cx.listener(move |this, _, window, cx| {
-                        this.run(window, cx, move |core| {
-                            actions::accept(core, id, Scope::Host)
+                bordered(Button::new("discard"), cx)
+                    .label(t("item.use_repo"))
+                    .loading(app.busy == Some("discard"))
+                    .disabled(busy)
+                    // It replaces a file this app cannot bring back.
+                    .on_click(cx.listener(move |_, _, window, cx| {
+                        let (view, file) = (cx.weak_entity(), file.clone());
+                        window.open_alert_dialog(cx, move |alert, _, _| {
+                            let view = view.clone();
+                            alert
+                                .confirm()
+                                .title(tf("confirm.use_repo", &[("file", &file)]))
+                                .ok_text(t("confirm.replace"))
+                                .ok_variant(ButtonVariant::Danger)
+                                .cancel_text(t("confirm.cancel"))
+                                .on_ok(move |_, window, cx| {
+                                    view.update(cx, |this, cx| {
+                                        this.run(window, cx, "discard", move |core| {
+                                            actions::discard(core, id)
+                                        });
+                                    })
+                                    .ok();
+                                    true
+                                })
                         });
                     })),
             )
-            .child(ignore)
-    } else {
-        let scope = app.scope;
-        h_flex()
-            .gap(px(S8))
             .child(
-                // `children`, unlike `child`, keeps each button's own `disabled`.
-                super::segments(ButtonGroup::new("scope"), cx)
-                    .children([
-                        super::segment(Button::new("this-host"), scope == Scope::Host, cx)
-                            .label(t("item.this_host")),
-                        super::segment(Button::new("all-hosts"), scope == Scope::All, cx)
-                            .label(t("item.all_hosts"))
-                            // Lines holding a secret stay on this host.
-                            .disabled(item.local),
-                    ])
-                    .on_click(cx.listener(|this, clicks: &Vec<usize>, _, cx| {
-                        let scope = if clicks.contains(&1) {
-                            Scope::All
-                        } else {
-                            Scope::Host
-                        };
-                        this.set_scope(scope, cx);
-                    })),
-            )
-            .child(
-                super::prominent(Button::new("adopt"))
-                    .label(t("action.adopt"))
-                    .loading(busy)
+                prominent(Button::new("keep"))
+                    .label(t("item.keep_local"))
+                    .loading(app.busy == Some("keep"))
+                    .disabled(busy)
                     .on_click(cx.listener(move |this, _, window, cx| {
-                        let scope = this.scope;
-                        this.run(window, cx, move |core| actions::accept(core, id, scope));
+                        this.run(window, cx, "keep", move |core| {
+                            actions::accept(core, id, Scope::Host)
+                        });
                     })),
-            )
-            .child(ignore)
-    };
-    let content = match (&app.detail, waiting) {
-        // Not a decision: no diff and no buttons until it can render.
-        (_, Some(waiting)) => div()
-            .text_sm()
-            .text_color(p.muted)
-            .child(waiting_text(waiting))
-            .into_any_element(),
-        (None, _) => div().into_any_element(),
-        (Some(Detail::Error(err)), _) => div()
-            .text_sm()
-            .text_color(p.warn)
-            .child(err.clone())
-            .into_any_element(),
-        (Some(Detail::Dotfile(text)), _) => diff(text, cx).into_any_element(),
-        (Some(Detail::Script { text, log }), _) => v_flex()
-            .gap(px(S16))
-            .child(heading(t("item.script"), cx))
-            .child(code(text, cx))
-            .when_some(log.as_ref(), |content, log| {
-                content
-                    .child(heading(t("item.last_run"), cx))
-                    .child(code(log, cx))
-            })
-            .into_any_element(),
-        (Some(Detail::Rc { files, modules }), _) => v_flex()
-            .gap(px(S16))
-            .child(heading(t("item.rc"), cx))
-            .children(files.iter().map(|text| diff(text, cx)))
-            .when(!modules.is_empty(), |content| {
-                content
-                    .child(heading(t("item.module"), cx))
-                    .children(modules.iter().map(|(name, text)| {
-                        v_flex()
-                            .gap(px(S8))
-                            .child(mono(name.clone(), cx).text_color(p.muted))
-                            .child(code(text, cx))
-                    }))
-            })
-            .into_any_element(),
-    };
-    Some(
-        v_flex()
-            .id("review-detail")
-            .flex_1()
-            .min_w_0()
-            .h_full()
-            .overflow_y_scroll()
-            .border_t_1()
-            .border_color(p.line)
-            .p(px(S24))
-            .gap(px(S16))
-            .child(
-                h_flex()
-                    .gap(px(S12))
-                    .child(
-                        v_flex()
-                            .flex_1()
-                            .min_w_0()
-                            .child(
-                                div()
-                                    .text_lg()
-                                    .font_weight(FontWeight::SEMIBOLD)
-                                    .truncate()
-                                    .child(item_title(item, &app.snap.home)),
-                            )
-                            .child(
-                                div()
-                                    .text_xs()
-                                    .text_color(p.muted)
-                                    .truncate()
-                                    .child(item_meta(item, &app.snap.home)),
-                            ),
-                    )
-                    .when(waiting.is_none(), |row| row.child(buttons)),
-            )
-            .child(content),
+            );
+    }
+    // Lines holding a secret stay on this host.
+    let local = item.local;
+    let scopes = [
+        (t("item.this_host"), !busy),
+        (t("item.all_hosts"), !busy && !local),
+    ];
+    row.child(segmented(
+        "scope",
+        scopes,
+        usize::from(app.scope == Scope::All),
+        cx.listener(move |this, index: &usize, _, cx| {
+            let scope = if *index == 1 && !local {
+                Scope::All
+            } else {
+                Scope::Host
+            };
+            this.set_scope(scope, cx);
+        }),
+    ))
+    .child(ignore)
+    .child(
+        prominent(Button::new("adopt"))
+            .label(t("action.adopt"))
+            .loading(app.busy == Some("adopt"))
+            .disabled(busy)
+            .on_click(cx.listener(move |this, _, window, cx| {
+                let scope = this.scope;
+                this.run(window, cx, "adopt", move |core| {
+                    actions::accept(core, id, scope)
+                });
+            })),
     )
 }
 
-fn heading(text: SharedString, cx: &App) -> impl IntoElement {
-    div()
-        .text_sm()
-        .font_weight(FontWeight::SEMIBOLD)
-        .text_color(palette(cx).muted)
-        .child(text)
+/// The button that opens a file the detail shows.
+/// Opens `path`, or with `reveal` shows it in its folder: a script waits
+/// for a decision, and whatever the system opens it with may run it.
+fn open_button(index: usize, path: PathBuf, reveal: bool, cx: &mut Context<Rosamta>) -> AnyElement {
+    icon_button(
+        ("open-file", index),
+        IconName::ExternalLink,
+        t("item.open_file"),
+    )
+    .on_click(cx.listener(move |_, _, window, cx| {
+        if reveal {
+            return cx.reveal_path(&path);
+        }
+        match actions::to_open(&path) {
+            Ok(target) => cx.open_with_system(&target),
+            Err(err) => window.push_notification(Notification::error(err.to_string()), cx),
+        }
+    }))
+    .into_any_element()
+}
+
+/// A detail's title, and under it what it is about.
+fn headline(title: String, about: Vec<String>, cx: &App) -> impl IntoElement {
+    v_flex()
+        .gap(px(S2))
+        .child(
+            div()
+                .text_size(px(font::TITLE))
+                .font_weight(FontWeight::SEMIBOLD)
+                .child(title),
+        )
+        .child(
+            div()
+                .text_size(px(font::CAPTION))
+                .text_color(palette(cx).muted)
+                .child(about.join(" · ")),
+        )
+}
+
+fn item_detail(app: &Rosamta, item: &QueueItem, cx: &mut Context<Rosamta>) -> impl IntoElement {
+    let p = palette(cx);
+    let home = &app.snap.home;
+    let about = [
+        Some(item_what(item, home).to_string()),
+        time(item.detected_at),
+    ];
+    let page = v_flex().gap(px(S20)).child(headline(
+        item_title(item, home),
+        about.into_iter().flatten().collect(),
+        cx,
+    ));
+    if waits(item) {
+        return page;
+    }
+    match &app.detail {
+        None => page,
+        Some(Detail::Error(err)) => page.child(div().text_color(p.warn).child(err.clone())),
+        Some(Detail::Dotfile(text)) => {
+            let path = item
+                .dotfile
+                .as_ref()
+                .map(|dotfile| home.join(&dotfile.path));
+            let path = path.unwrap_or_default();
+            page.child(card(
+                t("item.diff"),
+                Some(adopt::display(&path, home).into()),
+                Some(open_button(0, path, false, cx)),
+                diff(text, cx),
+                cx,
+            ))
+        }
+        Some(Detail::Script { path, text, log }) => page
+            .child(card(
+                t("item.script"),
+                None,
+                Some(open_button(0, path.clone(), true, cx)),
+                code(text, cx),
+                cx,
+            ))
+            .when_some(log.as_ref(), |page, log| {
+                page.child(card(t("item.last_run"), None, None, code(log, cx), cx))
+            }),
+        Some(Detail::Rc { files, modules }) => page
+            .children(files.iter().enumerate().map(|(index, (path, text))| {
+                card(
+                    t("item.rc"),
+                    Some(adopt::display(path, home).into()),
+                    Some(open_button(index, path.clone(), false, cx)),
+                    diff(text, cx),
+                    cx,
+                )
+            }))
+            .children(modules.iter().map(|(name, text)| {
+                card(
+                    t("item.module"),
+                    Some(name.clone().into()),
+                    None,
+                    code(text, cx),
+                    cx,
+                )
+            })),
+    }
+}
+
+fn problem_actions(
+    app: &Rosamta,
+    problem: &Problem,
+    cx: &mut Context<Rosamta>,
+) -> impl IntoElement {
+    let kind = problem.kind;
+    h_flex().when(retryable(problem), |row| {
+        row.child(
+            prominent(Button::new("retry"))
+                .label(t("action.retry"))
+                .loading(app.busy == Some("sync"))
+                .disabled(app.busy.is_some() || app.snap.remote.is_none())
+                .on_click(cx.listener(move |this, _, window, cx| this.retry(kind, window, cx))),
+        )
+    })
+}
+
+fn problem_detail(app: &Rosamta, problem: &Problem, cx: &App) -> impl IntoElement {
+    let attempt = problem.attempt.as_ref();
+    let unpushed = app.snap.sync.unpushed;
+    let about = [
+        attempt.and_then(|attempt| time(attempt.at)),
+        (unpushed > 0).then(|| tf("status.unpushed", &[("count", &unpushed.to_string())]).into()),
+    ];
+    let reason = attempt
+        .and_then(|attempt| attempt.reason.as_deref())
+        .filter(|reason| !reason.is_empty());
+    let files = attempt
+        .map(|attempt| attempt.files.as_slice())
+        .unwrap_or_default();
+    v_flex()
+        .gap(px(S20))
+        .child(headline(
+            problem.text(lang()),
+            about.into_iter().flatten().collect(),
+            cx,
+        ))
+        .when_some(reason, |page, reason| {
+            page.child(card(
+                t("item.error"),
+                None,
+                None,
+                mono(crate::text::plain(reason).to_string(), cx)
+                    .px(px(S16))
+                    .py(px(S12)),
+                cx,
+            ))
+        })
+        .when(!files.is_empty(), |page| {
+            page.child(card(
+                t("item.files"),
+                None,
+                None,
+                v_flex()
+                    .px(px(S16))
+                    .py(px(S12))
+                    .gap(px(S4))
+                    .children(files.iter().map(|file| mono(file.clone(), cx))),
+                cx,
+            ))
+        })
 }

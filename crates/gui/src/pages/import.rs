@@ -6,7 +6,7 @@ use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 use rosamta_core::chezmoi::{Item, Outcome, Reason};
 
-use super::{label, mono, page, prominent, row, section};
+use super::{body, mono, prominent, row, section, toolbar};
 use crate::app::Rosamta;
 use crate::text::t;
 use crate::theme::{palette, space::*};
@@ -17,7 +17,7 @@ pub fn render(app: &Rosamta, cx: &mut Context<Rosamta>) -> impl IntoElement {
     };
     let count = |key: &str, outcome| {
         row(cx)
-            .child(label(t(key), cx))
+            .child(div().flex_1().child(t(key)))
             .child(report.count(outcome).to_string())
     };
     let manual: Vec<&Item> = report
@@ -25,7 +25,7 @@ pub fn render(app: &Rosamta, cx: &mut Context<Rosamta>) -> impl IntoElement {
         .iter()
         .filter(|item| item.outcome == Outcome::Manual)
         .collect();
-    let body = v_flex()
+    let content = v_flex()
         .gap(px(S32))
         .child(section(
             t("import.result"),
@@ -35,8 +35,8 @@ pub fn render(app: &Rosamta, cx: &mut Context<Rosamta>) -> impl IntoElement {
                 .child(count("import.manual", Outcome::Manual)),
             cx,
         ))
-        .when(!manual.is_empty(), |body| {
-            body.child(section(t("import.manual"), list(&manual, cx), cx))
+        .when(!manual.is_empty(), |content| {
+            content.child(section(t("import.manual"), list(&manual, cx), cx))
         });
     let done = prominent(Button::new("import-done"))
         .label(t("import.done"))
@@ -44,7 +44,11 @@ pub fn render(app: &Rosamta, cx: &mut Context<Rosamta>) -> impl IntoElement {
             this.imported = None;
             cx.notify();
         }));
-    page("import", t("import.title"), done, body, cx).into_any_element()
+    v_flex()
+        .size_full()
+        .child(toolbar(t("import.title"), div(), done, false, cx))
+        .child(body("import", content))
+        .into_any_element()
 }
 
 fn list(items: &[&Item], cx: &App) -> impl IntoElement {
