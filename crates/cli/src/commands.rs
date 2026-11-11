@@ -72,11 +72,16 @@ pub fn apply(json: bool, dry_run: bool) -> Result<ExitCode> {
     if interactive {
         crate::dotfiles::ask_vars(&ctx)?;
     }
-    // shortcut: a locked secret source asks for its password while the lock
-    // is held, so the daemon waits until it is typed.
     ctx.interactive = interactive;
+    // An external or a `before` script may set up a secret source, so
+    // templates then wait for it, under the lock.
+    let prepared =
+        (interactive && !apply::setup_pending(&ctx)).then(|| dotfiles::deploy::prepare(&ctx));
     let applied = {
         let _lock = adopt::lock(&ctx)?;
+        if let Some(prepared) = prepared {
+            dotfiles::deploy::keep_prepared(&mut ctx, prepared);
+        }
         apply::apply(&ctx)?
     };
     warn_skipped(&applied.skipped);

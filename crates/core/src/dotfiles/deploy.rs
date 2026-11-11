@@ -632,6 +632,28 @@ pub fn deploy(ctx: &Context) -> Result<Vec<Step>> {
     deploy_with(ctx, false)
 }
 
+/// Renders every template before `rsmt apply` takes the adopt lock, so
+/// password prompts and secret commands never stall the daemon. Returns
+/// what [`keep_prepared`] checks once the lock is held.
+pub fn prepare(ctx: &Context) -> Option<Vec<u8>> {
+    // Read first, so a change while the session loads counts as one.
+    let manifest = secrets_manifest(ctx);
+    let _ = plan_with(ctx, true);
+    manifest
+}
+
+/// Forgets the prepared secrets when a pull changed `secrets.toml` while
+/// the prompts waited, so a changed command runs again.
+pub fn keep_prepared(ctx: &mut Context, prepared: Option<Vec<u8>>) {
+    if secrets_manifest(ctx) != prepared {
+        ctx.session = Default::default();
+    }
+}
+
+fn secrets_manifest(ctx: &Context) -> Option<Vec<u8>> {
+    std::fs::read(ctx.paths.repo().join(secrets::MANIFEST)).ok()
+}
+
 /// `deploy` for `rsmt apply`: in a terminal every template renders, so a
 /// changed secret reaches its file.
 pub fn deploy_all(ctx: &Context) -> Result<Vec<Step>> {
