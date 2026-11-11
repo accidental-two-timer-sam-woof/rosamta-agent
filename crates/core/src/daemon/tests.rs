@@ -288,7 +288,7 @@ fn pushes_again_wait_longer_after_three_misses() {
             daemon.push_delay().as_secs()
         })
         .collect();
-    assert_eq!(delays, [60, 60, 60, 60, 120, 240, 480, 900, 900]);
+    assert_eq!(delays, [60, 60, 60, 120, 240, 480, 900, 900, 900]);
 
     let state = daemon.ctx.paths.state().to_path_buf();
     let offline_since = |seconds: u64, unpushed| {
@@ -303,7 +303,7 @@ fn pushes_again_wait_longer_after_three_misses() {
         };
         Store::new(&state).save("sync.json", &sync_state).unwrap();
     };
-    daemon.push_misses = 5;
+    daemon.push_misses = 4;
     offline_since(200, 1);
     assert!(!daemon.push_due());
     offline_since(241, 1);

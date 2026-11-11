@@ -59,10 +59,10 @@ const RBW_RETRY: Duration = Duration::from_secs(60);
 /// The wait before pushing again commits that could not reach the remote;
 /// after `PUSH_TRIES` misses it doubles each time, up to `PUSH_RETRY_MAX`.
 const PUSH_RETRY: Duration = Duration::from_secs(60);
-/// How often a problem the notification service did not take is shown again.
-const NOTIFY_RETRY: Duration = Duration::from_secs(60);
 const PUSH_TRIES: u32 = 3;
 const PUSH_RETRY_MAX: Duration = Duration::from_secs(15 * 60);
+/// How often a problem the notification service did not take is shown again.
+const NOTIFY_RETRY: Duration = Duration::from_secs(60);
 
 /// Directories to watch: the parents of watched files, without recursion,
 /// so an installer writing a new file and renaming it over the old one is
@@ -738,7 +738,7 @@ impl Daemon {
     }
 
     fn push_delay(&self) -> Duration {
-        let doublings = self.push_misses.saturating_sub(PUSH_TRIES).min(8);
+        let doublings = (self.push_misses + 1).saturating_sub(PUSH_TRIES).min(8);
         (PUSH_RETRY * 2u32.pow(doublings)).min(PUSH_RETRY_MAX)
     }
 
