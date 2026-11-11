@@ -220,28 +220,13 @@ pub fn scan(ctx: &Context) -> Result<Vec<Candidate>> {
                 order: 0,
             };
             let shells = watched.source.shells();
-            // Back in its own file, or in a file whose shells the module serves.
-            let replaces = |adoption: &Adoption| {
-                adoption.file == watched.path
-                    || loaded.iter().any(|(name, module)| {
-                        adoption
-                            .module
-                            .as_deref()
-                            .is_some_and(|path| repo::module_name(path) == *name)
-                            && runs_in(module, shells)
-                    })
-            };
-            if let Some(adoption) = adoptions
-                .adoptions
-                .iter()
-                .find(|a| a.hash == hash && replaces(a))
-            {
-                candidate.kind = Kind::Duplicate;
-                candidate.module = adoption.module.clone();
-                out.push(candidate);
-                continue;
-            }
+            let recorded = adoptions.adoptions.iter().filter(|a| a.hash == hash);
             if segment.comment_only() {
+                // Comments adopted from this file before run nothing; drop them again.
+                if let Some(adoption) = recorded.into_iter().find(|a| a.file == watched.path) {
+                    candidate.kind = Kind::Duplicate;
+                    candidate.module = adoption.module.clone();
+                }
                 out.push(candidate);
                 continue;
             }
@@ -256,6 +241,27 @@ pub fn scan(ctx: &Context) -> Result<Vec<Candidate>> {
                 out.push(candidate);
                 continue;
             }
+            // Code adopted before is a duplicate only while its module still
+            // loads here and holds exactly that code.
+            let code = snippet(ctx, &text, &watched);
+            let still_held = |adoption: &&Adoption| {
+                loaded.iter().any(|(name, m)| {
+                    adoption
+                        .module
+                        .as_deref()
+                        .is_some_and(|path| repo::module_name(path) == *name)
+                        && runs_in(m, shells)
+                        && shells.iter().all(|&shell| {
+                            m.raw.get(shell).map(str::trim) == code.raw.get(shell).map(str::trim)
+                        })
+                })
+            };
+            if let Some(adoption) = recorded.into_iter().find(still_held) {
+                candidate.kind = Kind::Duplicate;
+                candidate.module = adoption.module.clone();
+                out.push(candidate);
+                continue;
+            }
             let mut module = match module {
                 Some(module) => {
                     candidate.kind = Kind::Structured;
@@ -264,7 +270,7 @@ pub fn scan(ctx: &Context) -> Result<Vec<Candidate>> {
                 None => {
                     candidate.kind = Kind::Snippet;
                     barrier |= watched.phase != Phase::Env;
-                    snippet(ctx, &text, &watched)
+                    code
                 }
             };
             // Only the shells that read the file ran it before.
