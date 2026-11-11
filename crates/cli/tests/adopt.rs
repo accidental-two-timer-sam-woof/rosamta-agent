@@ -1249,3 +1249,38 @@ fn interactive_shells_print_the_review_notice() {
     run(&home, &["review"]);
     assert_eq!(interactive(&home), "");
 }
+
+/// Fedora's and Arch's `.bash_profile` runs `.bashrc`. That line stays where
+/// it is, so login bash still runs `.bashrc` once and loads `profile.bash`.
+#[test]
+fn a_bash_profile_that_runs_the_bashrc_keeps_that_line() {
+    if !has("bash") {
+        return;
+    }
+    let home = hooked(&[
+        (
+            ".bash_profile",
+            "# Get the aliases and functions\nif [ -f ~/.bashrc ]; then\n\t. ~/.bashrc\nfi\n\nexport FROM_PROFILE=1\n",
+        ),
+        (".bashrc", "echo bashrc >> \"$HOME/runs\"\n"),
+    ]);
+    run(&home, &["adopt", "--yes"]);
+    run(&home, &["apply"]);
+    let profile = read(&home, ".bash_profile");
+    assert!(profile.contains("then\n\t. ~/.bashrc\nfi\n"), "{profile}");
+    assert!(!profile.contains("FROM_PROFILE"), "{profile}");
+    assert_eq!(profile.matches(".bashrc").count(), 2, "{profile}");
+    let argv: Vec<String> = ["bash", "-l", "-i", "-c", "echo \"profile=${FROM_PROFILE}\""]
+        .iter()
+        .map(|arg| arg.to_string())
+        .collect();
+    // rsmt starts shells itself to check them.
+    let _ = fs::remove_file(home.root.join("runs"));
+    let out = home.shell(&argv);
+    assert!(
+        String::from_utf8_lossy(&out.stdout).contains("profile=1"),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert_eq!(read(&home, "runs"), "bashrc\n");
+}

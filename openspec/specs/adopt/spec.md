@@ -6,11 +6,15 @@
 ## Requirements
 
 ### Requirement: Watched files
-rosamta SHALL 掃描下列檔案中 hook 以外的內容：`~/.profile`、`~/.bash_profile`、`~/.bash_login`、`~/.bashrc`、`$ZDOTDIR` 下的 `.zshenv`、`.zprofile`、`.zshrc`、`.zlogin`、fish 的 `config.fish`，以及 fish `conf.d` 中 rosamta 以外的檔案。不是 UTF-8 文字的檔案 SHALL 略過且不被修改。
+rosamta SHALL 掃描下列檔案中 hook 以外的內容：`~/.profile`、`~/.bash_profile`、`~/.bash_login`、`~/.bashrc`、`$ZDOTDIR` 下的 `.zshenv`、`.zprofile`、`.zshrc`、`.zlogin`、fish 的 `config.fish`，以及 fish `conf.d` 中 rosamta 以外的檔案。不是 UTF-8 文字的檔案 SHALL 略過且不被修改。`~/.bash_profile` 或 `~/.bash_login` 中執行 `~/.profile` 或 `~/.bashrc` 的段落是 login bash 讀到這兩個檔案的途徑，SHALL 留在原處、不列為可接管的內容。
 
 #### Scenario: Installer adds a fish conf.d file
 - **WHEN** 某個安裝程式新增 `conf.d/foo.fish`
 - **THEN** 下一次掃描把整個檔案列為可接管的內容
+
+#### Scenario: bash_profile that runs bashrc
+- **WHEN** `~/.bash_profile` 是 Fedora 預設的版本，以 `if [ -f ~/.bashrc ]; then . ~/.bashrc; fi` 載入 `~/.bashrc`
+- **THEN** 掃描不列出這一段，它留在原處；login bash 仍只執行 `~/.bashrc` 一次
 
 #### Scenario: File that is not UTF-8
 - **WHEN** `~/.zlogin` 含有不是 UTF-8 的位元組

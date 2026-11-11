@@ -194,11 +194,18 @@ pub fn scan(ctx: &Context) -> Result<Vec<Candidate>> {
         for segment in segments {
             let text = segment.text();
             let hash = segment::hash(&segment::normalize(&text, &ctx.home));
-            // Lines rosamta or fish wrote themselves are not the user's.
-            let seed = watched.path.ends_with(".bash_profile") && text == hooks::BASH_PROFILE_SEED;
+            // Login bash reaches `.profile` and `.bashrc` through lines like
+            // rosamta's own seed; in a module they would run inside the block,
+            // and the hook would add a second `.bashrc` line.
+            let wiring = watched.source == Source::Bash
+                && watched.phase == Phase::Env
+                && [".profile", ".bashrc"]
+                    .iter()
+                    .any(|name| segment::runs(&text, &ctx.home, name));
+            // Lines fish wrote itself are not the user's.
             let fish_default =
                 watched.path.ends_with("config.fish") && segment::fish_default(&text);
-            if seed || fish_default {
+            if wiring || fish_default {
                 continue;
             }
             if ignored.hashes.contains(&hash) {
