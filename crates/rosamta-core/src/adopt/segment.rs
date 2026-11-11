@@ -258,7 +258,7 @@ pub fn whole(text: &str) -> Option<Segment> {
 
 /// The heredocs `line` opens, in order: the delimiter, and whether `<<-`
 /// strips leading tabs. Not `<<<`, nor `<<` in quotes, comments or `((…))`.
-fn heredocs(line: &str) -> Vec<(String, bool)> {
+pub(super) fn heredocs(line: &str) -> Vec<(String, bool)> {
     let mut out = Vec::new();
     let (mut single, mut double, mut escaped) = (false, false, false);
     let mut arithmetic = 0;
@@ -319,7 +319,7 @@ fn heredocs(line: &str) -> Vec<(String, bool)> {
 
 /// How far into `rest` the bodies of `pending` heredocs run, through their
 /// closing lines; `None` while one is still open.
-fn heredoc_end(rest: &str, pending: &[(String, bool)]) -> Option<usize> {
+pub(super) fn heredoc_end(rest: &str, pending: &[(String, bool)]) -> Option<usize> {
     let mut pending = pending.iter();
     let Some(mut want) = pending.next() else {
         return Some(0);

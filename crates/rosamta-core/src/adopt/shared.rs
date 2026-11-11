@@ -52,18 +52,49 @@ fn same(a: &Module, b: &Module) -> bool {
             .all(|shell| a.raw.get(shell).map(code) == b.raw.get(shell).map(code))
 }
 
-/// Snippet text without comment lines, blank lines or trailing spaces.
+/// Snippet text without comment lines, blank lines or trailing spaces;
+/// here-document bodies are data and stay whole.
 pub(super) fn code(text: &str) -> Vec<&str> {
-    text.lines()
-        .map(str::trim_end)
-        .filter(|line| !line.is_empty() && !line.trim_start().starts_with('#'))
-        .collect()
+    use super::segment::{heredoc_end, heredocs};
+    let mut out = Vec::new();
+    let mut rest = text;
+    while !rest.is_empty() {
+        let (line, after) = rest.split_once('\n').unwrap_or((rest, ""));
+        rest = after;
+        let line = line.trim_end();
+        if line.is_empty() || line.trim_start().starts_with('#') {
+            continue;
+        }
+        out.push(line);
+        let body = heredoc_end(rest, &heredocs(line)).unwrap_or(rest.len());
+        out.extend(rest[..body].lines());
+        rest = &rest[body..];
+    }
+    out
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::config::Os;
+
+    #[test]
+    fn here_document_lines_are_code() {
+        let config =
+            |line: &str| format!("# write it\ncat > ~/.x <<'EOF'\n{line}\nEOF\n\nexport X=1\n");
+        assert_eq!(
+            code(&config("# a=1")),
+            ["cat > ~/.x <<'EOF'", "# a=1", "EOF", "export X=1"]
+        );
+        assert_ne!(code(&config("# a=1")), code(&config("# a=2")));
+        assert_eq!(
+            code(&config("a=1")),
+            code(&format!(
+                "\n{}",
+                config("a=1").replace("# write it", "# from mbp")
+            ))
+        );
+    }
 
     fn module(text: &str) -> Module {
         toml::from_str(text).unwrap()
