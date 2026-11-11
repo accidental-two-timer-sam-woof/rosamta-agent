@@ -360,6 +360,32 @@ fn reinstalled_content_is_removed_without_a_new_module() {
 }
 
 #[test]
+fn reinstalled_content_comes_back_once_its_module_changes() {
+    if !has("zsh") {
+        return;
+    }
+    let orbstack = "\nsource ~/.orbstack/shell/init.zsh 2>/dev/null || :\n";
+    let home = hooked(&[(".zshrc", &format!("{BUN}{orbstack}"))]);
+    run(&home, &["adopt", "--yes"]);
+    // bun's module is gone; orbstack's now runs something else.
+    fs::remove_file(home.repo().join("modules/adopted/bun.toml")).unwrap();
+    let snippet = adopted(&home)
+        .into_iter()
+        .find(|path| fs::read_to_string(path).unwrap().contains("init.zsh"))
+        .unwrap();
+    let text = fs::read_to_string(&snippet).unwrap();
+    fs::write(&snippet, text.replace("init.zsh", "other.zsh")).unwrap();
+    let zshrc = read(&home, ".zshrc");
+    fs::write(home.root.join(".zshrc"), format!("{zshrc}{BUN}{orbstack}")).unwrap();
+    assert_eq!(review(&home).len(), 2);
+    let zshrc = read(&home, ".zshrc");
+    assert!(
+        zshrc.contains("BUN_INSTALL") && zshrc.contains("init.zsh"),
+        "{zshrc}"
+    );
+}
+
+#[test]
 fn comment_mode_keeps_the_lines_as_comments() {
     if !has("zsh") {
         return;

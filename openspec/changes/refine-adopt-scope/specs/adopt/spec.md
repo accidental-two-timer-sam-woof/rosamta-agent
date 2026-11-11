@@ -31,7 +31,7 @@
 - **THEN** 產生的 module 只宣告 `shells = ["zsh"]`
 
 ### Requirement: Re-added content
-安裝程式把已經接管過的內容再次寫回 rc 檔時，rosamta SHALL 認出它並直接依 host 設定移除，不產生新的 module，也不放進待處理清單。寫回原本的檔案時一律如此；寫進其他檔案時，只有對應的 module 在本機載入（已啟用且 `when` 符合本機）並且會在讀取該檔案的每個 shell 中生效，才 SHALL 視為已接管，否則照一般內容處理。內容與只套用到其他主機的 module 相同時，依「Same content on another host」處理。
+安裝程式把已經接管過的內容再次寫回 rc 檔時，rosamta SHALL 認出它並直接依 host 設定移除，不產生新的 module，也不放進待處理清單。只有對應的 module 仍在本機載入（已啟用且 `when` 符合本機）、會在讀取該檔案的每個 shell 中生效，並且仍做同樣的事時，才 SHALL 視為已接管；module 已刪除、停用或改成做別的事時，照一般內容處理。只有註解的內容寫回原本的檔案時一律移除。內容與只套用到其他主機的 module 相同時，依「Same content on another host」處理。
 
 #### Scenario: Installer runs again
 - **WHEN** 已接管的 bun PATH 被 bun 的安裝程式再次寫進 `~/.zshrc`
@@ -40,6 +40,10 @@
 #### Scenario: Same line in another shell's file
 - **WHEN** `~/.profile` 與 `~/.zshrc` 都有 `. "$HOME/.cargo/env"`，使用者只接管 `~/.zshrc` 的那一行
 - **THEN** `~/.profile` 的那一行留在原處，並列為可接管的內容
+
+#### Scenario: Module removed
+- **WHEN** 使用者刪除接管 bun 時產生的 module，bun 的安裝程式再次寫進 `~/.zshrc`
+- **THEN** 這段留在原處，並列為可接管的內容
 
 #### Scenario: Module for another host
 - **WHEN** repo 中有一個只套用到其他主機、沒有限制 shell 的舊 module 設定 `FOO=1`，本機的 `~/.zshrc` 也有 `export FOO=1`
