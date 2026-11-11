@@ -88,7 +88,7 @@ fn commit(ctx: &Context, plan: &Plan) -> Result<()> {
         .filter(|path| repo.join(path).exists())
         .collect();
     let message = format!(
-        "import(chezmoi): {} dotfiles, {} scripts, {} externals\n\n{}",
+        "chore(import): {} dotfiles, {} scripts, {} externals from chezmoi\n\n{}",
         plan.dotfiles.len(),
         plan.scripts.len(),
         plan.externals.len(),

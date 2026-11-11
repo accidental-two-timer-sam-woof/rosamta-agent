@@ -166,7 +166,7 @@ fn update_locks_the_newest_commit_and_downloads_it() {
         .unwrap();
     assert_eq!(
         String::from_utf8_lossy(&out.stdout),
-        "update(externals): .zplug\n"
+        "chore(externals): update .zplug\n"
     );
 
     home.cmd("rsmt")
@@ -225,7 +225,7 @@ fn a_lock_goes_out_once_a_retry_downloads_it() {
             .unwrap();
         String::from_utf8_lossy(&out.stdout).into_owned()
     };
-    assert!(!pushed().contains("update(externals)"));
+    assert!(!pushed().contains("chore(externals)"));
 
     let retry = home
         .cmd("rsmt")
@@ -240,7 +240,7 @@ fn a_lock_goes_out_once_a_retry_downloads_it() {
     assert!(retry.status.success(), "{said}");
     let log = pushed();
     assert!(
-        log.contains("update(externals): .zplug/plugins"),
+        log.contains("chore(externals): update .zplug/plugins"),
         "{said}\n{log}"
     );
 }

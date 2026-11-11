@@ -122,7 +122,7 @@ fn import_reports_each_item_and_commits() {
     assert_eq!(String::from_utf8(real.stdout).unwrap(), shown);
     assert_eq!(
         head(&home.repo()),
-        "import(chezmoi): 2 dotfiles, 0 scripts, 0 externals\n"
+        "chore(import): 2 dotfiles, 0 scripts, 0 externals from chezmoi\n"
     );
     assert_eq!(
         fs::read_to_string(home.repo().join("chezmoi-import/dot_bad.tmpl")).unwrap(),

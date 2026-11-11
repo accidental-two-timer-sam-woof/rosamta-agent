@@ -152,7 +152,7 @@ fn including_a_module_adds_this_host_and_its_os() {
         .unwrap();
     assert_eq!(
         String::from_utf8_lossy(&subject.stdout).trim(),
-        "include: bun on test"
+        "chore(include): bun on test"
     );
     let shell = home.shell(&[
         "zsh".into(),
