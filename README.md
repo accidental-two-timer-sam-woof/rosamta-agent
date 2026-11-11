@@ -365,6 +365,7 @@ rsmt externals update ~/.oh-my-zsh  # 只更新這一個
 - 目標位置已有其他內容時不覆蓋；已有同一個 repo 的 clone 時直接沿用。
 - 只有 `git` 外部內容的裡面可以再放外部內容或設定檔，例如 oh-my-zsh 的插件。
 - 從 `externals.toml` 移除的內容留在原地，不再管理。
+- `rsmt apply`、拉取與背景服務都會下載與更新外部內容。沒有更新的內容（本機已修改、已有其他內容）每次 `rsmt apply` 都會列出；背景服務遇到的問題寫在 `daemon.log`。
 
 ### 同步到其他主機
 
