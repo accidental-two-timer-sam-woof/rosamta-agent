@@ -13,7 +13,7 @@
 
 - [x] 3.1 寫入 `home/`、`dotfiles.toml`、`secrets.toml`、`chezmoi-import/`、本機 `[vars]`，略過已存在的項目，以 `chezmoi cat` 比較 template，建立含報告的 commit；加密檔案以 `chezmoi decrypt` 重新加密；以 fixture 的整合測試驗證
 - [x] 3.2 腳本（含 `.chezmoiscripts/`、排序、`include … | sha256sum` 轉 `watch`、記為已執行、`CHEZMOI_` 變數）與 externals（git-repo 鎖定在既有 clone、archive、路徑包含檢查與不支援的欄位）的匯入；以整合測試驗證
-- [ ] 3.3 `rsmt import chezmoi`、`--dry-run`、`--json` 與報告的文字；有 chezmoi 時與 `chezmoi apply` 比較結果的測試
+- [x] 3.3 `rsmt import chezmoi`、`--dry-run`、`--json` 與報告的文字；有 chezmoi 時與 `chezmoi apply` 比較結果的測試
 
 ## 4. App
 

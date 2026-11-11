@@ -90,12 +90,16 @@ daemon 監看的使用者 rc 檔，例如 `~/.zshrc`、`~/.bash_profile`、`~/.p
 _Avoid_: target
 
 **Adopt**（接管）:
-把 watched file 裡、hook 以外的新內容轉成 repo 裡的 module，並從 rc 檔移除原行。首次匯入既有 rc 檔也是 Adopt。
+把 watched file 裡、hook 以外的新內容轉成 repo 裡的 module，並從 rc 檔移除原行。第一次把既有 rc 檔的內容搬進 repo 也是 Adopt。
 _Avoid_: capture, import, re-add, 收錄
 
 **Adopt policy**（接管偏好）:
 偵測到可接管的內容時的處理方式：自動接管、先詢問使用者，或關閉。
 _Avoid_: capture policy, auto-sync
+
+**Import**（匯入）:
+把另一個 dotfile 管理工具（目前是 chezmoi）的設定一次轉成 repo 裡的 dotfile、script 與 external，轉不了的部分不宣告並逐項列出。只處理那個工具管理的內容；watched file 的內容由 Adopt 處理。
+_Avoid_: migrate, convert
 
 **Review queue**（待處理）:
 等待使用者處理的項目：要不要接管的內容、與 repo 不同的 dotfile、等待執行的腳本。詢問模式下的項目，以及無法發出通知的 host 上的項目，都放在這裡。
