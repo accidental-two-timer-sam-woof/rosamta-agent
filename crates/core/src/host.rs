@@ -175,7 +175,13 @@ pub fn rename(paths: &Paths, new_id: &str) -> Result<()> {
     }
     let repo_dir = paths.repo();
     let manifest = repo_dir.join(repo::MANIFEST);
-    let dotfiles = repo_dir.join(crate::dotfiles::MANIFEST);
+    // Files of `[[key]]` entries, each with its own `when`.
+    let manifests = [
+        (crate::dotfiles::MANIFEST, "dotfile"),
+        (crate::scripts::MANIFEST, "script"),
+        (crate::externals::MANIFEST, "external"),
+    ]
+    .map(|(name, key)| (repo_dir.join(name), key));
     let mut files = Vec::new();
     if manifest.is_file() {
         let RepoManifest { format, hosts } = repo::read_manifest(&repo_dir)?;
@@ -186,9 +192,12 @@ pub fn rename(paths: &Paths, new_id: &str) -> Result<()> {
             )));
         }
         files.push(manifest.clone());
-        if dotfiles.is_file() {
-            files.push(dotfiles.clone());
-        }
+        files.extend(
+            manifests
+                .iter()
+                .map(|(path, _)| path.clone())
+                .filter(|path| path.is_file()),
+        );
         files.extend(repo::module_files(&repo_dir)?);
     }
     files.extend(repo::module_files(&paths.local())?);
@@ -201,11 +210,12 @@ pub fn rename(paths: &Paths, new_id: &str) -> Result<()> {
 
     let mut changed = Vec::new();
     for file in &mut files {
+        let entries = manifests.iter().find(|(path, _)| file.path == *path);
         let lists: Vec<&mut Array> = if file.path == manifest {
             file.doc["hosts"].as_array_mut().into_iter().collect()
-        } else if file.path == dotfiles {
+        } else if let Some((_, key)) = entries {
             file.doc
-                .get_mut("dotfile")
+                .get_mut(key)
                 .and_then(Item::as_array_of_tables_mut)
                 .into_iter()
                 .flat_map(|entries| entries.iter_mut())

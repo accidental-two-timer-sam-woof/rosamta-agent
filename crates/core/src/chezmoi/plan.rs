@@ -713,17 +713,14 @@ impl Planner<'_> {
         } else {
             Deploy::Copy
         };
-        // Rendered and decrypted files are written 0600 unless declared.
-        let default = if template || attrs.encrypted {
-            0o600
-        } else {
-            repo_mode
-        };
+        // A rendered or decrypted file keeps the mode of one already there
+        // unless its own is declared.
+        let declared = template || attrs.encrypted || mode != repo_mode;
         Dotfile {
             path: target.to_string(),
             source: None,
             deploy,
-            permissions: (deploy != Deploy::Link && mode != default).then(|| format!("{mode:04o}")),
+            permissions: (deploy != Deploy::Link && declared).then(|| format!("{mode:04o}")),
             encrypted: attrs.encrypted,
             when,
         }

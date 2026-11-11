@@ -192,6 +192,22 @@ fn an_older_commit_past_the_shallow_edge_is_unshallowed() {
     );
 }
 
+/// Updating reads declarations `rsmt validate` refuses, such as a `git`
+/// value that git would take for an option; it stays a URL.
+#[test]
+fn update_never_passes_a_url_as_an_option() {
+    let home = Home::new();
+    git(&home.ctx.paths.repo(), &["init", "--quiet"]);
+    let ran = home.dir.path().join("ran");
+    home.declare(&format!(
+        "[[external]]\npath = \".x\"\ngit = \"--upload-pack=touch {};false\"\n",
+        ran.display()
+    ));
+    let updated = externals::update::update(&home.ctx, &[]).unwrap();
+    assert_eq!(updated.failed.len(), 1);
+    assert!(!ran.exists());
+}
+
 #[test]
 fn existing_clones_and_strangers() {
     let home = Home::new();

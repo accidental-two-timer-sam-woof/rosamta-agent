@@ -403,6 +403,38 @@ fn rename_updates_local_modules_and_commits_only_its_files() {
 }
 
 #[test]
+fn rename_updates_scripts_and_externals() {
+    let home = home();
+    write_host(&home, "mbp");
+    repo::init_new(&home.paths).unwrap();
+    let repo_dir = home.paths.repo();
+    fs::write(
+        repo_dir.join("scripts.toml"),
+        "[[script]]\nsource = \"scripts/a.sh\"\nrun = \"once\"\nwhen = { hosts = [\"mbp\"] }\n",
+    )
+    .unwrap();
+    fs::write(
+        repo_dir.join("externals.toml"),
+        "[[external]]\npath = \".x\"\ngit = \"https://example.com/x.git\"\nwhen = { hosts = [\"mbp\", \"lab\"] }\n",
+    )
+    .unwrap();
+    git(&repo_dir, &["add", "--all"]);
+    git(&repo_dir, &["commit", "--quiet", "--message", "scripts"]);
+
+    host::rename(&home.paths, "work-mbp").unwrap();
+
+    assert_eq!(
+        fs::read_to_string(repo_dir.join("scripts.toml")).unwrap(),
+        "[[script]]\nsource = \"scripts/a.sh\"\nrun = \"once\"\nwhen = { hosts = [\"work-mbp\"] }\n"
+    );
+    assert_eq!(
+        fs::read_to_string(repo_dir.join("externals.toml")).unwrap(),
+        "[[external]]\npath = \".x\"\ngit = \"https://example.com/x.git\"\nwhen = { hosts = [\"work-mbp\", \"lab\"] }\n"
+    );
+    assert_eq!(git(&repo_dir, &["status", "--porcelain"]), "");
+}
+
+#[test]
 fn rename_with_a_broken_file_changes_nothing() {
     let home = home();
     write_host(&home, "mbp");
