@@ -394,6 +394,29 @@ fn reinstalled_content_comes_back_once_its_module_changes() {
     );
 }
 
+/// zsh does not answer this time, so its scripts cannot take a new module.
+#[test]
+fn adopting_waits_for_a_shell_that_cannot_be_checked() {
+    if !has("zsh") {
+        return;
+    }
+    let home = hooked(&[(".zshrc", BUN)]);
+    let fake = home.root.join("fake-bin");
+    fs::create_dir_all(&fake).unwrap();
+    fs::write(fake.join("zsh"), "#!/bin/sh\nexit 1\n").unwrap();
+    fs::set_permissions(fake.join("zsh"), fs::Permissions::from_mode(0o755)).unwrap();
+    let path = format!("{}:{}", fake.display(), std::env::var("PATH").unwrap());
+    let before = read(&home, ".zshrc");
+    home.cmd("rsmt")
+        .args(["adopt", "--yes"])
+        .env("PATH", path)
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("cannot start zsh to check it"));
+    assert_eq!(read(&home, ".zshrc"), before);
+    assert!(adopted(&home).is_empty());
+}
+
 #[test]
 fn comment_mode_keeps_the_lines_as_comments() {
     if !has("zsh") {

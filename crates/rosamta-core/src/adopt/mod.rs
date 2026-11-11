@@ -992,7 +992,13 @@ pub fn execute(ctx: &Context, plan: Plan) -> Result<Vec<Adoption>> {
         }
         Ok(())
     };
-    if let Err(err) = apply::apply_after(ctx, write) {
+    let shells: Vec<Shell> = plan
+        .candidates
+        .iter()
+        .flat_map(|candidate| candidate.source.shells())
+        .copied()
+        .collect();
+    if let Err(err) = apply::apply_after(ctx, &shells, write) {
         if written {
             for change in plan.files.iter().chain(&plan.edits) {
                 let _ = write_text(&change.path, change.before.as_deref());
@@ -1438,7 +1444,15 @@ pub fn undo(ctx: &Context, plan: Undo) -> Result<()> {
         }
         Ok(())
     };
-    if let Err(err) = apply::apply_after(ctx, write) {
+    // The shells that read the file the lines go back to.
+    let shells: Vec<Shell> = watched_files(&ctx.hook_env(&ctx.installed()))
+        .into_iter()
+        .find(|watched| watched.path == plan.adoption.file)
+        .map_or_else(
+            || vec![plan.adoption.shell],
+            |watched| watched.source.shells().to_vec(),
+        );
+    if let Err(err) = apply::apply_after(ctx, &shells, write) {
         if written {
             let _ = write_text(&plan.file.path, plan.file.before.as_deref());
             if let Some((path, text)) = &plan.module {

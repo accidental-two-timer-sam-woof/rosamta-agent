@@ -371,7 +371,17 @@ pub fn include(ctx: &Context, items: &[Item], changes: &[FileChange]) -> Result<
         }
         Ok(())
     };
-    if let Err(err) = apply::apply_after(ctx, write) {
+    // A module limited to no shell loads in every one.
+    let shells: Vec<Shell> = if items.iter().any(|item| item.shells.is_empty()) {
+        Shell::ALL.to_vec()
+    } else {
+        items
+            .iter()
+            .flat_map(|item| item.shells.iter().chain(&item.widening.shells))
+            .copied()
+            .collect()
+    };
+    if let Err(err) = apply::apply_after(ctx, &shells, write) {
         if written {
             for change in changes {
                 let _ = crate::edit::write_atomic(
