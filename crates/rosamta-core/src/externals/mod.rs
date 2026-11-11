@@ -31,7 +31,7 @@ pub struct ExternalManifest {
     pub external: Vec<External>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct External {
     /// Where it goes, relative to the home directory.
@@ -159,7 +159,10 @@ fn is_hex(text: &str, lens: &[usize]) -> bool {
 
 /// Each problem with the index of the declaration it belongs to. Paths may
 /// nest only inside a git external, whose own files git tells apart.
-fn problems(manifest: &ExternalManifest, dotfiles: &DotfileManifest) -> Vec<(usize, String)> {
+pub(crate) fn problems(
+    manifest: &ExternalManifest,
+    dotfiles: &DotfileManifest,
+) -> Vec<(usize, String)> {
     let mut problems = Vec::new();
     let paths: Vec<Option<PathBuf>> = manifest
         .external

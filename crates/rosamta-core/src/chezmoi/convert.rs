@@ -391,18 +391,18 @@ fn ignore_nodes(
                 branches,
                 otherwise,
             } => {
-                if let ([(cond, body)], None) = (branches.as_slice(), otherwise) {
-                    if let Some(names) = hostnames(cond, "ne") {
-                        if except.is_some() {
-                            return Err(Unsupported {
-                                line,
-                                what: "nested hostname conditions".into(),
-                            });
-                        }
-                        let hosts = names.iter().map(|name| machine.host(name)).collect();
-                        ignore_nodes(body, on, &Some(hosts), machine, out)?;
-                        continue;
+                if let ([(cond, body)], None) = (branches.as_slice(), otherwise)
+                    && let Some(names) = hostnames(cond, "ne")
+                {
+                    if except.is_some() {
+                        return Err(Unsupported {
+                            line,
+                            what: "nested hostname conditions".into(),
+                        });
                     }
+                    let hosts = names.iter().map(|name| machine.host(name)).collect();
+                    ignore_nodes(body, on, &Some(hosts), machine, out)?;
+                    continue;
                 }
                 let mut left = on;
                 for (cond, body) in branches {
@@ -660,10 +660,10 @@ impl Writer<'_> {
             }
         }
         for (field, other) in [(a, b), (b, a)] {
-            if let (Expr::Field(path), Expr::Bool(value)) = (field, other) {
-                if self.is_bool_var(path) {
-                    return Ok(format!("{} {op} \"{value}\"", self.field(path, line)?));
-                }
+            if let (Expr::Field(path), Expr::Bool(value)) = (field, other)
+                && self.is_bool_var(path)
+            {
+                return Ok(format!("{} {op} \"{value}\"", self.field(path, line)?));
             }
         }
         let chezmoi = ["os", "arch", "hostname"].map(|name| ["chezmoi", name]);
