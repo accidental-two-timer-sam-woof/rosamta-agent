@@ -25,7 +25,7 @@
 - **THEN** 該段不因變數名稱被標記，因為值不是字面字串
 
 ### Requirement: Plain values
-名稱像秘密的變數，值是開關（`true`、`false`、`yes`、`no`、`on`、`off`）、路徑或短數字時 SHALL 不視為疑似秘密。數字在 3 位以內一律不算；4 到 6 位只有在名稱以 `_` 分開的每一段都不是以秘密的字結尾時才不算。以 `/` 開頭、只由 base64 字元組成且各段不像名稱的值 SHALL 不視為路徑。`$` 只有在後面接著名稱、`{`、`(`、`[`、引號或特殊參數時才視為展開，其餘視為字面值的一部分。
+名稱像秘密的變數，值是開關（`true`、`false`、`yes`、`no`、`on`、`off`）、路徑或短數字時 SHALL 不視為疑似秘密。數字在 3 位以內一律不算；4 到 6 位只有在名稱以 `_` 分開的每一段都不是以秘密的字結尾時才不算。以 `/` 開頭、只由 base64 字元組成且各段不像名稱的值 SHALL 不視為路徑。`$` 只有在後面接著名稱、`{`、`(`、`[` 或特殊參數時才視為展開，引號外接著引號時也是，其餘視為字面值的一部分。
 
 #### Scenario: A number that is a setting
 - **WHEN** rc 檔新增 `export KEYTIMEOUT=1000` 或 `export MAX_TOKENS=4096`
@@ -41,6 +41,10 @@
 
 #### Scenario: A dollar that stays
 - **WHEN** rc 檔新增 `export DB_PASSWORD=Summer2024$`
+- **THEN** 被標記為疑似秘密
+
+#### Scenario: A dollar inside double quotes
+- **WHEN** rc 檔新增 `export DB_PASSWORD="Xk9$)vB2"`
 - **THEN** 被標記為疑似秘密
 
 ### Requirement: Unsure literals wait for a decision
@@ -93,3 +97,7 @@ repo 根目錄的 `allow.toml` SHALL 可列出不檢查的內容：`files` 是 r
 #### Scenario: Broken list
 - **WHEN** `allow.toml` 有無法解析的內容，使用者執行 `rsmt publish`
 - **THEN** 遠端沒有收到任何 commit，指令指出 `allow.toml`
+
+#### Scenario: A private key
+- **WHEN** 推送的檔案含有未加密的私鑰
+- **THEN** 回報為私鑰且不附雜湊，即使其中的行單獨看像高熵字串
