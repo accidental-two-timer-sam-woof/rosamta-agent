@@ -4,7 +4,7 @@
 use std::path::Path;
 
 use crate::error::{Error, Result};
-use crate::git::{run, succeeds};
+use crate::git::{run_foreign as run, succeeds};
 
 pub(crate) fn head(dir: &Path) -> Option<String> {
     run(dir, &["rev-parse", "--verify", "--quiet", "HEAD"])

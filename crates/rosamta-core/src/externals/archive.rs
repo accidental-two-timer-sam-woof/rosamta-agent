@@ -99,7 +99,8 @@ pub(crate) fn extract(archive: &Path, strip: u32, into: &Path) -> Result<()> {
         into,
         strip,
         written: 0,
-        entries: 0,
+        seen: 0,
+        placed: 0,
         links: Vec::new(),
     };
     match format {
@@ -108,13 +109,28 @@ pub(crate) fn extract(archive: &Path, strip: u32, into: &Path) -> Result<()> {
         Some(Format::Zip) => out.zip(file)?,
         None => return Err(fail("not a .tar.gz, .tar or .zip archive")),
     }
-    if out.entries == 0 {
+    if out.placed == 0 {
         return Err(fail(format!(
             "nothing is left after dropping {strip} directories"
         )));
     }
-    // Links come last, so no entry is ever written through one.
+    // Links come last, so no entry is ever written through one, and each
+    // goes where its path says: never through another link.
     for (at, target) in &out.links {
+        let mut dir = into.to_path_buf();
+        for part in at.parent().into_iter().flat_map(Path::components) {
+            dir.push(part);
+            match std::fs::symlink_metadata(&dir) {
+                Ok(meta) if meta.is_dir() => {}
+                Ok(_) => {
+                    return Err(fail(format!(
+                        "link `{}` would go through another link",
+                        at.display()
+                    )));
+                }
+                Err(_) => std::fs::create_dir(&dir).map_err(Error::write(&dir))?,
+            }
+        }
         let path = into.join(at);
         std::os::unix::fs::symlink(target, &path).map_err(Error::write(&path))?;
     }
@@ -125,7 +141,9 @@ struct Extractor<'a> {
     into: &'a Path,
     strip: u32,
     written: u64,
-    entries: usize,
+    /// Every entry, counted against the cap even when stripped.
+    seen: usize,
+    placed: usize,
     links: Vec<(PathBuf, PathBuf)>,
 }
 
@@ -133,6 +151,10 @@ impl Extractor<'_> {
     /// Where `name` goes inside the target; `None` for entries the strip
     /// removes entirely.
     fn place(&mut self, name: &Path) -> Result<Option<PathBuf>> {
+        self.seen += 1;
+        if self.seen > MAX_ENTRIES {
+            return Err(fail(format!("more than {MAX_ENTRIES} entries")));
+        }
         let mut parts = Vec::new();
         for component in name.components() {
             match component {
@@ -150,10 +172,7 @@ impl Extractor<'_> {
         if rest.as_os_str().is_empty() {
             return Ok(None);
         }
-        self.entries += 1;
-        if self.entries > MAX_ENTRIES {
-            return Err(fail(format!("more than {MAX_ENTRIES} entries")));
-        }
+        self.placed += 1;
         Ok(Some(rest))
     }
 
@@ -175,20 +194,27 @@ impl Extractor<'_> {
             return Err(fail("extracts to more than 4 GiB"));
         }
         self.written += copied;
-        // No setuid, setgid or sticky bits.
-        let mode = mode.map_or(0o644, |mode| mode & 0o777);
+        // No setuid, setgid or sticky bits, and always readable and
+        // writable by the owner, so it can be hashed and replaced.
+        let mode = mode.map_or(0o644, |mode| mode & 0o777 | 0o600);
         std::fs::set_permissions(&path, std::fs::Permissions::from_mode(mode))
             .map_err(Error::write(&path))
     }
 
     fn link(&mut self, rel: PathBuf, target: PathBuf) -> Result<()> {
-        // A relative target that stays inside, counted from the link's directory.
+        // A relative target that stays inside, counted from the link's
+        // directory. `..` only leads: after a name it could climb out of
+        // where another link points.
         let mut depth = rel.components().count() as i64 - 1;
+        let mut named = false;
         for component in target.components() {
             match component {
-                Component::Normal(_) => depth += 1,
+                Component::Normal(_) => {
+                    named = true;
+                    depth += 1;
+                }
                 Component::CurDir => {}
-                Component::ParentDir => depth -= 1,
+                Component::ParentDir if !named => depth -= 1,
                 _ => depth = -1,
             }
             if depth < 0 {
@@ -261,7 +287,9 @@ impl Extractor<'_> {
                 self.dir(&rel)?;
             } else if entry.is_symlink() {
                 let mut target = String::new();
-                entry
+                // A link target is a short path, not a place for a bomb.
+                (&mut entry)
+                    .take(4096)
                     .read_to_string(&mut target)
                     .map_err(|err| fail(format!("cannot read link `{}`: {err}", rel.display())))?;
                 self.link(rel, PathBuf::from(target))?;
