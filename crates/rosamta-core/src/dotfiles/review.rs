@@ -164,9 +164,7 @@ fn unchanged(ctx: &Context, id: u32, item: &DotfileItem) -> Result<Dotfile> {
     }
     let (entry, sides) = current(ctx, &item.path)?;
     if sides != item.sides {
-        return Err(Error::Usage(format!(
-            "review item {id} changed since it was listed; run `rsmt review`"
-        )));
+        return Err(Error::Stale(id));
     }
     Ok(entry)
 }

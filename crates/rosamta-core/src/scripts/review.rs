@@ -92,9 +92,7 @@ fn current(ctx: &Context, id: u32, listed: &ScriptItem) -> Result<Pending> {
         Some(pending) if pending.hash == listed.hash => Ok(pending),
         _ => {
             sync_queue(ctx)?;
-            Err(Error::Usage(format!(
-                "review item {id} changed since it was listed; run `rsmt review`"
-            )))
+            Err(Error::Stale(id))
         }
     }
 }
@@ -122,7 +120,7 @@ pub fn accept(ctx: &Context, id: u32, listed: &ScriptItem) -> Result<Outcome> {
 }
 
 /// `rsmt review ignore` on a script: count it as run without running it.
-pub(crate) fn ignore(ctx: &Context, id: u32, listed: &ScriptItem) -> Result<()> {
+pub fn ignore(ctx: &Context, id: u32, listed: &ScriptItem) -> Result<()> {
     let pending = current(ctx, id, listed)?;
     remember(ctx, &pending, true)?;
     sync_queue(ctx)

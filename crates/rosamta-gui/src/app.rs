@@ -114,6 +114,9 @@ impl Rosamta {
                     if this.fingerprint != fingerprint {
                         this.fingerprint = fingerprint;
                         this.reload(cx);
+                    } else if this.busy && this.selected_script() {
+                        // The log of a script being run grows as it runs.
+                        this.load_detail(cx);
                     }
                 });
                 if alive.is_err() {
@@ -230,6 +233,13 @@ impl Rosamta {
         }
     }
 
+    fn selected_script(&self) -> bool {
+        self.snap
+            .queue
+            .iter()
+            .any(|item| Some(item.id) == self.selected && item.script.is_some())
+    }
+
     fn load_detail(&mut self, cx: &mut Context<Self>) {
         let Some(id) = self.selected else {
             return;
@@ -283,6 +293,10 @@ impl Rosamta {
                             // In this app's words, without the terminal advice.
                             rosamta_core::Error::Waiting(waiting) => {
                                 crate::pages::review::waiting_text(waiting).to_string()
+                            }
+                            // The queue is read again below; the list shows what is there now.
+                            rosamta_core::Error::NoItem(_) | rosamta_core::Error::Stale(_) => {
+                                crate::text::t("item.stale").to_string()
                             }
                             err => err.to_string(),
                         };
@@ -608,7 +622,11 @@ mod view_tests {
         let run = |cx: &mut gpui_kit::VisualTestContext| {
             cx.update(|window, cx| {
                 view.update(cx, |view, cx| {
-                    view.run(window, cx, move |core| actions::run_script(core, script));
+                    let shown = view.snap.queue.iter().find(|item| item.id == script);
+                    let shown = shown.and_then(|item| item.script.clone()).unwrap();
+                    view.run(window, cx, move |core| {
+                        actions::run_script(core, script, shown)
+                    });
                 })
             });
             cx.run_until_parked();
