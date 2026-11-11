@@ -1309,7 +1309,16 @@ pub fn plan_undo(ctx: &Context, id: u32) -> Result<Undo> {
     })
     .transpose()?;
     let module_after = match &module {
-        Some((path, text)) => released(path, text, &adoption, &host_config(ctx)?.id)?,
+        Some((path, text)) => {
+            let registered = repo::read_manifest(&ctx.paths.repo())?.hosts;
+            // A local module is this host's alone.
+            let registered = if adoption.local {
+                Vec::new()
+            } else {
+                registered
+            };
+            released(path, text, &adoption, &host_config(ctx)?.id, &registered)?
+        }
         None => None,
     };
     Ok(Undo {
@@ -1326,12 +1335,18 @@ pub fn plan_undo(ctx: &Context, id: u32) -> Result<Undo> {
 
 /// The module once this host no longer uses it: with the limits it had
 /// before this host joined it for every host, without this host while
-/// another host is listed, and otherwise gone.
-fn released(path: &Path, text: &str, adoption: &Adoption, host: &str) -> Result<Option<String>> {
+/// another host loads it, and otherwise gone.
+fn released(
+    path: &Path,
+    text: &str,
+    adoption: &Adoption,
+    host: &str,
+    registered: &[String],
+) -> Result<Option<String>> {
     let mut others = true;
     let after = edit_module(path, text, |doc| match &adoption.limits {
         Some(limits) => crate::scope::limit(doc, &limits.hosts, &limits.os),
-        None => others = crate::scope::remove_host(doc, host),
+        None => others = crate::scope::remove_host(doc, host, registered),
     })?;
     Ok(others.then_some(after))
 }
