@@ -20,6 +20,12 @@ fn hooked(files: &[(&str, &str)]) -> Home {
     for (rel, text) in files {
         write(&home, rel, text);
     }
+    // Ask, so the tests decide each item; the default adopts at once.
+    write(
+        &home,
+        ".config/rosamta/host.toml",
+        "id = \"test\"\nadopt = \"ask\"\n",
+    );
     home.cmd("rsmt").arg("init").assert().success();
     run(&home, &["apply"]);
     home
@@ -52,16 +58,20 @@ fn run(home: &Home, args: &[&str]) -> String {
 fn set_host(home: &Home, key: &str, value: &str) {
     let path = home.host_config();
     let text = fs::read_to_string(&path).unwrap();
-    let lines: Vec<String> = text
+    let line = format!("{key} = {value}");
+    let mut lines: Vec<String> = text
         .lines()
-        .map(|line| {
-            if line.starts_with(&format!("{key} =")) {
-                format!("{key} = {value}")
+        .map(|old| {
+            if old.starts_with(&format!("{key} =")) {
+                line.clone()
             } else {
-                line.to_string()
+                old.to_string()
             }
         })
         .collect();
+    if !lines.contains(&line) {
+        lines.push(line);
+    }
     fs::write(path, lines.join("\n") + "\n").unwrap();
 }
 
@@ -250,6 +260,13 @@ fn structured_content_becomes_one_module_and_commit() {
         module.contains(&format!("hosts = [\"{host}\"]")),
         "{module}"
     );
+    let os = if cfg!(target_os = "macos") {
+        "macos"
+    } else {
+        "linux"
+    };
+    assert!(module.contains(&format!("os = [\"{os}\"]")), "{module}");
+    assert!(module.contains("shells = [\"zsh\"]"), "{module}");
     assert_eq!(
         repo_git(&home, &["log", "-1", "--format=%s"]).trim(),
         format!("adopt(zsh): add bun env, PATH and aliases from ~/.zshrc on {host}")
@@ -518,6 +535,34 @@ fn an_rc_file_edited_after_reading_is_not_overwritten() {
         "{zshrc}"
     );
     assert!(home.repo().join("modules/adopted/bun.toml").exists());
+}
+
+/// Structured content keeps to the shells that read its file.
+#[test]
+fn structured_content_stays_in_its_shells() {
+    if !has("zsh") || !has("sh") {
+        return;
+    }
+    let home = hooked(&[
+        (".zshrc", "export ONLY_ZSH=1\n"),
+        (".profile", "export EVERY_POSIX=1\n"),
+    ]);
+    run(&home, &["adopt", "--yes"]);
+    let dir = home.repo().join("modules/adopted");
+    let module = |name: &str| {
+        fs::read_dir(&dir)
+            .unwrap()
+            .map(|entry| fs::read_to_string(entry.unwrap().path()).unwrap())
+            .find(|text| text.contains(name))
+            .unwrap_or_else(|| panic!("no module sets {name}"))
+    };
+    let zsh = module("ONLY_ZSH");
+    assert!(zsh.contains("shells = [\"zsh\"]"), "{zsh}");
+    let posix = module("EVERY_POSIX");
+    assert!(
+        posix.contains("shells = [\"sh\", \"bash\", \"zsh\"]"),
+        "{posix}"
+    );
 }
 
 /// The same line in two files: adopting the zsh one leaves `.profile`'s,

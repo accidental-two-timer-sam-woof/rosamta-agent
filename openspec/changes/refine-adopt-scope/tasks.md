@@ -1,7 +1,7 @@
 ## 1. 套用範圍
 
-- [ ] 1.1 接管依範圍寫入 `hosts`、`os` 與 `shells`，結構化 module 只套用到來源檔案所屬的 shell，`module_toml` 輸出 `os` 與 `shells`；更新受影響的測試
-- [ ] 1.2 預設接管偏好改為自動，既有設定不變；更新 README 與測試
+- [x] 1.1 接管依範圍寫入 `hosts`、`os` 與 `shells`，結構化 module 只套用到來源檔案所屬的 shell，`module_toml` 輸出 `os` 與 `shells`；更新受影響的測試
+- [x] 1.2 預設接管偏好改為自動，既有設定不變；更新 README 與測試
 
 ## 2. 跨主機合併
 

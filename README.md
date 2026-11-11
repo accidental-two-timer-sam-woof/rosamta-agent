@@ -181,7 +181,7 @@ Debian 與 Ubuntu 預設的 `~/.bashrc` 開頭會讓非互動的 bash 直接結�
 rsmt adopt
 ```
 
-把各 shell 設定檔中區塊以外的內容搬進 repo 的 `modules/adopted/`，搬完後設定檔只剩區塊。只有環境變數、PATH 與 alias 的段落會轉成套用到所有 shell 的 module；其他內容原樣保存，只套用到讀取該檔的 shell。看起來像 API key 或 token 的內容不會進 repo，而是存在 `~/.config/rosamta/local/modules/`。
+把各 shell 設定檔中區塊以外的內容搬進 repo 的 `modules/adopted/`，搬完後設定檔只剩區塊。只有環境變數、PATH 與 alias 的段落會轉成結構化 module，其他內容原樣保存；兩者都只套用到讀取該檔的 shell，並記錄這台主機與 OS，接管前後的行為相同。看起來像 API key 或 token 的內容不會進 repo，而是存在 `~/.config/rosamta/local/modules/`。
 
 修改前會先存 snapshot，每次接管都有一個 commit，輸出中的編號可用來還原：
 
@@ -189,7 +189,7 @@ rsmt adopt
 rsmt restore <編號>
 ```
 
-之後安裝程式或你自己加進設定檔的內容，會出現在待處理清單：
+之後安裝程式或你自己加進設定檔的內容，背景服務會自動接管；接管偏好設為 `ask` 時，改為列在待處理清單：
 
 ```sh
 rsmt review
@@ -197,13 +197,13 @@ rsmt review accept <編號>
 rsmt review ignore <編號>
 ```
 
-`accept` 接管該項，預設只套用到這台主機，加上 `--scope all` 則套用到所有主機。`ignore` 讓內容留在設定檔，內容改變前不再列出。清單不是空的時候，開啟互動 shell 會顯示一行提醒。
+`accept` 接管該項，預設只套用到這台主機（記錄主機、OS 與 shell），加上 `--scope all` 則去掉主機與 OS 的限制。`ignore` 讓內容留在設定檔，內容改變前不再列出。清單不是空的時候，開啟互動 shell 會顯示一行提醒。
 
 接管方式寫在 `~/.config/rosamta/host.toml`：
 
 | 設定 | 可用的值 |
 |---|---|
-| `adopt` | `ask`：列入待處理（預設）；`auto`：直接接管；`off`：不處理 |
+| `adopt` | `auto`：直接接管（預設）；`ask`：列入待處理；`off`：不處理 |
 | `adopt_original` | `delete`：刪除原內容（預設）；`comment`：改成註解 |
 | `shell_notice` | `true`：開 shell 時提醒（預設）；`false` |
 

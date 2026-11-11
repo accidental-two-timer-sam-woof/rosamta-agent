@@ -61,9 +61,12 @@ fn status(home: &Home) -> serde_json::Value {
     serde_json::from_slice(&out.stdout).unwrap()
 }
 
-/// A HOME with a repo and hooks for every installed shell.
+/// A HOME with a repo and hooks for every installed shell. Adopting asks,
+/// so the tests see the queue; the default adopts at once.
 fn hooked() -> Home {
     let home = Home::new();
+    home.write_host("test");
+    append(&home.host_config(), "adopt = \"ask\"\n");
     home.cmd("rsmt").arg("init").assert().success();
     home.cmd("rsmt").arg("apply").assert().success();
     home
