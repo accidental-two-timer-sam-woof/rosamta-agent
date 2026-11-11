@@ -954,14 +954,18 @@ fn given_back(scratch: &Path, change: &FileChange) -> Result<(Option<String>, Op
     if unchanged(&change.path, after).is_ok() {
         return Ok((change.after.clone(), change.before.clone()));
     }
-    let current = read(&change.path)?;
+    // A file removed since then is written anew, not taken for an empty one.
+    let current = match unchanged(&change.path, None) {
+        Ok(()) => None,
+        Err(_) => Some(read(&change.path)?),
+    };
     let merged = merge_back(
         scratch,
         before.unwrap_or_default(),
         after.unwrap_or_default(),
-        &current,
+        current.as_deref().unwrap_or_default(),
     )?;
-    Ok((Some(current), Some(merged)))
+    Ok((current, Some(merged)))
 }
 
 /// [`given_back`] for every file or for none: nothing is written until
@@ -1682,6 +1686,21 @@ mod tests {
             &[&first, &second]
         ));
         assert_eq!(std::fs::read_to_string(&zshrc).unwrap(), "export A=1\n");
+    }
+
+    #[test]
+    fn a_file_removed_during_the_check_gets_its_lines_back() {
+        crate::git::tests::isolate();
+        let dir = tempfile::tempdir().unwrap();
+        let zshrc = dir.path().join(".zshrc");
+        let change = FileChange {
+            path: zshrc.clone(),
+            before: Some("export A=1\nexport BUN=1\n".into()),
+            after: Some("export A=1\n".into()),
+        };
+        assert!(give_back_all(&dir.path().join("merge"), &[&change]));
+        let text = std::fs::read_to_string(&zshrc).unwrap();
+        assert!(text.contains("export BUN=1"), "{text}");
     }
 
     fn module(text: &str) -> Module {
