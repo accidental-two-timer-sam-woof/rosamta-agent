@@ -1041,7 +1041,7 @@ fn the_first_publish_after_adopting_goes_out() {
     write(
         &home,
         ".config/rosamta/host.toml",
-        "id = \"xinshoutw-macbook-pro\"\nadopt = \"ask\"\n",
+        "id = \"xinshoutw-macbook-pro\"\nadopt = \"ask\"\npublish = \"manual\"\n",
     );
     home.cmd("rsmt").arg("init").assert().success();
     run(&home, &["apply"]);
@@ -1058,6 +1058,28 @@ fn the_first_publish_after_adopting_goes_out() {
     );
     run(&home, &["adopt", "--yes"]);
     home.cmd("rsmt").arg("publish").assert().success();
+    let git = |args: &[&str]| {
+        std::process::Command::new("git")
+            .arg("--git-dir")
+            .arg(&remote)
+            .args(args)
+            .output()
+            .unwrap()
+    };
+    let branches = git(&["for-each-ref", "--format=%(refname)", "refs/heads"]);
+    let branch = String::from_utf8(branches.stdout).unwrap();
+    let pushed = git(&[
+        "grep",
+        "-l",
+        "on xinshoutw-macbook-pro.",
+        branch.trim(),
+        "--",
+        "modules",
+    ]);
+    assert!(
+        pushed.status.success(),
+        "the adopted module did not reach the remote"
+    );
 }
 
 /// A commit that fails for a reason other than signing (here a stale
