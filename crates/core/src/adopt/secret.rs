@@ -95,15 +95,18 @@ fn high_entropy(text: &str) -> bool {
     text.split(|c: char| !(c.is_ascii_alphanumeric() || "+/=_-.".contains(c)))
         .any(|whole| {
             let token = value(whole);
-            // In quotes a token may be a value (`X="…"`, fish `set X '…'`):
-            // it never passes as a name, and is judged whole as well unless
-            // it assigns to a known name (`env 'POWERLEVEL9K_X=red'`).
+            // In quotes a token may be a literal value (`X="…"`, fish
+            // `set X '…'`): it never passes as a name, and the part before
+            // its `=` is judged too, unless it is a known name.
             let start = whole.as_ptr() as usize - text.as_ptr() as usize;
             let quoted = text[..start].ends_with(['"', '\'']);
-            let assigned = &whole[..whole.len() - token.len()];
+            let assigned = whole[..whole.len() - token.len()].trim_end_matches(['=', '+']);
             let name = !quoted && assigned.is_empty() && known_name(token);
             high(token, name)
-                || (quoted && !assigned.is_empty() && !known_name(assigned) && high(whole, false))
+                || (quoted
+                    && !assigned.is_empty()
+                    && !known_name(assigned)
+                    && high(assigned, false))
         })
 }
 
@@ -118,24 +121,23 @@ fn high(token: &str, name: bool) -> bool {
     }
 }
 
-/// `NAME=value` and `NAME+=value` are judged by the value; base64 padding
-/// (`abc==`) is not an assignment.
+/// `NAME=value` is judged by the value, and so is `NAME+=value` for a known
+/// name; elsewhere `+=` may sit inside a key. Base64 padding (`abc==`) is
+/// not an assignment.
 fn value(token: &str) -> &str {
-    match token.split_once('=') {
-        Some((name, value))
-            if !name.strip_suffix('+').unwrap_or(name).is_empty()
-                && !value.is_empty()
-                && !value.starts_with('=')
-                && name
-                    .strip_suffix('+')
-                    .unwrap_or(name)
-                    .chars()
-                    .all(|c| c.is_ascii_alphanumeric() || c == '_') =>
-        {
-            value
-        }
-        _ => token,
-    }
+    let Some((name, value)) = token.split_once('=') else {
+        return token;
+    };
+    let name = match name.strip_suffix('+') {
+        Some(name) if known_name(name) => name,
+        Some(_) => return token,
+        None => name,
+    };
+    let assignment = !name.is_empty()
+        && !value.is_empty()
+        && !value.starts_with('=')
+        && name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_');
+    if assignment { value } else { token }
 }
 
 /// Words joined by `-` or `.` in one case, such as `my-macbook-pro` or
@@ -277,6 +279,8 @@ mod tests {
             "export X=POWERLEVEL9K_QWERTYUIOPASDFGHJZXCVBNM"
         ));
         assert!(looks_secret("X+=Zk3q9LmP2vR8tY6wB1nC4xJ7"));
+        assert!(looks_secret("X+=347f23b364db67195b295cfa0e7abc28"));
+        assert!(looks_secret("1DLDn0L8D1aQzEqb61EKBo3+=x"));
         assert!(looks_secret("export X=\"K7Q2M9X4P8R3T6W1Z5N0+=abc\""));
         assert!(looks_secret("export X='K7Q2M9X4P8R3T6W1Z5N0=abc'"));
         assert!(looks_secret(
@@ -322,6 +326,13 @@ mod tests {
             "  POWERLEVEL9K_CONTEXT_TEMPLATE+=foo",
             "  POWERLEVEL9K_KUBECONTEXT_DEFAULT_CONTENT_EXPANSION+='${P9K_KUBECONTEXT_NAME}'",
             "env 'POWERLEVEL9K_MULTILINE_FIRST_PROMPT_GAP_BACKGROUND=red' zsh",
+            "alias -g RED='RAILS_ENV=development'",
+            "echo \"RUSTFLAGS=-Zfmt-debug=none\" >> $GITHUB_ENV",
+            "docker run -e \"PYENV_VIRTUALENV_DISABLE_PROMPT=1\" app",
+            "export \"DOCKER_DEFAULT_PLATFORM=linux/amd64\"",
+            "Environment=\"KUBECONFIG=/etc/kubernetes/admin.conf\"",
+            "  - \"NODE_OPTIONS=--max-old-space-size=4096\"",
+            "docker run -e \"DATABASE_HOST=postgres.internal.example.com\" app",
         ] {
             assert!(!looks_secret(text), "{text}");
         }
