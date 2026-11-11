@@ -34,6 +34,9 @@ pub struct Attempt {
     /// Pulling worked; applying what came in failed.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub applying: bool,
+    /// A commit rosamta could not make, reported until its change is committed.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub commit: bool,
 }
 
 impl Attempt {
@@ -48,6 +51,7 @@ impl Attempt {
             reason,
             files: Vec::new(),
             applying: false,
+            commit: false,
         }
     }
 }

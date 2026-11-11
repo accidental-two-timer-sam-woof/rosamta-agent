@@ -96,15 +96,19 @@ pub fn publish_if_auto(ctx: &Context, _held: &Lock) -> Result<Option<Published>>
 
 /// Record that a commit could not be signed, from any command that commits.
 pub(crate) fn signing_blocked(ctx: &Context, message: &str) -> Result<()> {
-    record_publish(ctx, Attempt::new(Outcome::Blocked, Some(signing(message))))
+    record_publish(ctx, failed_commit(signing(message)))
 }
 
 /// Record a commit that failed for any other reason, such as a rebase in progress.
 pub(crate) fn commit_blocked(ctx: &Context, err: &Error) -> Result<()> {
-    record_publish(
-        ctx,
-        Attempt::new(Outcome::Blocked, Some(format!("commit failed: {err}"))),
-    )
+    record_publish(ctx, failed_commit(format!("commit failed: {err}")))
+}
+
+fn failed_commit(reason: String) -> Attempt {
+    Attempt {
+        commit: true,
+        ..Attempt::new(Outcome::Blocked, Some(reason))
+    }
 }
 
 fn signing(message: &str) -> String {
@@ -301,8 +305,9 @@ fn publish_locked(ctx: &Context, commit_edits: bool) -> Result<Published> {
         break;
     }
     let unpushed = Remote::required(&repo_dir)?.unpushed(&repo_dir)?;
-    // A commit rosamta could not make (signing, a stale lock) stays reported
-    // while its change is still uncommitted, whatever else was pushed.
+    // A commit rosamta could not make (signing, a stale lock, a secret) stays
+    // reported while its change is still uncommitted, whatever else was
+    // pushed; a push that worked clears what only blocked pushing.
     let uncommitted = !commit_edits
         && !git::run(&repo_dir, &["status", "--porcelain"])?
             .trim()
@@ -311,7 +316,7 @@ fn publish_locked(ctx: &Context, commit_edits: bool) -> Result<Published> {
         let blocked = state
             .publish
             .as_ref()
-            .is_some_and(|attempt| attempt.outcome == Outcome::Blocked);
+            .is_some_and(|attempt| attempt.outcome == Outcome::Blocked && attempt.commit);
         if !(blocked && uncommitted) {
             state.publish = Some(Attempt::ok());
         }
@@ -331,6 +336,7 @@ fn secret_blocked(ctx: &Context, hits: &[Hit], unpushed: Option<u32>) -> Error {
         lines.join("\n")
     );
     let mut attempt = Attempt::new(Outcome::Blocked, Some(text.clone()));
+    attempt.commit = unpushed.is_none();
     attempt.files = hits.iter().map(|hit| hit.file.clone()).collect();
     attempt.files.sort();
     attempt.files.dedup();
