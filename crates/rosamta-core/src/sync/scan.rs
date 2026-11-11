@@ -1,7 +1,9 @@
 //! The secret check before a push: every line the push would add to the remote.
 
 use std::path::Path;
+use std::sync::OnceLock;
 
+use regex::Regex;
 use serde::Serialize;
 
 use crate::adopt::secret_rule;
@@ -138,16 +140,23 @@ fn added_lines(log: &str) -> Vec<Added> {
     out
 }
 
+/// `text` with the registered host IDs taken out of `hosts = [...]` lists;
+/// the same words anywhere else are still checked.
+fn without_host_ids(text: &str, hosts: &[String]) -> String {
+    static LIST: OnceLock<Regex> = OnceLock::new();
+    let list = LIST.get_or_init(|| Regex::new(r"\bhosts\s*=\s*\[[^\]]*\]").unwrap());
+    list.replace_all(text, |caps: &regex::Captures| {
+        hosts.iter().fold(caps[0].to_string(), |list, host| {
+            list.replace(&format!("\"{host}\""), "\"\"")
+        })
+    })
+    .into_owned()
+}
+
 /// Check each file's added lines together, so rules spanning lines (private
-/// keys) still match; report the first line that matches on its own. Quoted
-/// `hosts` IDs are left out.
+/// keys) still match; report the first line that matches on its own.
 fn check(files: &[Added], hosts: &[String]) -> Vec<Hit> {
-    let matched = |text: &str| {
-        let text = hosts.iter().fold(text.to_string(), |text, host| {
-            text.replace(&format!("\"{host}\""), "\"\"")
-        });
-        secret_rule(&text)
-    };
+    let matched = |text: &str| secret_rule(&without_host_ids(text, hosts));
     files
         .iter()
         // A new encrypted dotfile is ciphertext from its first line, which
@@ -242,10 +251,13 @@ mod tests {
             "[env]\nB = \"Zk3q9LmP2vR8tY6wB1nC4xJ7\"\n",
         )
         .unwrap();
+        // The same word as a password is still one.
+        let password = format!("[env]\nDB_PASSWORD = \"{host}\"\n");
+        std::fs::write(repo.join("modules/c.toml"), password).unwrap();
         crate::git::run(repo, &["add", "--all"]).unwrap();
         let hits = staged(repo, &[]).unwrap();
-        assert_eq!(hits.len(), 1, "{hits:?}");
-        assert_eq!(hits[0].file, "modules/b.toml");
+        let files: Vec<&str> = hits.iter().map(|hit| hit.file.as_str()).collect();
+        assert_eq!(files, ["modules/b.toml", "modules/c.toml"], "{hits:?}");
     }
 
     const LOG: &str = "commit 1111
