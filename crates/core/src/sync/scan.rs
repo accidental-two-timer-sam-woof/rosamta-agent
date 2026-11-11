@@ -6,7 +6,7 @@ use std::sync::OnceLock;
 use regex::Regex;
 use serde::Serialize;
 
-use crate::adopt::Allowed;
+use crate::adopt::{Allowed, secret_rule};
 use crate::error::Result;
 use crate::git;
 
@@ -199,7 +199,7 @@ fn without_host_ids(text: &str, hosts: &[String]) -> String {
 /// keys) still match; report the first line that matches on its own. What
 /// `allowed` lists is left out.
 fn check(files: &[Added], hosts: &[String], allowed: &Allowed) -> Vec<Hit> {
-    let matched = |text: &str| allowed.rule(&without_host_ids(text, hosts));
+    let matched = |text: &str| secret_rule(&without_host_ids(&allowed.checked(text), hosts));
     files
         .iter()
         .filter(|added| !allowed.file(&added.file))
@@ -464,5 +464,28 @@ deleted file mode 100644
                 hash: Allowed::hash("GH = \"ghp_0123456789abcdefghijABCDEFGHIJ012345\""),
             }]
         );
+    }
+
+    /// The hash a blocked line is reported with lets it through, even when a
+    /// registered host ID in it is taken out before the rules run.
+    #[test]
+    fn a_listed_line_with_a_host_id_is_let_through() {
+        let (host, other) = ("mac-zk3q9lmp2vr8ty6wb1nc4xj7", "mac-q8w3zr5ty1pk7vn2lx9bj4");
+        let line = format!("hosts = [\"{host}\", \"{other}\"]");
+        let added = [Added {
+            commit: "1111".into(),
+            file: "rosamta.toml".into(),
+            lines: vec![(2, line.clone())],
+        }];
+        let hosts = [host.to_string()];
+        let hits = check(&added, &hosts, &Allowed::default());
+        assert_eq!(hits.len(), 1, "{hits:?}");
+        assert_eq!(hits[0].hash, Allowed::hash(&line));
+
+        let dir = tempfile::tempdir().unwrap();
+        let list = format!("lines = [\"{}\"]\n", hits[0].hash);
+        std::fs::write(dir.path().join(Allowed::MANIFEST), list).unwrap();
+        let allowed = Allowed::load(dir.path()).unwrap();
+        assert_eq!(check(&added, &hosts, &allowed), []);
     }
 }

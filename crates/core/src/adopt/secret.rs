@@ -153,7 +153,7 @@ impl Allowed {
         })
     }
 
-    fn checked<'a>(&self, text: &'a str) -> std::borrow::Cow<'a, str> {
+    pub(crate) fn checked<'a>(&self, text: &'a str) -> std::borrow::Cow<'a, str> {
         if self.lines.is_empty() {
             return text.into();
         }
