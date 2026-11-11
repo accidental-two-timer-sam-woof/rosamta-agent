@@ -4,7 +4,7 @@
 use std::collections::BTreeMap;
 use std::path::{Component, Path, PathBuf};
 
-use crate::config::{Deploy, Dotfile, DotfileManifest, HostFacts};
+use crate::config::{Deploy, Dotfile, DotfileManifest, HostFacts, When};
 use crate::error::{Error, Result};
 use crate::validate;
 
@@ -37,7 +37,7 @@ const STARTUP_FILES: &[&str] = &[
 ];
 
 /// The startup file `path` is or holds, if any.
-fn startup_file(path: &Path) -> Option<&'static str> {
+pub(crate) fn startup_file(path: &Path) -> Option<&'static str> {
     STARTUP_FILES
         .iter()
         .copied()
@@ -196,38 +196,44 @@ fn problems(manifest: &DotfileManifest, repo_dir: &Path) -> Vec<(usize, String)>
 
 /// What a path uses on this host.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum Choice {
-    Use(Dotfile),
+pub enum Choice<T = Dotfile> {
+    Use(T),
     /// This many declarations match and none is more specific than the rest.
     Duplicate(usize),
 }
 
-/// The declaration each path uses on this host. Among several that match,
-/// one whose `when.hosts` is this host ID alone wins, then one naming it.
+/// The declaration each path uses on this host.
 pub fn select(manifest: &DotfileManifest, host: &HostFacts) -> BTreeMap<PathBuf, Choice> {
-    let mut matching: BTreeMap<PathBuf, Vec<&Dotfile>> = BTreeMap::new();
-    for entry in manifest
-        .dotfile
-        .iter()
-        .filter(|entry| entry.when.matches(host))
-    {
-        if let Some(path) = clean(&entry.path) {
+    select_by(&manifest.dotfile, |entry| (&entry.path, &entry.when), host)
+}
+
+/// The declaration each path uses on this host, `key` giving a
+/// declaration's path and condition. Among several that match, one whose
+/// `when.hosts` is this host ID alone wins, then one naming it.
+pub fn select_by<T: Clone>(
+    declared: &[T],
+    key: impl Fn(&T) -> (&str, &When),
+    host: &HostFacts,
+) -> BTreeMap<PathBuf, Choice<T>> {
+    let mut matching: BTreeMap<PathBuf, Vec<&T>> = BTreeMap::new();
+    for entry in declared.iter().filter(|entry| key(entry).1.matches(host)) {
+        if let Some(path) = clean(key(entry).0) {
             matching.entry(path).or_default().push(entry);
         }
     }
     matching
         .into_iter()
         .map(|(path, entries)| {
-            let named: Vec<&Dotfile> = entries
+            let named: Vec<&T> = entries
                 .iter()
                 .copied()
-                .filter(|entry| entry.when.hosts.contains(&host.id))
+                .filter(|entry| key(entry).1.hosts.contains(&host.id))
                 .collect();
             // A declaration for this host alone is the most specific.
-            let own: Vec<&Dotfile> = named
+            let own: Vec<&T> = named
                 .iter()
                 .copied()
-                .filter(|entry| entry.when.hosts == [host.id.clone()])
+                .filter(|entry| key(entry).1.hosts == [host.id.clone()])
                 .collect();
             let choice = match (entries.as_slice(), named.as_slice(), own.as_slice()) {
                 ([only], _, _) | (_, [only], _) | (_, _, [only]) => Choice::Use((*only).clone()),

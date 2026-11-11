@@ -1,6 +1,7 @@
 //! JSON Schema for each file kind, generated from the same types that parse them.
 
 use crate::config::{DotfileManifest, HostConfig, Module, RepoManifest};
+use crate::externals::ExternalManifest;
 use crate::secrets::SecretCommands;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -10,6 +11,7 @@ pub enum Kind {
     Host,
     Dotfiles,
     Secrets,
+    Externals,
 }
 
 pub fn schema(kind: Kind) -> serde_json::Value {
@@ -19,6 +21,7 @@ pub fn schema(kind: Kind) -> serde_json::Value {
         Kind::Host => schemars::schema_for!(HostConfig),
         Kind::Dotfiles => schemars::schema_for!(DotfileManifest),
         Kind::Secrets => schemars::schema_for!(SecretCommands),
+        Kind::Externals => schemars::schema_for!(ExternalManifest),
     };
     schema.to_value()
 }
