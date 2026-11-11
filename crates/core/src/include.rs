@@ -407,7 +407,7 @@ pub fn include(ctx: &Context, items: &[Item], changes: &[FileChange]) -> Result<
         .collect();
     let files: Vec<&str> = files.iter().map(String::as_str).collect();
     let names: Vec<&str> = items.iter().map(|item| item.name.as_str()).collect();
-    let message = format!("include: {} on {}", names.join(", "), host.id);
+    let message = format!("chore(include): {} on {}", names.join(", "), host.id);
     sync::commit_scanned(ctx, &files, Some(&message))?;
     if items.iter().any(|item| item.kind == Kind::Dotfile) {
         dotfiles::deploy::deploy(ctx)?;

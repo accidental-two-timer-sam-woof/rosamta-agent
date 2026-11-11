@@ -843,7 +843,7 @@ mod manage {
         assert_eq!(read(&source.join("config")), "theme = dark\n");
         assert_eq!(fs::read_link(home.at(".config/ghostty")).unwrap(), source);
         assert!(
-            log(&home).starts_with("add(home): .config/ghostty\n"),
+            log(&home).starts_with("chore(add): .config/ghostty\n"),
             "{}",
             log(&home)
         );
@@ -963,7 +963,7 @@ mod manage {
         assert_eq!(read(&ghostty.join("config")), "theme = dark\n");
         assert!(!home.repo().join("home/.config/ghostty").exists());
         assert!(!read(&home.repo().join("dotfiles.toml")).contains("ghostty"));
-        assert!(log(&home).starts_with("forget(home): .config/ghostty\n"));
+        assert!(log(&home).starts_with("chore(forget): .config/ghostty\n"));
         assert!(home.deploy().is_empty());
         let err = manage::forget(&home.ctx, &ghostty).unwrap_err();
         assert!(err.to_string().contains("is not a dotfile"), "{err}");
@@ -977,7 +977,7 @@ mod manage {
         write(&home.at(".npmrc"), "save-exact = true\n");
         manage::add(&home.ctx, &[home.at(".npmrc")], Deploy::Link, false).unwrap();
         let log = log(&home);
-        assert!(log.starts_with("add(home): .npmrc\n"), "{log}");
+        assert!(log.starts_with("chore(add): .npmrc\n"), "{log}");
         assert!(!log.contains("wip.toml"), "{log}");
         let out = Command::new("git")
             .arg("-C")
