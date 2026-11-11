@@ -36,12 +36,12 @@ const STARTUP_FILES: &[&str] = &[
     ".config/fish/conf.d",
 ];
 
-/// The startup file `path` is or holds, if any.
+/// The startup file `path` is, holds or sits in (a `conf.d` file), if any.
 pub(crate) fn startup_file(path: &Path) -> Option<&'static str> {
     STARTUP_FILES
         .iter()
         .copied()
-        .find(|file| Path::new(file).starts_with(path))
+        .find(|file| Path::new(file).starts_with(path) || path.starts_with(file))
 }
 
 /// `path` as plain relative components; `None` when it is absolute,
