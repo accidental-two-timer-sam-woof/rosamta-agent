@@ -678,9 +678,8 @@ fn smoke(ctx: &Context, found: &Detected, dir: &Path) -> Vec<Smoke> {
                         .map(str::to_string)
                         .filter(|line| !line.is_empty())
                         .collect();
-                    let reached = String::from_utf8_lossy(&output.stdout)
-                        .lines()
-                        .any(|line| line.trim() == SMOKE_MARK);
+                    // Startup output need not end in a newline (`printf` of a title).
+                    let reached = String::from_utf8_lossy(&output.stdout).contains(SMOKE_MARK);
                     if reached {
                         Smoke::Stderr(lines)
                     } else {

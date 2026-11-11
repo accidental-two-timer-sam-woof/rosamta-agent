@@ -357,6 +357,17 @@ fn a_module_that_exits_the_shell_is_rolled_back() {
 }
 
 #[test]
+fn output_without_a_newline_still_finishes_startup() {
+    let home = set_up();
+    apply(&home);
+    home.write(
+        "modules/title.toml",
+        "[raw]\nsh = \"printf 'title'\"\nbash = \"printf 'title'\"\nzsh = \"printf 'title'\"\nfish = \"printf 'title'\"\n",
+    );
+    apply(&home);
+}
+
+#[test]
 fn a_login_snippet_that_prints_errors_is_rolled_back() {
     if !has("zsh") {
         return;
