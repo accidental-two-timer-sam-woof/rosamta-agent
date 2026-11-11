@@ -1,7 +1,7 @@
 //! `rsmt apply`, `hook`, `unhook`, `eject` and `restore --original`.
 
 use std::collections::BTreeMap;
-use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
+use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -952,7 +952,7 @@ pub fn plan_restore(ctx: &Context) -> Result<Vec<FileChange>> {
         let kind_differs = (!legacy(&original)
             && std::fs::read_link(&original.path).ok() != original.link)
             || original.mode.is_some_and(|mode| {
-                std::fs::symlink_metadata(&original.path)
+                std::fs::metadata(&original.path)
                     .is_ok_and(|meta| meta.permissions().mode() & 0o7777 != mode)
             });
         let after = match (original.content, &original.link) {
@@ -1027,22 +1027,26 @@ fn put_back(original: &crate::snapshot::Original) -> Result<()> {
             None => crate::dotfiles::tree::remove(path),
         };
     };
-    if std::fs::read(path).ok().as_ref() != Some(bytes) {
-        // A new private file is never readable by others, even briefly.
-        let mut file = std::fs::OpenOptions::new()
-            .write(true)
-            .create(true)
-            .truncate(true)
-            .mode(original.mode.unwrap_or(0o644))
-            .open(path)
-            .map_err(Error::write(path))?;
-        std::io::Write::write_all(&mut file, bytes).map_err(Error::write(path))?;
+    if std::fs::read(path).ok().as_ref() == Some(bytes) {
+        return match original.mode {
+            Some(mode) => crate::dotfiles::tree::set_mode(path, mode),
+            None => Ok(()),
+        };
     }
-    if let (None, Some(mode)) = (&original.link, original.mode) {
-        std::fs::set_permissions(path, std::fs::Permissions::from_mode(mode))
-            .map_err(Error::write(path))?;
-    }
-    Ok(())
+    // Through a link the bytes belong to the file it points at.
+    let target = match std::fs::read_link(path) {
+        Ok(link) if original.link.is_some() || legacy(original) => std::fs::canonicalize(path)
+            .unwrap_or_else(|_| path.parent().expect("a target has a parent").join(link)),
+        _ => path.clone(),
+    };
+    let mode = original
+        .mode
+        .or_else(|| crate::dotfiles::tree::mode_of(&target))
+        .unwrap_or(0o644);
+    // A fresh owner-only file swapped in: the bytes never sit in a file others
+    // can read, and a link put there meanwhile is replaced, not followed.
+    crate::dotfiles::tree::put(crate::dotfiles::tree::Content::Bytes(bytes), &target)?;
+    crate::dotfiles::tree::set_mode(&target, mode)
 }
 
 /// One shell on this host, for status screens.

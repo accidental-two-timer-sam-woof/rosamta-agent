@@ -39,7 +39,7 @@ pub struct Original {
     pub path: PathBuf,
     /// What it showed; `None` when it did not exist or was a dangling link.
     pub content: Option<Vec<u8>>,
-    /// Permission bits of a regular file.
+    /// Permission bits of what it showed, through a link the file it points at.
     pub mode: Option<u32>,
     /// Where it pointed, when it was a symlink.
     pub link: Option<PathBuf>,
@@ -125,7 +125,8 @@ impl Snapshots {
                     if let Some(content) = &content {
                         write(&original, content)?;
                     }
-                    let mode = std::fs::metadata(path).ok().filter(|_| link.is_none());
+                    // Through a link, the mode of the file it points at.
+                    let mode = std::fs::metadata(path).ok();
                     let mode = mode.map(|meta| meta.permissions().mode() & 0o7777);
                     meta.insert(key.clone(), Meta { mode, link });
                 }
