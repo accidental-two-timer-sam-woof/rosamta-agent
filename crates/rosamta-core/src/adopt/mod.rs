@@ -226,6 +226,7 @@ pub fn scan(ctx: &Context) -> Result<Vec<Candidate>> {
                 if let Some(adoption) = recorded.into_iter().find(|a| a.file == watched.path) {
                     candidate.kind = Kind::Duplicate;
                     candidate.module = adoption.module.clone();
+                    candidate.local = adoption.local;
                 }
                 out.push(candidate);
                 continue;
@@ -270,6 +271,7 @@ pub fn scan(ctx: &Context) -> Result<Vec<Candidate>> {
             if let Some(adoption) = recorded.into_iter().find(still_held) {
                 candidate.kind = Kind::Duplicate;
                 candidate.module = adoption.module.clone();
+                candidate.local = adoption.local;
                 out.push(candidate);
                 continue;
             }
