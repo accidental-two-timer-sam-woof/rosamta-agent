@@ -73,11 +73,18 @@ impl TokenStore {
         }
     }
 
-    /// Returns whether there was a token to delete.
+    /// Returns whether there was a token to delete. A keychain that keeps
+    /// it (locked, say over SSH) is an error, not "signed out".
     pub fn delete(&self) -> Result<bool> {
-        let in_keychain = self
-            .entry()
-            .is_some_and(|entry| entry.delete_credential().is_ok());
+        let in_keychain = match self.entry().map(|entry| entry.delete_credential()) {
+            None | Some(Err(keyring::Error::NoEntry)) => false,
+            Some(Ok(())) => true,
+            Some(Err(err)) => {
+                return Err(Error::Usage(format!(
+                    "cannot remove the token from the keychain: {err}"
+                )));
+            }
+        };
         Ok(remove(&self.file)? || in_keychain)
     }
 }
