@@ -338,8 +338,10 @@ pub fn run(
     daemon.rc_changed();
     daemon.dotfiles_changed();
     loop {
-        // Dotfiles deployed since: their directories are watched from now on.
+        // Dotfiles deployed since, and startup files that moved: their
+        // directories are watched from now on.
         watch(&daemon, dotfile_watches(&dotfile_targets(&daemon.ctx)));
+        watch(&daemon, watch_list(&daemon.ctx, &daemon.env));
         match receiver.recv_timeout(TICK) {
             Ok(Event::Changed(paths)) => daemon.changed(&paths),
             Ok(Event::Action(action, ids)) => daemon.act(action, &ids),
@@ -510,6 +512,13 @@ impl Daemon {
         let mut seen = fingerprint(&files);
         if self.rc_seen == Some(seen) {
             return;
+        }
+        if self.rc_seen.is_some() {
+            // A changed `.zshenv` may move ZDOTDIR; asking the shells is
+            // slow, so only once something changed.
+            self.env = self.ctx.hook_env(&self.ctx.installed());
+            files = self.rc_files();
+            seen = fingerprint(&files);
         }
         let result = (|| {
             let lock = adopt::lock(&self.ctx)?;
