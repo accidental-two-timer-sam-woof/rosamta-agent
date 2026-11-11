@@ -40,8 +40,13 @@ pub fn run() -> Result<ExitCode> {
         std::thread::spawn(move || finish(daemon::run(ctx, Box::new(notifier), events, receiver)));
         notify::run_app();
     }
+    // Set by tests, so a daemon under test never reaches the desktop's own
+    // notification service.
     #[cfg(target_os = "linux")]
-    let notifier: Box<dyn Notifier> = Box::new(notify::Desktop::new(lang, events.clone()));
+    let notifier: Box<dyn Notifier> = match std::env::var_os("ROSAMTA_NO_NOTIFY") {
+        Some(_) => Box::new(notify::Silent),
+        None => Box::new(notify::Desktop::new(lang, events.clone())),
+    };
     #[cfg(not(target_os = "linux"))]
     let notifier: Box<dyn Notifier> = {
         let _ = lang;

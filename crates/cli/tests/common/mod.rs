@@ -58,8 +58,9 @@ impl Home {
         for var in OUTSIDE {
             cmd.env_remove(var);
         }
-        // Never touch the developer's keychain.
-        cmd.env("ROSAMTA_NO_KEYCHAIN", "1");
+        // Never touch the developer's keychain or notification service.
+        cmd.env("ROSAMTA_NO_KEYCHAIN", "1")
+            .env("ROSAMTA_NO_NOTIFY", "1");
         git_env(&mut cmd);
         cmd
     }
@@ -71,7 +72,9 @@ impl Home {
         for var in OUTSIDE {
             cmd.env_remove(var);
         }
-        cmd.env("ROSAMTA_NO_KEYCHAIN", "1").env("SHELL", "/bin/sh");
+        cmd.env("ROSAMTA_NO_KEYCHAIN", "1")
+            .env("ROSAMTA_NO_NOTIFY", "1")
+            .env("SHELL", "/bin/sh");
         for (key, value) in GIT_ENV {
             cmd.env(key, value);
         }
