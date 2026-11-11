@@ -310,6 +310,29 @@ fn a_source_becomes_declarations() {
     assert!(!repo.join("home/.new").exists());
 }
 
+/// A rendered file keeps the mode of a file already there unless one is
+/// declared, so a private one declares it: chezmoi makes it 0600 on every host.
+#[test]
+fn a_private_template_declares_its_mode() {
+    let home = Home::new();
+    home.add(
+        "private_dot_app.conf.tmpl",
+        "home = {{ .chezmoi.homeDir }}\n",
+    );
+    home.import(None, false);
+    let manifest = home.repo("dotfiles.toml");
+    assert!(
+        manifest.contains("path = \".app.conf\"\ndeploy = \"template\"\npermissions = \"0600\"\n"),
+        "{manifest}"
+    );
+    // Copied by hand to another host, readable by everyone.
+    let target = home.ctx.home.join(".app.conf");
+    write(&target, &format!("home = {}\n", home.ctx.home.display()));
+    fs::set_permissions(&target, fs::Permissions::from_mode(0o644)).unwrap();
+    rosamta_core::dotfiles::deploy(&home.ctx).unwrap();
+    assert_eq!(mode(&target), 0o600);
+}
+
 /// Names that leave the source or the repo are refused, and symlinks are
 /// not followed: what they point to is not the user's dotfiles.
 #[test]
