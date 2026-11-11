@@ -646,13 +646,14 @@ fn problem_actions(
     problem: &Problem,
     cx: &mut Context<Rosamta>,
 ) -> impl IntoElement {
+    let kind = problem.kind;
     h_flex().when(retryable(problem), |row| {
         row.child(
             prominent(Button::new("retry"))
                 .label(t("action.retry"))
                 .loading(app.busy == Some("sync"))
                 .disabled(app.busy.is_some() || app.snap.remote.is_none())
-                .on_click(cx.listener(|this, _, window, cx| this.sync(window, cx))),
+                .on_click(cx.listener(move |this, _, window, cx| this.retry(kind, window, cx))),
         )
     })
 }

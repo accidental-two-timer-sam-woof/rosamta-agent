@@ -349,7 +349,11 @@ impl Settings {
                     .child(div().flex_1().child(t("settings.login")))
                     .child(
                         Switch::new("service")
-                            .checked(snap.service == Service::Enabled)
+                            // Waiting for approval is on: switching off takes it back.
+                            .checked(matches!(
+                                snap.service,
+                                Service::Enabled | Service::RequiresApproval
+                            ))
                             .disabled(busy || snap.service == Service::Unavailable)
                             .on_click(cx.listener(|this, checked: &bool, window, cx| {
                                 let checked = *checked;

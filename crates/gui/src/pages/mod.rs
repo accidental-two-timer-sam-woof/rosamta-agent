@@ -330,7 +330,8 @@ fn line(number: Option<u32>, mark: &str, text: &str, cx: &App) -> Div {
         )
         .child(
             div()
-                .whitespace_nowrap()
+                .flex_1()
+                .min_w_0()
                 .child(SharedString::from(text.to_string())),
         )
 }
