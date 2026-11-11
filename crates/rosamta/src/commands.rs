@@ -17,10 +17,14 @@ use crate::print_json;
 
 pub fn apply(json: bool, dry_run: bool) -> Result<ExitCode> {
     let mut ctx = Context::from_env()?;
+    // Scripts run attached in a terminal; anywhere else they follow host.toml.
+    let interactive = !json && std::io::stdin().is_terminal();
     if dry_run {
         let plan = apply::plan(&ctx)?;
         let externals = externals::plan(&ctx)?;
         let dotfiles = dotfiles::plan(&ctx)?;
+        // Only for scripts: a dry run never unlocks secret sources.
+        ctx.interactive = interactive;
         let scripts = scripts::plan(&ctx)?;
         warn_skipped(&plan.skipped);
         if json {
@@ -63,7 +67,6 @@ pub fn apply(json: bool, dry_run: bool) -> Result<ExitCode> {
     }
     // Asked before taking the lock, so the daemon is not held up while the
     // user types. Without a terminal, encrypted dotfiles are only skipped.
-    let interactive = !json && std::io::stdin().is_terminal();
     let wrong_passphrase =
         interactive && dotfiles::needs_key(&ctx)? && !crate::dotfiles::unlock(&ctx, json)?;
     if interactive {

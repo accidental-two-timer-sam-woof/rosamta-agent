@@ -982,7 +982,13 @@ pub fn refresh(ctx: &Context) -> Result<Reviewed> {
     let host = host_config(ctx)?;
     let store = Store::new(ctx.paths.state());
     if host.adopt == AdoptPolicy::Off {
-        store.set_notice(None)?;
+        let others = store
+            .queue()?
+            .items
+            .iter()
+            .filter(|item| !item.is_rc())
+            .count();
+        update_notice(&store, &host, others)?;
         return Ok(Reviewed::default());
     }
     let candidates = scan(ctx)?;

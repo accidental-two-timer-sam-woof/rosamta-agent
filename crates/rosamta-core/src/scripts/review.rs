@@ -50,7 +50,8 @@ pub fn sync_queue(ctx: &Context) -> Result<()> {
         queue.items = items;
         queue.items.extend(old);
         queue.items.sort_by_key(|item| item.id);
-        return Ok(());
+        // The count may still be from before the shell notice was turned on.
+        return update_notice(&store, &host, queue.items.len());
     }
     queue.next_id = queue.next_id.max(1);
     for script in wanted {

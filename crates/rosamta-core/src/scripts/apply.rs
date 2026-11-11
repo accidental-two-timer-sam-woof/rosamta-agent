@@ -62,14 +62,22 @@ pub struct Pending {
 
 /// A script's name: its source as a plain repo path.
 pub fn key(script: &Script) -> String {
-    clean(&script.source).map_or_else(|| script.source.clone(), |path| path.display().to_string())
+    plain(&script.source)
 }
 
-/// The script and everything it watches, so an edit to either counts.
+fn plain(path: &str) -> String {
+    clean(path).map_or_else(|| path.to_string(), |path| path.display().to_string())
+}
+
+/// The script and everything it watches, so an edit to either counts. How
+/// the list is written does not.
 pub fn hash(repo: &Path, script: &Script) -> Result<String> {
+    let mut watched: Vec<String> = script.watch.iter().map(|path| plain(path)).collect();
+    watched.sort();
+    watched.dedup();
     let mut parts = vec![tree::hash(&repo.join(&script.source))?.unwrap_or_default()];
-    for watched in &script.watch {
-        let content = tree::hash(&repo.join(watched))?.unwrap_or_default();
+    for watched in watched {
+        let content = tree::hash(&repo.join(&watched))?.unwrap_or_default();
         parts.push(format!("{watched}\0{content}"));
     }
     Ok(tree::hash_bytes(parts.join("\n").as_bytes()))
@@ -137,23 +145,23 @@ pub struct Step {
     pub reason: Option<String>,
 }
 
-/// Whether this apply runs scripts itself.
-fn runs(ctx: &Context, host: &HostConfig) -> bool {
-    ctx.interactive || host.scripts == ScriptPolicy::Auto
+/// Whether this apply runs the script itself. Without a terminal, one that
+/// failed waits for the user instead of failing again on every apply.
+fn runs(ctx: &Context, host: &HostConfig, why: Why) -> bool {
+    ctx.interactive || (host.scripts == ScriptPolicy::Auto && why != Why::Failed)
 }
 
 /// What applying would do with each script, running nothing.
 pub fn plan(ctx: &Context) -> Result<Vec<Step>> {
     let host = crate::adopt::host_config(ctx)?;
-    let action = if runs(ctx, &host) {
-        Action::WillRun
-    } else {
-        Action::Queued
-    };
     let mut steps = broken(ctx, &host, None)?;
     steps.extend(pending(ctx, &host)?.into_iter().map(|pending| Step {
         source: key(&pending.script),
-        action,
+        action: if runs(ctx, &host, pending.why) {
+            Action::WillRun
+        } else {
+            Action::Queued
+        },
         why: Some(pending.why),
         reason: None,
     }));
@@ -182,13 +190,12 @@ fn broken(ctx: &Context, host: &HostConfig, timing: Option<Timing>) -> Result<Ve
 pub fn apply(ctx: &Context, timing: Timing) -> Result<Vec<Step>> {
     let host = crate::adopt::host_config(ctx)?;
     let mut steps = broken(ctx, &host, Some(timing))?;
-    let runs = runs(ctx, &host);
     for pending in pending(ctx, &host)?
         .into_iter()
         .filter(|pending| pending.script.timing == timing)
     {
         let source = key(&pending.script);
-        if !runs {
+        if !runs(ctx, &host, pending.why) {
             steps.push(Step {
                 source,
                 action: Action::Queued,
