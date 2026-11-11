@@ -28,7 +28,7 @@ repo 根目錄的 `secrets.toml` SHALL 以 `[commands.<name>] run = [...]` 宣�
 - **THEN** 該 template render 失敗，訊息指出 `vault` 未宣告
 
 ### Requirement: Never prompt in the background
-需要的 Bitwarden 工具鎖住時，終端機中的 `rsmt apply` SHALL 執行該工具的解鎖指令並讓工具自己詢問密碼；非互動執行與背景服務 SHALL NOT 解鎖，也 SHALL NOT 執行秘密指令，而是保留目標原本的內容並放進待處理清單。終端機中的 `rsmt apply` SHALL 在取得 adopt lock 之前完成解鎖與秘密指令，使用者輸入密碼時背景服務 SHALL 仍能接管、推送與拉取；有 `timing = "before"` 的腳本待執行時，因為它可能安裝或登入秘密來源，解鎖與秘密指令 SHALL 改在這些腳本之後進行。
+需要的 Bitwarden 工具鎖住時，終端機中的 `rsmt apply` SHALL 執行該工具的解鎖指令並讓工具自己詢問密碼；非互動執行與背景服務 SHALL NOT 解鎖，也 SHALL NOT 執行秘密指令，而是保留目標原本的內容並放進待處理清單。終端機中的 `rsmt apply` SHALL 在取得 adopt lock 之前完成解鎖與秘密指令，使用者輸入密碼時背景服務 SHALL 仍能接管、推送與拉取；有 external 要下載或更新、或有 `timing = "before"` 的腳本待執行時，因為它們可能安裝或登入秘密來源，解鎖與秘密指令 SHALL 改在它們之後進行。
 
 #### Scenario: Locked in the background
 - **WHEN** rbw 鎖住時拉取到一個使用 `bitwarden()` 的 template 的修改

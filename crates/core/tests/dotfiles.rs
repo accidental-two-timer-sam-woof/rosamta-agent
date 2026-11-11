@@ -1322,15 +1322,21 @@ mod templates {
     }
 
     #[test]
-    fn before_scripts_hold_the_secrets_until_they_ran() {
+    fn setup_holds_the_secrets_until_it_ran() {
         let home = Home::new("ask");
-        assert!(!rosamta_core::apply::before_scripts_pending(&home.ctx));
+        assert!(!rosamta_core::apply::setup_pending(&home.ctx));
+        home.repo_write(
+            "externals.toml",
+            "[[external]]\npath = \".local/bin/op\"\narchive = \"https://example.com/op.tar.gz\"\nsha256 = \"0000000000000000000000000000000000000000000000000000000000000000\"\n",
+        );
+        assert!(rosamta_core::apply::setup_pending(&home.ctx));
+        fs::remove_file(home.ctx.paths.repo().join("externals.toml")).unwrap();
         home.repo_write(
             "scripts.toml",
             "[[script]]\nsource = \"scripts/install.sh\"\nrun = \"once\"\ntiming = \"before\"\n",
         );
         home.repo_write("scripts/install.sh", "true\n");
-        assert!(rosamta_core::apply::before_scripts_pending(&home.ctx));
+        assert!(rosamta_core::apply::setup_pending(&home.ctx));
     }
 
     #[test]
