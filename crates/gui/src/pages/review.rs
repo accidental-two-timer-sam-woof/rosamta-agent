@@ -543,18 +543,23 @@ fn item_actions(app: &Rosamta, item: &QueueItem, cx: &mut Context<Rosamta>) -> i
 }
 
 /// The button that opens a file the detail shows.
-fn open_button(index: usize, path: PathBuf, cx: &mut Context<Rosamta>) -> AnyElement {
+/// Opens `path`, or with `reveal` shows it in its folder: a script waits
+/// for a decision, and whatever the system opens it with may run it.
+fn open_button(index: usize, path: PathBuf, reveal: bool, cx: &mut Context<Rosamta>) -> AnyElement {
     icon_button(
         ("open-file", index),
         IconName::ExternalLink,
         t("item.open_file"),
     )
-    .on_click(
-        cx.listener(move |_, _, window, cx| match actions::to_open(&path) {
+    .on_click(cx.listener(move |_, _, window, cx| {
+        if reveal {
+            return cx.reveal_path(&path);
+        }
+        match actions::to_open(&path) {
             Ok(target) => cx.open_with_system(&target),
             Err(err) => window.push_notification(Notification::error(err.to_string()), cx),
-        }),
-    )
+        }
+    }))
     .into_any_element()
 }
 
@@ -603,7 +608,7 @@ fn item_detail(app: &Rosamta, item: &QueueItem, cx: &mut Context<Rosamta>) -> im
             page.child(card(
                 t("item.diff"),
                 Some(adopt::display(&path, home).into()),
-                Some(open_button(0, path, cx)),
+                Some(open_button(0, path, false, cx)),
                 diff(text, cx),
                 cx,
             ))
@@ -612,7 +617,7 @@ fn item_detail(app: &Rosamta, item: &QueueItem, cx: &mut Context<Rosamta>) -> im
             .child(card(
                 t("item.script"),
                 None,
-                Some(open_button(0, path.clone(), cx)),
+                Some(open_button(0, path.clone(), true, cx)),
                 code(text, cx),
                 cx,
             ))
@@ -624,7 +629,7 @@ fn item_detail(app: &Rosamta, item: &QueueItem, cx: &mut Context<Rosamta>) -> im
                 card(
                     t("item.rc"),
                     Some(adopt::display(path, home).into()),
-                    Some(open_button(index, path.clone(), cx)),
+                    Some(open_button(index, path.clone(), false, cx)),
                     diff(text, cx),
                     cx,
                 )
