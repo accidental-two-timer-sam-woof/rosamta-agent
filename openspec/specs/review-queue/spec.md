@@ -1,7 +1,7 @@
 # review-queue Specification
 
 ## Purpose
-保存等待使用者決定的接管項目，並在使用者忘記處理時主動提醒，避免 rc 檔的變動再次累積。
+保存等待使用者決定的項目：接管的 rc 檔變動、dotfile 的衝突與本機修改、等待秘密來源或變數的 template，以及等待執行的腳本；並在使用者忘記處理時主動提醒，避免變動再次累積。
 
 ## Requirements
 
