@@ -822,7 +822,8 @@ pub fn plan_eject(ctx: &Context) -> Result<Vec<FileChange>> {
                 return Ok(text);
             }
             let (guard, end_guard) = render::env_guard(shell, &id);
-            Ok(format!("{guard}{text}{end_guard}"))
+            let nested = nested(&version, shell, end_guard)?;
+            Ok(format!("{guard}{text}{nested}{end_guard}"))
         };
         let interactive = |text: String| match shell {
             _ if text.is_empty() => text,
@@ -885,6 +886,34 @@ fn inline(version: &Path, shell: Shell, stage: &str) -> Result<String> {
     for path in loader.lines().filter_map(sourced) {
         if seen.insert(path.clone()) {
             out.push_str(&pasted(shell, &path)?);
+        }
+    }
+    Ok(out)
+}
+
+/// The env loader's branch for a shell started from another one, up to
+/// `end_guard`, with its snippets pasted: they run once per shell there too.
+fn nested(version: &Path, shell: Shell, end_guard: &str) -> Result<String> {
+    let loader_path = version
+        .join(shell.name())
+        .join(format!("env.{}", shell.ext()));
+    let loader = std::fs::read_to_string(&loader_path).map_err(Error::read(&loader_path))?;
+    let marker = match shell {
+        Shell::Fish => "\nset -g __rosamta_env ",
+        _ => "\n_rosamta_env=",
+    };
+    let Some(start) = loader.find(marker) else {
+        return Ok(String::new());
+    };
+    let branch = &loader[start + 1..];
+    let mut out = String::new();
+    for line in branch.strip_suffix(end_guard).unwrap_or(branch).lines() {
+        match sourced(line) {
+            Some(path) => out.push_str(&pasted(shell, &path)?),
+            None => {
+                out.push_str(line);
+                out.push('\n');
+            }
         }
     }
     Ok(out)
