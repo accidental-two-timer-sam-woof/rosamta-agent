@@ -356,12 +356,16 @@ fn reinstalled_content_is_removed_without_a_new_module() {
     assert_eq!(mode(&state.join("adoptions.json")), 0o600);
     assert_eq!(mode(&state), 0o700);
     let commits = repo_git(&home, &["rev-list", "--count", "HEAD"]);
+    // An edit in progress in the module stays uncommitted.
+    let module = format!("{}# editing\n", read(&home, BUN_MODULE));
+    write(&home, BUN_MODULE, &module);
     let zshrc = read(&home, ".zshrc");
     fs::write(home.root.join(".zshrc"), format!("{zshrc}{BUN}")).unwrap();
     assert!(review(&home).is_empty());
     assert_eq!(read(&home, ".zshrc"), zshrc);
     assert_eq!(adopted(&home).len(), 1);
     assert_eq!(repo_git(&home, &["rev-list", "--count", "HEAD"]), commits);
+    assert!(repo_git(&home, &["status", "--porcelain"]).contains("bun.toml"));
 }
 
 #[test]
@@ -729,9 +733,15 @@ fn lines_removed_as_duplicates_keep_their_module_and_come_back() {
         "{adoptions}"
     );
     assert_eq!(removed["module"], "modules/adopted/bun.toml");
+    assert_eq!(removed["duplicate"], true);
+    // A module being edited by hand is neither changed nor committed.
+    let module = format!("{}# editing\n", read(&home, BUN_MODULE));
+    write(&home, BUN_MODULE, &module);
+    let commits = repo_git(&home, &["rev-list", "--count", "HEAD"]);
     run(&home, &["restore", &removed["id"].to_string(), "--yes"]);
     assert!(read(&home, ".zprofile").contains("BUN_INSTALL"));
-    assert!(!home.root.join(BUN_MODULE).exists());
+    assert_eq!(read(&home, BUN_MODULE), module);
+    assert_eq!(repo_git(&home, &["rev-list", "--count", "HEAD"]), commits);
 }
 
 #[test]
