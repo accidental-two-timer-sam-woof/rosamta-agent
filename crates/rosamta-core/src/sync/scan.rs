@@ -51,7 +51,7 @@ pub(crate) fn scan(repo: &Path, range: &[&str]) -> Result<Vec<Hit>> {
     args.extend_from_slice(range);
     Ok(unencrypted(
         repo,
-        check(&added_lines(&git::run(repo, &args)?)),
+        check(&added_lines(&git::run(repo, &args)?), &host_ids(repo)),
     ))
 }
 
@@ -65,8 +65,16 @@ pub(crate) fn staged(repo: &Path, paths: &[&str]) -> Result<Vec<Hit>> {
     }
     Ok(unencrypted(
         repo,
-        check(&added_lines(&git::run(repo, &args)?)),
+        check(&added_lines(&git::run(repo, &args)?), &host_ids(repo)),
     ))
+}
+
+/// Host IDs come from hostnames, which can look random (`Mac-1762…`) but
+/// are never secrets.
+fn host_ids(repo: &Path) -> Vec<String> {
+    crate::repo::read_manifest(repo)
+        .map(|manifest| manifest.hosts)
+        .unwrap_or_default()
 }
 
 /// Hits outside encrypted dotfiles. A changed ciphertext adds only base64
@@ -131,8 +139,15 @@ fn added_lines(log: &str) -> Vec<Added> {
 }
 
 /// Check each file's added lines together, so rules spanning lines (private
-/// keys) still match; report the first line that matches on its own.
-fn check(files: &[Added]) -> Vec<Hit> {
+/// keys) still match; report the first line that matches on its own. Quoted
+/// `hosts` IDs are left out.
+fn check(files: &[Added], hosts: &[String]) -> Vec<Hit> {
+    let matched = |text: &str| {
+        let text = hosts.iter().fold(text.to_string(), |text, host| {
+            text.replace(&format!("\"{host}\""), "\"\"")
+        });
+        secret_rule(&text)
+    };
     files
         .iter()
         // A new encrypted dotfile is ciphertext from its first line, which
@@ -145,11 +160,11 @@ fn check(files: &[Added]) -> Vec<Hit> {
         })
         .filter_map(|added| {
             let text: Vec<&str> = added.lines.iter().map(|(_, text)| text.as_str()).collect();
-            let rule = secret_rule(&text.join("\n"))?;
+            let rule = matched(&text.join("\n"))?;
             let line = added
                 .lines
                 .iter()
-                .find(|(_, text)| secret_rule(text).is_some())
+                .find(|(_, text)| matched(text).is_some())
                 .unwrap_or(&added.lines[0])
                 .0;
             Some(Hit {
@@ -203,6 +218,34 @@ mod tests {
         let hits = staged(repo, &[]).unwrap();
         assert_eq!(hits.len(), 1, "{hits:?}");
         assert_eq!(hits[0].file, "notes");
+    }
+
+    /// A host named by a random-looking hostname is not a secret.
+    #[test]
+    fn host_ids_are_not_secrets() {
+        crate::git::tests::isolate();
+        let dir = tempfile::tempdir().unwrap();
+        let repo = dir.path();
+        let host = "mac-zk3q9lmp2vr8ty6wb1nc4xj7";
+        assert!(secret_rule(&format!("hosts = [\"{host}\"]")).is_some());
+        crate::git::run(repo, &["init", "--quiet"]).unwrap();
+        let manifest = format!("format = 1\nhosts = [\"{host}\"]\n");
+        std::fs::write(repo.join("rosamta.toml"), manifest).unwrap();
+        std::fs::create_dir(repo.join("modules")).unwrap();
+        let module = format!("[when]\nhosts = [\"{host}\"]\n\n[env]\nA = \"1\"\n");
+        std::fs::write(repo.join("modules/a.toml"), module).unwrap();
+        crate::git::run(repo, &["add", "--all"]).unwrap();
+        assert_eq!(staged(repo, &[]).unwrap(), []);
+
+        std::fs::write(
+            repo.join("modules/b.toml"),
+            "[env]\nB = \"Zk3q9LmP2vR8tY6wB1nC4xJ7\"\n",
+        )
+        .unwrap();
+        crate::git::run(repo, &["add", "--all"]).unwrap();
+        let hits = staged(repo, &[]).unwrap();
+        assert_eq!(hits.len(), 1, "{hits:?}");
+        assert_eq!(hits[0].file, "modules/b.toml");
     }
 
     const LOG: &str = "commit 1111
@@ -301,7 +344,7 @@ deleted file mode 100644
     #[test]
     fn hits_name_file_line_and_rule() {
         assert_eq!(
-            check(&added_lines(LOG)),
+            check(&added_lines(LOG), &[]),
             [Hit {
                 commit: "1111".into(),
                 file: "modules/env.toml".into(),
