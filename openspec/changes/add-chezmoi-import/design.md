@@ -28,11 +28,13 @@ chezmoi 的 source 目錄把屬性編在檔名（`dot_`、`private_`、`executab
 1. 找到 source：參數，否則 `chezmoi source-path`，再否則 `~/.local/share/chezmoi`；有 `.chezmoiroot` 時改用它指向的子目錄。
 2. 本機有 chezmoi 時讀取 `chezmoi data --format json` 與 `chezmoi dump-config --format json`（唯讀），取得這台機器的資料、`mode`、`umask` 與設定中的 `[data]`；沒有時不讀，依賴這些資料的項目列為需要手動處理。
 3. 掃描 source，產生匯入計畫與報告。`--dry-run` 到此為止，不寫任何東西、不連網路。
-4. 轉換後的 template 以本機的值 render，和 `chezmoi cat <目標>` 比較；不同的列為需要手動處理（用到秘密值的 template 不比較，避免解鎖密碼管理工具）。
+4. 轉換後的 template 以本機的值 render，和 `chezmoi execute-template` render 原檔的結果比較（只 render 這份內容，不讀取 externals 與其他 template，也不連網路）；不同、或 chezmoi 的結果只有空白（chezmoi 不建立目標）時列為需要手動處理（用到秘密值的 template 不比較，避免解鎖密碼管理工具）。
 5. 寫入 repo 的 `home/`、`scripts/`、`dotfiles.toml`、`scripts.toml`、`externals.toml`、`secrets.toml`，轉不了的 source 原樣複製到 repo 的 `chezmoi-import/`（不宣告、不部署），以及本機 `host.toml` 的 `[vars]`，建立一個 commit `import(chezmoi): …`，報告寫在 commit 內容中。匯入的腳本記為本機已執行過，因為 chezmoi 已在這台機器執行過它們。
 6. 不部署、不連網路；使用者之後執行 `rsmt apply`。chezmoi 已經放好的檔案內容相同，不會變成衝突；例外見 externals。
 
-repo 必須已經初始化（`rsmt init`）。目標路徑已經在 `dotfiles.toml` 宣告、`home/` 中已有同名內容、`scripts/` 中已有同名腳本或 externals 已宣告同一路徑時，該項目略過並列在報告中，不覆蓋。
+repo 必須已經初始化（`rsmt init`），且上述路徑沒有尚未推送的變更（否則會一起進入匯入的 commit）。寫入或 commit 失敗時，這些路徑回到匯入前的內容；`[vars]` 與腳本的執行紀錄在 commit 成功後才寫入。source 中的 symlink 不讀取、不複製，列為需要手動處理；名稱是 `.` 或 `..` 的項目與指向 source 以外的 `.chezmoiroot` 使匯入以 2 結束，與 chezmoi 相同。`chezmoi-import/` 中已有的檔案不覆蓋。
+
+目標路徑已經在 `dotfiles.toml` 宣告、`home/` 中已有同名內容、`scripts/` 中已有同名腳本或 externals 已宣告同一路徑時，該項目略過並列在報告中，不覆蓋。
 
 ### 檔名屬性
 

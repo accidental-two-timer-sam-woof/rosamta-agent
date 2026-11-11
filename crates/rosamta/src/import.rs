@@ -94,7 +94,7 @@ fn why(reason: Reason) -> &'static str {
         Reason::Secret => "looks like a secret and is not encrypted",
         Reason::Encrypted => "encrypted, and cannot be decrypted or encrypted here",
         Reason::Scope => "its platforms do not fit one `when`",
-        Reason::Differs => "renders differently from `chezmoi cat`",
+        Reason::Differs => "renders differently from chezmoi",
         Reason::Modify => "modify_ file",
         Reason::Remove => "remove_ entry",
         Reason::Symlink => "symlink_ entry",
