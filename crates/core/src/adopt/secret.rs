@@ -101,9 +101,24 @@ fn high_entropy(text: &str) -> bool {
             let start = whole.as_ptr() as usize - text.as_ptr() as usize;
             let quoted = text[..start].ends_with(['"', '\'']);
             let assigned = whole[..whole.len() - token.len()].trim_end_matches(['=', '+']);
-            let name = !quoted && assigned.is_empty() && known_name(token);
+            let name =
+                !quoted && assigned.is_empty() && known_name(token) && !fish_value(&text[..start]);
             high(token, name) || (quoted && !assigned.contains('_') && high(assigned, false))
         })
+}
+
+/// Whether a token after `before` is a value of fish `set -gx X …`, so
+/// never a name.
+fn fish_value(before: &str) -> bool {
+    static RULE: OnceLock<Regex> = OnceLock::new();
+    let command = before
+        .rsplit(['\n', ';', '&', '|'])
+        .next()
+        .unwrap_or_default();
+    RULE.get_or_init(|| {
+        Regex::new(r"^\s*set\s+(?:-{1,2}[A-Za-z]+\s+)*[A-Za-z_][A-Za-z0-9_]*\s").unwrap()
+    })
+    .is_match(command)
 }
 
 fn high(token: &str, name: bool) -> bool {
@@ -284,6 +299,10 @@ mod tests {
         ));
         assert!(looks_secret("X = \"P9K_QWERTYUIOPASDFGHJZXCVBNM\""));
         assert!(looks_secret("set -gx X 'K7Q2M9X4P8R3T6W1Z5N0=abc'"));
+        assert!(looks_secret("set -gx X P9K_K7Q2_M9X4_P8R3_T6W1_Z5N0"));
+        assert!(looks_secret(
+            "cd ~; set -gx X a P9K_K7Q2_M9X4_P8R3_T6W1_Z5N0"
+        ));
         assert!(looks_secret(&format!(
             "export X=\"{}=Zk3q9LmP2vR8tY6wB1nC4xJ7\"",
             "A".repeat(64)
