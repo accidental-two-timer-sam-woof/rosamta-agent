@@ -3,6 +3,7 @@
 use gpui_kit::component::button::Button;
 use gpui_kit::component::input::Input;
 use gpui_kit::component::{Disableable, h_flex, v_flex};
+use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 
 use crate::actions;
@@ -54,6 +55,23 @@ pub fn render(app: &Rosamta, cx: &mut Context<Rosamta>) -> impl IntoElement {
                         ),
                 ),
             )
+            .when(app.snap.chezmoi, |column| {
+                column.child(
+                    card().child(
+                        h_flex()
+                            .gap(px(S12))
+                            .child(div().flex_1().text_sm().child(t("setup.chezmoi")))
+                            .child(
+                                super::glass(Button::new("import"), cx)
+                                    .label(t("setup.import"))
+                                    .disabled(busy)
+                                    .on_click(cx.listener(|this, _, window, cx| {
+                                        this.import_chezmoi(window, cx);
+                                    })),
+                            ),
+                    ),
+                )
+            })
             .child(
                 card().child(div().text_sm().child(t("setup.join"))).child(
                     h_flex()

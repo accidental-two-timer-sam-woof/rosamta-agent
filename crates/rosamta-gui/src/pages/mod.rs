@@ -2,6 +2,7 @@
 
 pub mod dotfiles;
 pub mod history;
+pub mod import;
 pub mod modules;
 pub mod overview;
 pub mod review;

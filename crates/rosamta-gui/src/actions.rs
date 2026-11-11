@@ -5,6 +5,7 @@ use std::path::PathBuf;
 
 use rosamta_core::adopt::{self, Lock, Scope};
 use rosamta_core::apply::{self, Context};
+use rosamta_core::chezmoi::{self, Report};
 use rosamta_core::daemon::service;
 use rosamta_core::dotfiles;
 use rosamta_core::edit;
@@ -121,6 +122,22 @@ pub fn init(url: Option<String>) -> Done {
     let ctx = Context::from_env()?;
     let lock = adopt::lock(&ctx)?;
     Ok(publish(&ctx, &lock))
+}
+
+/// Create a repo and import chezmoi's source into it. Encrypted files are
+/// left to convert by hand: there is no terminal to ask for a passphrase.
+pub fn import_chezmoi(ctx: &Context) -> Result<(Report, Option<String>)> {
+    repo::init_new(&ctx.paths)?;
+    let lock = adopt::lock(ctx)?;
+    let report = chezmoi::import(
+        ctx,
+        &chezmoi::Options {
+            source: None,
+            dry_run: false,
+            chezmoi: chezmoi::Chezmoi::find(ctx),
+        },
+    )?;
+    Ok((report, publish(ctx, &lock)))
 }
 
 /// Push what was just committed, as the CLI does: a failure is a warning,

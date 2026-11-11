@@ -6,6 +6,7 @@ use std::path::{Path, PathBuf};
 
 use rosamta_core::adopt::{self, QueueItem};
 use rosamta_core::apply::{self, Context, ShellStatus};
+use rosamta_core::chezmoi;
 use rosamta_core::config::{Deploy, HostConfig, HostFacts, Module, Phase};
 use rosamta_core::daemon::instance;
 use rosamta_core::daemon::service::{self, Service};
@@ -65,6 +66,8 @@ pub struct Snapshot {
     pub snapshots: Vec<CommitInfo>,
     /// The first thing that could not be read.
     pub problem: Option<String>,
+    /// Before setup: chezmoi has a source to import.
+    pub chezmoi: bool,
 }
 
 impl Snapshot {
@@ -86,6 +89,7 @@ impl Snapshot {
             commits: Vec::new(),
             snapshots: Vec::new(),
             problem: None,
+            chezmoi: false,
         }
     }
 }
@@ -116,6 +120,12 @@ pub fn load() -> Snapshot {
         .map(|daemon| daemon.started_at);
     out.service = service::status(&ctx.paths);
     if !out.ready {
+        let options = chezmoi::Options {
+            source: None,
+            dry_run: true,
+            chezmoi: chezmoi::Chezmoi::find(&ctx),
+        };
+        out.chezmoi = chezmoi::source_dir(&ctx, &options).is_ok();
         return out;
     }
     match host::load(&out.host_file) {

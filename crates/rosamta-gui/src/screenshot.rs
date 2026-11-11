@@ -46,12 +46,7 @@ pub fn start(window: AnyWindowHandle, view: Entity<Rosamta>, cx: &mut App) {
             }
         }
         wait(1000).await;
-        for (page, name) in PAGES {
-            view.update(cx, |view, cx| {
-                view.page = page;
-                cx.notify();
-            });
-            wait(800).await;
+        let save = |name: &str, cx: &mut AsyncApp| {
             let path = dir.join(format!("{name}{suffix}.png"));
             let saved = cx.update_window(window, |_, window, cx| {
                 // Draw here: a locked screen stops the display link.
@@ -59,6 +54,36 @@ pub fn start(window: AnyWindowHandle, view: Entity<Rosamta>, cx: &mut App) {
                 window.render_to_image().map(|image| image.save(&path))
             });
             eprintln!("{}: {saved:?}", path.display());
+        };
+        // A home without a repo: the setup page, and importing from chezmoi.
+        if !view.read_with(cx, |view, _| view.snap.ready) {
+            save("setup", cx);
+            if view.read_with(cx, |view, _| view.snap.chezmoi) {
+                cx.update_window(window, |_, window, cx| {
+                    view.update(cx, |view, cx| view.import_chezmoi(window, cx));
+                })
+                .ok();
+                for _ in 0..40 {
+                    wait(500).await;
+                    if view.read_with(cx, |view, _| view.imported.is_some() && !view.busy) {
+                        break;
+                    }
+                }
+                wait(800).await;
+                save("import", cx);
+                view.update(cx, |view, cx| {
+                    view.imported = None;
+                    cx.notify();
+                });
+            }
+        }
+        for (page, name) in PAGES {
+            view.update(cx, |view, cx| {
+                view.page = page;
+                cx.notify();
+            });
+            wait(800).await;
+            save(name, cx);
         }
         cx.update(|cx| cx.quit());
     })

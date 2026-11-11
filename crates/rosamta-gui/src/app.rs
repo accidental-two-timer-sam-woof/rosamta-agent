@@ -56,6 +56,8 @@ pub struct Rosamta {
     pub url: Entity<InputState>,
     /// The host ID last put into `host_id`, so a new one replaces what is typed.
     pub shown_host_id: Option<String>,
+    /// What importing from chezmoi did, shown until dismissed.
+    pub imported: Option<rosamta_core::chezmoi::Report>,
     fingerprint: u64,
     /// Bumped per request, so only the newest snapshot or preview is shown.
     reloads: u64,
@@ -136,6 +138,7 @@ impl Rosamta {
             host_id,
             url,
             shown_host_id: None,
+            imported: None,
             fingerprint: 0,
             reloads: 0,
             previews: 0,
@@ -273,6 +276,31 @@ impl Rosamta {
         cx: &mut Context<Self>,
         action: impl FnOnce(&Core) -> actions::Done + Send + 'static,
     ) {
+        self.run_then(window, cx, action, |_, warning| warning);
+    }
+
+    /// Create a repo from chezmoi's source, then show what was imported.
+    pub fn import_chezmoi(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.run_then(
+            window,
+            cx,
+            actions::import_chezmoi,
+            |this, (report, warning)| {
+                this.imported = Some(report);
+                warning
+            },
+        );
+    }
+
+    /// `run`, with `done` taking what the action returned and giving the
+    /// warning to show.
+    fn run_then<T: Send + 'static>(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+        action: impl FnOnce(&Core) -> rosamta_core::Result<T> + Send + 'static,
+        done: impl FnOnce(&mut Self, T) -> Option<String> + 'static,
+    ) {
         if self.busy {
             return;
         }
@@ -283,7 +311,7 @@ impl Rosamta {
                 .background_spawn(async move { Core::from_env().and_then(|core| action(&core)) })
                 .await;
             this.update_in(cx, |this, window, cx| {
-                match result {
+                match result.map(|value| done(this, value)) {
                     Ok(None) => {}
                     Ok(Some(warning)) => {
                         window.push_notification(Notification::warning(warning), cx)
@@ -406,7 +434,9 @@ impl Rosamta {
 impl Render for Rosamta {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let p = palette(cx);
-        let page = if !self.snap.ready {
+        let page = if self.imported.is_some() {
+            pages::import::render(self, cx).into_any_element()
+        } else if !self.snap.ready {
             pages::setup::render(self, cx).into_any_element()
         } else {
             match self.page {
@@ -422,7 +452,9 @@ impl Render for Rosamta {
             .size_full()
             .bg(p.bg)
             .text_color(p.text)
-            .when(self.snap.ready, |root| root.child(self.sidebar(cx)))
+            .when(self.snap.ready && self.imported.is_none(), |root| {
+                root.child(self.sidebar(cx))
+            })
             .child(div().flex_1().h_full().min_w_0().child(page))
     }
 }
@@ -453,8 +485,9 @@ mod view_tests {
     use std::path::Path;
     use std::process::Command;
 
-    use gpui_kit::{AppContext as _, TestAppContext};
+    use gpui_kit::{AppContext as _, Entity, TestAppContext, VisualTestContext};
     use rosamta_core::apply::Context as Core;
+    use rosamta_core::chezmoi::Outcome;
 
     // Not `super::*`: gpui's `test` attribute would replace the standard one.
     use super::{Detail, Page, Rosamta, actions};
@@ -467,6 +500,15 @@ mod view_tests {
     /// environment here would race the other tests, and never the real one.
     #[test]
     fn the_review_page_follows_the_queue_and_actions() {
+        in_child("app::view_tests::in_own_home");
+    }
+
+    #[test]
+    fn the_setup_page_imports_from_chezmoi() {
+        in_child("app::view_tests::import_in_own_home");
+    }
+
+    fn in_child(test: &str) {
         let home = tempfile::tempdir().unwrap();
         let mut child = Command::new(std::env::current_exe().unwrap());
         // Nothing of this process's environment but what running needs: no
@@ -478,7 +520,7 @@ mod view_tests {
             }
         }
         child
-            .args(["--exact", "app::view_tests::in_own_home", "--ignored"])
+            .args(["--exact", test, "--ignored"])
             .env("HOME", home.path())
             .env(OWN_HOME, home.path())
             .env("ROSAMTA_NO_KEYCHAIN", "1")
@@ -541,6 +583,52 @@ mod view_tests {
         write(&core.home.join("fail"), "");
     }
 
+    /// The app in a window, in a root as `open_window` builds it, which
+    /// notifications need.
+    fn open(cx: &mut TestAppContext) -> (Entity<Rosamta>, &mut VisualTestContext) {
+        cx.update(gpui_kit::init);
+        let mut built = None;
+        let (_root, cx) = cx.add_window_view(|window, cx| {
+            crate::theme::init(window, cx);
+            let view = cx.new(|cx| Rosamta::new(None, window, cx));
+            built = Some(view.clone());
+            gpui_kit::base::Root::new(view, window, cx)
+        });
+        cx.run_until_parked();
+        (built.unwrap(), cx)
+    }
+
+    #[test]
+    #[ignore = "run by the_setup_page_imports_from_chezmoi, in a home of its own"]
+    fn import_in_own_home() {
+        let Some(own) = std::env::var_os(OWN_HOME) else {
+            return;
+        };
+        assert_eq!(std::env::var_os("HOME"), Some(own));
+        let core = Core::from_env().unwrap();
+        let source = core.home.join(".local/share/chezmoi");
+        write(&source.join("dot_gitconfig"), "[user]\n\tname = me\n");
+        write(
+            &source.join("dot_bad.tmpl"),
+            "{{ range .list }}x{{ end }}\n",
+        );
+
+        let mut cx = TestAppContext::single();
+        let (view, cx) = open(&mut cx);
+        view.read_with(cx, |view, _| {
+            assert!(!view.snap.ready && view.snap.chezmoi);
+        });
+        cx.update(|window, cx| view.update(cx, |view, cx| view.import_chezmoi(window, cx)));
+        cx.run_until_parked();
+        view.read_with(cx, |view, _| {
+            assert!(view.snap.ready && !view.busy);
+            let report = view.imported.as_ref().expect("the result is shown");
+            assert_eq!(report.count(Outcome::Imported), 1);
+            assert_eq!(report.count(Outcome::Manual), 1);
+        });
+        assert!(core.paths.repo().join("home/.gitconfig").is_file());
+    }
+
     #[test]
     #[ignore = "run by the_review_page_follows_the_queue_and_actions, in a home of its own"]
     fn in_own_home() {
@@ -552,17 +640,7 @@ mod view_tests {
         set_up(&core);
 
         let mut cx = TestAppContext::single();
-        cx.update(gpui_kit::init);
-        // In a root as `open_window` builds it, which notifications need.
-        let mut built = None;
-        let (_root, cx) = cx.add_window_view(|window, cx| {
-            crate::theme::init(window, cx);
-            let view = cx.new(|cx| Rosamta::new(None, window, cx));
-            built = Some(view.clone());
-            gpui_kit::base::Root::new(view, window, cx)
-        });
-        let view = built.unwrap();
-        cx.run_until_parked();
+        let (view, cx) = open(&mut cx);
         let ids: Vec<u32> = view.read_with(cx, |view, _| {
             assert!(view.snap.ready);
             view.snap.queue.iter().map(|item| item.id).collect()
