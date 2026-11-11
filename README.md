@@ -5,7 +5,7 @@
 <br>
 
 [![License](https://img.shields.io/github/license/accidental-two-timer-sam-woof/rosamta-agent?style=for-the-badge)](LICENSE)
-[![Version](https://img.shields.io/badge/Version-v0.1.0--rc.1-00BB00?style=for-the-badge)](Cargo.toml)
+[![Version](https://img.shields.io/badge/Version-v0.1.0--rc.2-00BB00?style=for-the-badge)](Cargo.toml)
 [![macOS](https://img.shields.io/badge/macOS-13%2B-black?style=for-the-badge&logo=apple&logoColor=white)](#系統需求)
 [![Linux](https://img.shields.io/badge/Linux-x86__64%20%7C%20aarch64-FCC624?style=for-the-badge&logo=linux&logoColor=black)](#系統需求)
 
