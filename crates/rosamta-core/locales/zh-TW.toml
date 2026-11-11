@@ -21,6 +21,7 @@ adopt = "接管"
 ignore = "忽略"
 review = "查看差異"
 view = "查看"
+run = "執行"
 
 [problem]
 publish_blocked = "推送受阻：{reason}"
@@ -74,6 +75,7 @@ off = "關閉"
 manual = "手動"
 delete = "刪除"
 comment = "註解"
+scripts = "腳本"
 
 [badge]
 warning = "警告"
@@ -84,6 +86,8 @@ structured = "結構化"
 raw = "片段"
 encrypted = "加密"
 waiting = "等待中"
+script = "腳本"
+failed = "失敗"
 
 [item]
 line = "第 {start} 行"
@@ -98,6 +102,15 @@ empty = "沒有待處理項目"
 waiting_locked = "等待 {tool} 解鎖"
 waiting_command = "等待在終端機執行秘密指令 {command}"
 waiting_unset = "等待 {vars} 的值"
+run_once = "執行一次"
+run_onchange = "變更時執行"
+why_new = "尚未執行"
+why_changed = "上次執行後已變更"
+why_failed = "上次執行失敗"
+script = "腳本"
+last_run = "上次執行"
+mark_run = "標為已執行"
+script_failed = "{script} 執行失敗"
 
 [phase]
 env = "環境"

@@ -6,7 +6,7 @@ use gpui_kit::component::switch::Switch;
 use gpui_kit::component::{Disableable, Sizable, h_flex, v_flex};
 use gpui_kit::*;
 use rosamta_core::adopt;
-use rosamta_core::config::{AdoptPolicy, OriginalLines, SyncPolicy};
+use rosamta_core::config::{AdoptPolicy, OriginalLines, ScriptPolicy, SyncPolicy};
 use rosamta_core::daemon::service::Service;
 
 use super::{dot, label, mono, page, row, section};
@@ -22,6 +22,7 @@ const ADOPT: &[(&str, &str)] = &[
 ];
 const ORIGINAL: &[(&str, &str)] = &[("policy.delete", "delete"), ("policy.comment", "comment")];
 const SYNC: &[(&str, &str)] = &[("policy.auto", "auto"), ("policy.manual", "manual")];
+const SCRIPTS: &[(&str, &str)] = &[("policy.auto", "auto"), ("policy.ask", "ask")];
 const INTERVALS: &[(&str, i64)] = &[
     ("settings.every_5", 5),
     ("settings.every_15", 15),
@@ -100,6 +101,10 @@ pub fn render(
             SyncPolicy::Auto => "auto",
             SyncPolicy::Manual => "manual",
         };
+        let scripts = match host.scripts {
+            ScriptPolicy::Auto => "auto",
+            ScriptPolicy::Ask => "ask",
+        };
         let interval = i64::from(host.pull_interval);
         let preferences = v_flex()
             .child(choice("adopt", "policy.adopt", ADOPT, adopt, busy, cx))
@@ -108,6 +113,14 @@ pub fn render(
                 "policy.original",
                 ORIGINAL,
                 original,
+                busy,
+                cx,
+            ))
+            .child(choice(
+                "scripts",
+                "policy.scripts",
+                SCRIPTS,
+                scripts,
                 busy,
                 cx,
             ))

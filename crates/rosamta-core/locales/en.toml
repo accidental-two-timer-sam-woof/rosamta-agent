@@ -22,6 +22,7 @@ adopt = "Adopt"
 ignore = "Ignore"
 review = "Show Diff"
 view = "View"
+run = "Run"
 
 [problem]
 publish_blocked = "Publishing is blocked: {reason}"
@@ -75,6 +76,7 @@ off = "Off"
 manual = "Manual"
 delete = "Delete"
 comment = "Comment"
+scripts = "Scripts"
 
 [badge]
 warning = "Warning"
@@ -85,6 +87,8 @@ structured = "Structured"
 raw = "Raw"
 encrypted = "Encrypted"
 waiting = "Waiting"
+script = "Script"
+failed = "Failed"
 
 [item]
 line = "Line {start}"
@@ -99,6 +103,15 @@ empty = "Nothing to review"
 waiting_locked = "Waiting for {tool} to unlock"
 waiting_command = "Waiting for a terminal to run secret command {command}"
 waiting_unset = "Waiting for values of {vars}"
+run_once = "Runs once"
+run_onchange = "Runs on change"
+why_new = "Not run yet"
+why_changed = "Changed since it last ran"
+why_failed = "Last run failed"
+script = "Script"
+last_run = "Last run"
+mark_run = "Mark as Run"
+script_failed = "{script} failed"
 
 [phase]
 env = "Environment"

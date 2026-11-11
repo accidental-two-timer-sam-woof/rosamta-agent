@@ -8,8 +8,8 @@ use std::path::{Path, PathBuf};
 
 use rosamta_core::apply::Context;
 use rosamta_core::paths::Paths;
-use rosamta_core::scripts::{Run, Script, Timing};
 use rosamta_core::scripts::apply::{self, Action, Why};
+use rosamta_core::scripts::{Run, Script, Timing};
 
 fn write(path: &Path, text: &str) {
     fs::create_dir_all(path.parent().unwrap()).unwrap();
