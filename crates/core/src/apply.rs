@@ -1,6 +1,6 @@
 //! `rsmt apply`, `hook`, `unhook`, `eject` and `restore --original`.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashSet};
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
@@ -873,15 +873,19 @@ pub fn plan_eject(ctx: &Context) -> Result<Vec<FileChange>> {
     Ok(changes)
 }
 
-/// The fragments a loader sources, concatenated in its order.
+/// The fragments a loader sources, concatenated in its order, each once:
+/// the env loader sources its snippets again for a nested shell.
 fn inline(version: &Path, shell: Shell, stage: &str) -> Result<String> {
     let loader_path = version
         .join(shell.name())
         .join(format!("{stage}.{}", shell.ext()));
     let loader = std::fs::read_to_string(&loader_path).map_err(Error::read(&loader_path))?;
     let mut out = String::new();
+    let mut seen = HashSet::new();
     for path in loader.lines().filter_map(sourced) {
-        out.push_str(&pasted(shell, &path)?);
+        if seen.insert(path.clone()) {
+            out.push_str(&pasted(shell, &path)?);
+        }
     }
     Ok(out)
 }
