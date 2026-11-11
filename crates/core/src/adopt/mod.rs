@@ -946,6 +946,42 @@ pub(crate) fn unchanged(path: &Path, before: Option<&str>) -> Result<()> {
     Ok(())
 }
 
+/// Undo `change` in a file that may have been edited since rosamta wrote
+/// it: what rosamta took out goes back, and what was added since stays.
+fn give_back(scratch: &Path, change: &FileChange) -> Result<()> {
+    let (before, after) = (change.before.as_deref(), change.after.as_deref());
+    if unchanged(&change.path, after).is_ok() {
+        return replace(&change.path, after, before);
+    }
+    let current = read(&change.path)?;
+    let merged = merge_back(
+        scratch,
+        before.unwrap_or_default(),
+        after.unwrap_or_default(),
+        &current,
+    )?;
+    replace(&change.path, Some(&current), Some(&merged))
+}
+
+/// `current`, which grew out of `after`, with the changes from `after` back
+/// to `before` applied; where both touched the same lines, both are kept.
+fn merge_back(scratch: &Path, before: &str, after: &str, current: &str) -> Result<String> {
+    std::fs::create_dir_all(scratch).map_err(Error::write(scratch))?;
+    let sides = [("before", before), ("after", after), ("current", current)];
+    // rc files can hold secrets: only the owner reads the copies.
+    for (name, text) in sides {
+        crate::edit::write_private(&scratch.join(name), text)?;
+    }
+    let merged = git::run(
+        scratch,
+        &["merge-file", "-p", "--union", "before", "after", "current"],
+    );
+    for (name, _) in sides {
+        let _ = std::fs::remove_file(scratch.join(name));
+    }
+    merged
+}
+
 /// Writes `text` (or removes the file for `None`) only while `path` still
 /// holds `before`, checked at the last moment: an installer may append to
 /// an rc file at any time.
@@ -1040,23 +1076,14 @@ pub fn execute(ctx: &Context, plan: Plan) -> Result<Vec<Adoption>> {
         .flat_map(|candidate| candidate.shells.iter().copied())
         .collect();
     if let Err(err) = apply::apply_after(ctx, &shells, write) {
-        // All or none: lines put back in one file and kept in a module for
-        // another would run twice.
-        let restorable = replaced
-            .iter()
-            .all(|change| unchanged(&change.path, change.after.as_deref()).is_ok());
-        if written && restorable {
-            let mut restored = true;
-            for change in &replaced {
-                restored &= replace(
-                    &change.path,
-                    change.after.as_deref(),
-                    change.before.as_deref(),
-                )
-                .is_ok();
-            }
-            // An rc file edited since rosamta wrote it keeps the adopted
-            // lines out, so the modules holding them, new or joined, stay.
+        if written {
+            // The lines go back into every file, around whatever was added
+            // since, before the modules holding them go: a line in neither
+            // would be lost to new shells, a line in both would run twice.
+            let scratch = ctx.paths.state().join("merge");
+            let restored = replaced
+                .iter()
+                .all(|change| give_back(&scratch, change).is_ok());
             if restored {
                 for change in &edited {
                     let _ = replace(
@@ -1593,6 +1620,27 @@ pub fn adoptions(ctx: &Context) -> Result<Vec<Adoption>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn lines_go_back_around_what_was_added_since() {
+        crate::git::tests::isolate();
+        let dir = tempfile::tempdir().unwrap();
+        let before = "export A=1\n# bun\nexport BUN=1\nexport Z=1\n";
+        let after = "export A=1\nexport Z=1\n";
+        let merge = |current: &str| merge_back(dir.path(), before, after, current).unwrap();
+        // Added at the end, away from the lines taken out.
+        assert_eq!(
+            merge("export A=1\nexport Z=1\nexport LATER=1\n"),
+            format!("{before}export LATER=1\n")
+        );
+        // Added right where they were: both are kept.
+        let merged = merge("export A=1\nexport LATER=1\nexport Z=1\n");
+        for line in ["# bun", "export BUN=1", "export LATER=1"] {
+            assert_eq!(merged.matches(line).count(), 1, "{merged}");
+        }
+        assert!(merged.starts_with("export A=1\n") && merged.ends_with("export Z=1\n"));
+        assert_eq!(std::fs::read_dir(dir.path()).unwrap().count(), 0);
+    }
 
     fn module(text: &str) -> Module {
         toml::from_str(text).unwrap()

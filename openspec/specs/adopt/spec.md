@@ -96,6 +96,13 @@ rosamta SHALL 依序以 marker 名稱、`Added by <名稱>` 註解、內容中�
 - **WHEN** host 設定為「註解掉」
 - **THEN** 原段落每行前加上 `#`，上方多一行指出 module 檔案的位置，之後的掃描不再把它列為可接管
 
+### Requirement: Failed adoption leaves nothing half adopted
+接管後 shell 的啟動檢查失敗時，rosamta SHALL 把接管的內容放回每個 rc 檔，並移除為它產生的 module；rc 檔在 rosamta 寫入後又被其他程式修改時，SHALL 保留那些修改，把接管的內容放回原處。接管的內容 SHALL 不會同時存在於 rc 檔與 module，也 SHALL 不會兩邊都沒有。
+
+#### Scenario: Installer appends during the check
+- **WHEN** 接管 `~/.zshrc` 的一段內容後啟動檢查失敗，而檢查期間有安裝程式在 `~/.zshrc` 附加了一行
+- **THEN** `~/.zshrc` 同時有原本的內容與安裝程式附加的那一行，repo 中沒有新的 module
+
 ### Requirement: One commit per adoption
 每次接管 SHALL 在 repo 建立一個 commit，訊息格式為 `chore(adopt): <摘要> from <來源檔> (<shell>) on <識別名稱>`，符合 Conventional Commits。
 
