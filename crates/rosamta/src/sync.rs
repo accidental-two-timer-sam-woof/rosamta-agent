@@ -81,16 +81,16 @@ pub(crate) fn after_commit(ctx: &Context, lock: &Lock, started: u64, json: bool)
         Ok(Some(published)) if !json && published.pushed > 0 => {
             println!("Published {}", commits(published.pushed));
         }
-        Ok(_) => {
-            // A commit that could not be signed is recorded, not returned.
-            let blocked = sync::load_state(ctx.paths.state())
-                .ok()
-                .and_then(|state| state.publish)
-                .filter(|attempt| attempt.at >= started && attempt.outcome == Outcome::Blocked);
-            if let Some(reason) = blocked.and_then(|attempt| attempt.reason) {
-                eprintln!("warning: {reason}");
-            }
-        }
-        Err(err) => eprintln!("warning: {err}"),
+        Ok(_) => {}
+        Err(err) => return eprintln!("warning: {err}"),
+    }
+    // A commit that could not be made is recorded, not returned, and
+    // older commits may have been pushed all the same.
+    let blocked = sync::load_state(ctx.paths.state())
+        .ok()
+        .and_then(|state| state.publish)
+        .filter(|attempt| attempt.at >= started && attempt.outcome == Outcome::Blocked);
+    if let Some(reason) = blocked.and_then(|attempt| attempt.reason) {
+        eprintln!("warning: {reason}");
     }
 }

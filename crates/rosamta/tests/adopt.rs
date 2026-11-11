@@ -968,6 +968,18 @@ fn a_failed_commit_keeps_the_adoption_record() {
         return;
     }
     let home = hooked(&[(".zshrc", BUN)]);
+    // With a remote, the publish that follows must not hide the failure.
+    let remote = home.root.join("remote.git");
+    let status = std::process::Command::new("git")
+        .args(["init", "--quiet", "--bare"])
+        .arg(&remote)
+        .status()
+        .unwrap();
+    assert!(status.success());
+    repo_git(
+        &home,
+        &["remote", "add", "origin", &remote.display().to_string()],
+    );
     let lock = home.repo().join(".git/index.lock");
     fs::write(&lock, "").unwrap();
     home.cmd("rsmt")
