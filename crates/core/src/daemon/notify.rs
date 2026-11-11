@@ -95,6 +95,43 @@ pub trait Notifier: Send {
     fn show(&self, note: &Note) -> bool;
 }
 
+/// Stops trying a note the service keeps refusing: a session bus with no
+/// notification service on it (a server) never takes one, and the note
+/// would stay unannounced for good.
+pub struct GiveUp {
+    inner: Box<dyn Notifier>,
+    tries: u32,
+    missed: std::sync::Mutex<std::collections::BTreeMap<String, u32>>,
+}
+
+impl GiveUp {
+    /// Counts a note as shown once `inner` refused it `tries` times.
+    pub fn after(tries: u32, inner: Box<dyn Notifier>) -> Self {
+        Self {
+            inner,
+            tries,
+            missed: Default::default(),
+        }
+    }
+}
+
+impl Notifier for GiveUp {
+    fn show(&self, note: &Note) -> bool {
+        let mut missed = self.missed.lock().unwrap();
+        if self.inner.show(note) {
+            missed.remove(&note.body);
+            return true;
+        }
+        let count = missed.entry(note.body.clone()).or_default();
+        *count += 1;
+        let done = *count >= self.tries;
+        if done {
+            missed.remove(&note.body);
+        }
+        done
+    }
+}
+
 /// For hosts without a notification service: there is nothing to wait for.
 pub struct Silent;
 
@@ -105,7 +142,7 @@ impl Notifier for Silent {
 }
 
 #[cfg(target_os = "linux")]
-pub use linux::{Desktop, session_bus};
+pub use linux::Desktop;
 
 #[cfg(target_os = "linux")]
 mod linux {
@@ -126,13 +163,17 @@ mod linux {
         waiting: Mutex<Option<NotificationHandle>>,
     }
 
-    /// Whether there is a session bus to ask. Without one (a server, a
-    /// container) no notification service will ever answer, so waiting for
-    /// it would keep every note unannounced.
-    pub fn session_bus() -> bool {
+    /// Whether there is a session bus to ask, where the bus library looks
+    /// for one: the address, the runtime directory, or its default place.
+    fn session_bus() -> bool {
+        // SAFETY: geteuid has no preconditions and cannot fail.
+        let default = format!("/run/user/{}", unsafe { libc::geteuid() });
         std::env::var_os("DBUS_SESSION_BUS_ADDRESS").is_some_and(|address| !address.is_empty())
             || std::env::var_os("XDG_RUNTIME_DIR")
-                .is_some_and(|dir| std::path::Path::new(&dir).join("bus").exists())
+                .map(std::path::PathBuf::from)
+                .into_iter()
+                .chain([default.into()])
+                .any(|dir| dir.join("bus").exists())
     }
 
     impl Desktop {
@@ -162,6 +203,11 @@ mod linux {
 
     impl Notifier for Desktop {
         fn show(&self, note: &Note) -> bool {
+            // Without a bus (a container, a bare server) no notification
+            // service will ever answer: there is nothing to wait for.
+            if !session_bus() {
+                return true;
+            }
             let Some(actions) = self.actions() else {
                 return false;
             };

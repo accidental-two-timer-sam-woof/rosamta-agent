@@ -9,10 +9,7 @@ use assert_cmd::Command;
 
 /// Variables that would point rosamta, a shell or git outside this HOME;
 /// git sets the last ones for a hook that runs tests.
-const OUTSIDE: [&str; 22] = [
-    // No session bus: the daemon under test never reaches a real notification service.
-    "DBUS_SESSION_BUS_ADDRESS",
-    "XDG_RUNTIME_DIR",
+const OUTSIDE: [&str; 20] = [
     "XDG_CONFIG_HOME",
     "XDG_DATA_HOME",
     "XDG_STATE_HOME",
@@ -61,8 +58,9 @@ impl Home {
         for var in OUTSIDE {
             cmd.env_remove(var);
         }
-        // Never touch the developer's keychain.
-        cmd.env("ROSAMTA_NO_KEYCHAIN", "1");
+        // Never touch the developer's keychain or notification service.
+        cmd.env("ROSAMTA_NO_KEYCHAIN", "1")
+            .env("ROSAMTA_NO_NOTIFY", "1");
         git_env(&mut cmd);
         cmd
     }
@@ -74,7 +72,9 @@ impl Home {
         for var in OUTSIDE {
             cmd.env_remove(var);
         }
-        cmd.env("ROSAMTA_NO_KEYCHAIN", "1").env("SHELL", "/bin/sh");
+        cmd.env("ROSAMTA_NO_KEYCHAIN", "1")
+            .env("ROSAMTA_NO_NOTIFY", "1")
+            .env("SHELL", "/bin/sh");
         for (key, value) in GIT_ENV {
             cmd.env(key, value);
         }

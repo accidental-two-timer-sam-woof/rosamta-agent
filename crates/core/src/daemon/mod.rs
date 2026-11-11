@@ -63,6 +63,9 @@ const PUSH_TRIES: u32 = 3;
 const PUSH_RETRY_MAX: Duration = Duration::from_secs(15 * 60);
 /// How often a problem the notification service did not take is shown again.
 const NOTIFY_RETRY: Duration = Duration::from_secs(60);
+/// How many times: a desktop's service is up minutes after login, a
+/// server's never.
+const NOTIFY_TRIES: u32 = 10;
 
 /// Directories to watch: the parents of watched files, without recursion,
 /// so an installer writing a new file and renaming it over the old one is
@@ -317,7 +320,11 @@ pub fn run(
     .map_err(|err| crate::Error::Daemon(format!("cannot watch files: {err}")))?;
     let mut daemon = Daemon {
         exe,
-        ..Daemon::new(ctx, host, notifier)
+        ..Daemon::new(
+            ctx,
+            host,
+            Box::new(notify::GiveUp::after(NOTIFY_TRIES, notifier)),
+        )
     };
     let mut watching = BTreeSet::new();
     let mut watch = |daemon: &Daemon, list: Vec<(PathBuf, RecursiveMode)>| {
