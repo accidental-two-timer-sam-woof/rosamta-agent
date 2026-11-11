@@ -350,6 +350,11 @@ fn reinstalled_content_is_removed_without_a_new_module() {
     }
     let home = hooked(&[(".zshrc", BUN)]);
     run(&home, &["adopt", "--yes"]);
+    // Adoption records keep removed lines, which may look secret.
+    let state = home.root.join(".local/state/rosamta");
+    let mode = |path: &Path| fs::metadata(path).unwrap().permissions().mode() & 0o777;
+    assert_eq!(mode(&state.join("adoptions.json")), 0o600);
+    assert_eq!(mode(&state), 0o700);
     let commits = repo_git(&home, &["rev-list", "--count", "HEAD"]);
     let zshrc = read(&home, ".zshrc");
     fs::write(home.root.join(".zshrc"), format!("{zshrc}{BUN}")).unwrap();
