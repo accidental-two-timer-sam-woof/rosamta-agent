@@ -29,6 +29,7 @@ rosamta 是跨 shell、跨主機的 dotfile 管理工具。設定宣告在 git r
 - 以 symlink 或複製部署 `~/.config` 等設定檔，個別主機可以有自己的版本
 - 敏感的設定檔加密後存進 repo，私鑰以密碼保護
 - template 依主機產生不同內容，密碼與 token 在套用時從 Bitwarden 或自訂指令取得，不進 repo
+- oh-my-zsh、zsh 插件、字型等外部內容鎖定版本下載，每台主機都一樣
 - 目標位置已有不同內容時不覆蓋，顯示差異讓你決定
 
 ### 🔄 **多主機同步**
@@ -322,6 +323,48 @@ run = ["op", "read", "{arg}"]
 只有在終端機執行的 `rsmt apply` 會解鎖密碼管理工具或執行 `secrets.toml` 的指令，每次套用每個值只取一次。背景服務、App 與非互動執行遇到鎖住的工具、需要執行指令或缺少 `vars` 時，保留原本的內容，並在待處理清單列出在等待什麼；在終端機執行 `rsmt apply` 後就會消失。
 
 產生的檔案沒有宣告權限時為 `0600`。本機修改了產生的內容時會列在待處理清單：`accept` 把它存成這台主機專用的 `copy`，`discard` 重新產生。用到 `bitwarden()` 或 `secret()` 的 template 沒有加密時不能 `accept`，請改寫 repo 中的 template。
+
+### 外部內容
+
+oh-my-zsh、zsh 與 tmux 的插件、字型等從外部下載的內容宣告在 repo 的 `externals.toml`：
+
+```toml
+[[external]]
+path = ".oh-my-zsh"
+git = "https://github.com/ohmyzsh/ohmyzsh.git"
+
+[[external]]
+path = ".oh-my-zsh/custom/plugins/zsh-autosuggestions"
+git = "https://github.com/zsh-users/zsh-autosuggestions.git"
+
+[[external]]
+path = ".local/share/fonts/JetBrainsMono"
+archive = "https://github.com/ryanoasis/nerd-fonts/releases/download/v3.4.0/JetBrainsMono.zip"
+when = { os = ["linux"] }
+```
+
+| 欄位 | 說明 |
+|---|---|
+| `path` | 下載到的位置，相對於家目錄 |
+| `git` | git repo 的網址，以 `rev` 鎖定 commit |
+| `branch` | `rsmt externals update` 追蹤的分支，預設為遠端的預設分支 |
+| `archive` | `.tar.gz`、`.tar` 或 `.zip` 壓縮檔的網址，以 `sha256` 鎖定內容 |
+| `strip` | 解壓時去掉開頭幾層目錄 |
+| `when` | 套用範圍，寫法與 module 相同 |
+
+```sh
+rsmt externals update               # 全部更新到最新版本
+rsmt externals update ~/.oh-my-zsh  # 只更新這一個
+```
+
+`rsmt externals update` 把 `rev` 與 `sha256` 寫進 `externals.toml` 並 commit，再下載到這台主機；其他主機拉取後下載同一個版本。新增的宣告要先執行一次才會鎖定。
+
+- 套用時先下載外部內容，再檢查 shell，所以載入 oh-my-zsh 的 module 在新主機上也能通過檢查。
+- git 的內容是停在鎖定 commit 的工作目錄。有未 commit 的修改時不更新；oh-my-zsh 等工具自己更新後，套用會回到鎖定的版本，建議關閉工具的自動更新，改用 `rsmt externals update`。
+- 壓縮檔的內容被修改後不再更新。
+- 目標位置已有其他內容時不覆蓋；已有同一個 repo 的 clone 時直接沿用。
+- 只有 `git` 外部內容的裡面可以再放外部內容或設定檔，例如 oh-my-zsh 的插件。
+- 從 `externals.toml` 移除的內容留在原地，不再管理。
 
 ### 同步到其他主機
 

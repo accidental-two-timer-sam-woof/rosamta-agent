@@ -190,13 +190,13 @@ struct DryRun<'a> {
     dotfiles: Vec<&'a Step>,
 }
 
-fn settled(steps: &[externals::Step]) -> bool {
+pub(crate) fn settled(steps: &[externals::Step]) -> bool {
     steps
         .iter()
         .all(|step| step.action == externals::Action::Unchanged)
 }
 
-fn print_external(ctx: &Context, step: &externals::Step) {
+pub(crate) fn print_external(ctx: &Context, step: &externals::Step) {
     use externals::Action;
     let path = adopt::display(&ctx.home.join(&step.path), &ctx.home);
     let reason = step.reason.as_deref().unwrap_or_default();

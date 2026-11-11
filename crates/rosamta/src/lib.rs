@@ -2,6 +2,7 @@ mod adopt;
 mod commands;
 mod daemon;
 mod dotfiles;
+mod externals;
 mod github;
 mod secrets;
 mod sync;
@@ -92,6 +93,11 @@ enum Command {
     },
     /// Stop managing a dotfile, leaving it in place
     Forget { path: PathBuf },
+    /// Manage the git repos and archives downloaded into the home directory
+    Externals {
+        #[command(subcommand)]
+        action: ExternalsAction,
+    },
     /// List changes waiting for a decision, or decide one
     Review {
         #[command(subcommand)]
@@ -133,6 +139,15 @@ enum Command {
         /// Do not ask for confirmation
         #[arg(long)]
         yes: bool,
+    },
+}
+
+#[derive(Subcommand)]
+enum ExternalsAction {
+    /// Lock externals to their newest versions, commit, then download them
+    Update {
+        /// Only these externals; all by default
+        paths: Vec<PathBuf>,
     },
 }
 
@@ -320,6 +335,9 @@ fn run(cli: &Cli) -> Result<ExitCode> {
             BwsAction::Login => secrets::bws_login(cli.json),
             BwsAction::Logout => secrets::bws_logout(cli.json),
         },
+        Command::Externals {
+            action: ExternalsAction::Update { paths },
+        } => externals::update(cli.json, paths),
         Command::GitCredential { operation } => github::credential(operation),
         Command::Daemon { action } => match action {
             DaemonAction::Run => daemon::run(),

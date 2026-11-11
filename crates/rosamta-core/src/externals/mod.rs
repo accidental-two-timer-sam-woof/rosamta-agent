@@ -17,6 +17,7 @@ mod archive;
 pub mod deploy;
 mod git;
 pub mod state;
+pub mod update;
 
 pub use deploy::{Action, Step, apply, plan};
 
