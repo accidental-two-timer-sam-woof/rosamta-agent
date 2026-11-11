@@ -45,7 +45,7 @@ rosamta 是跨 shell、跨主機的 dotfile 管理工具。設定宣告在 git r
 - 出現待處理的內容時發出通知，可以直接選擇接管、忽略或查看差異
 
 ### 🖥️ **桌面 App**
-- 總覽、待處理項目的差異、module 開關、設定檔狀態、提交紀錄與快照、本機設定
+- 待處理項目與問題、差異、module 開關、設定檔狀態、變更與快照、本機設定
 - 跟隨系統的淺色與深色外觀
 
 ### ↩️ **隨時退出**
@@ -61,13 +61,13 @@ rosamta 是跨 shell、跨主機的 dotfile 管理工具。設定宣告在 git r
 
 <div align="center">
 
-| 總覽 | 待處理 | 設定 |
+| 待處理 | 內容 | 設定 |
 |:---:|:---:|:---:|
-| <img width="300" src=".github/assets/screenshots/overview-light.png" alt="總覽" /> | <img width="300" src=".github/assets/screenshots/review-light.png" alt="待處理" /> | <img width="300" src=".github/assets/screenshots/settings-light.png" alt="設定" /> |
+| <img width="300" src=".github/assets/screenshots/review-light.png" alt="待處理" /> | <img width="300" src=".github/assets/screenshots/modules-light.png" alt="內容：模組" /> | <img width="300" src=".github/assets/screenshots/settings-light.png" alt="設定" /> |
 
-| 模組 | 設定檔 | 歷史 |
+| 問題 | 設定檔 | 歷史 |
 |:---:|:---:|:---:|
-| <img width="300" src=".github/assets/screenshots/modules-dark.png" alt="模組" /> | <img width="300" src=".github/assets/screenshots/dotfiles-dark.png" alt="設定檔" /> | <img width="300" src=".github/assets/screenshots/history-dark.png" alt="歷史" /> |
+| <img width="300" src=".github/assets/screenshots/problem-dark.png" alt="待處理：問題" /> | <img width="300" src=".github/assets/screenshots/dotfiles-dark.png" alt="內容：設定檔" /> | <img width="300" src=".github/assets/screenshots/history-dark.png" alt="歷史" /> |
 
 </div>
 
@@ -653,7 +653,7 @@ rosamta-agent/
 │   │       └── validate.rs       # 檢查 repo 中的 TOML 檔
 │   ├── cli/                      # 命令列程式（rosamta / rsmt）
 │   └── gui/                      # 桌面 App（GPUI）
-│       └── src/pages/            # 總覽、待處理、模組、設定檔、歷史、設定
+│       └── src/pages/            # 待處理、內容、歷史、設定、初次設定、匯入結果
 ├── packaging/                    # App 圖示、macOS App bundle、Homebrew、AUR、第三方授權清單的產生設定
 ├── tests/
 │   ├── docker/                   # 各發行版的 shell 測試映像
