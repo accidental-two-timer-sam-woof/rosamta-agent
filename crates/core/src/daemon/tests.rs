@@ -480,3 +480,51 @@ fn new_vars_in_host_toml_render_a_waiting_template() {
     );
     assert!(adopt::queue(&daemon.ctx).unwrap().is_empty());
 }
+
+#[test]
+fn a_repo_that_did_not_apply_is_not_deployed() {
+    crate::git::tests::isolate();
+    let dir = tempfile::tempdir().unwrap();
+    let (mut daemon, _) = daemon(dir.path());
+    with_template(&daemon, "save-exact = true\n");
+    daemon.repo_problem = Some(("apply_failed", "zsh: exited".into()));
+    daemon.dotfiles_changed();
+    assert!(!dir.path().join(".npmrc").exists());
+    daemon.repo_problem = None;
+    daemon.dotfiles_changed();
+    assert!(dir.path().join(".npmrc").exists());
+}
+
+#[test]
+fn pulled_settings_that_do_not_apply_are_not_deployed() {
+    crate::git::tests::isolate();
+    let dir = tempfile::tempdir().unwrap();
+    let (mut daemon, _) = daemon(dir.path());
+    with_template(&daemon, "save-exact = true\n");
+    let repo = daemon.ctx.paths.repo();
+    let git = |dir: &Path, args: &[&str]| crate::git::run(dir, args).unwrap();
+    git(&repo, &["add", "--all"]);
+    git(&repo, &["commit", "--quiet", "-m", "npmrc"]);
+    let remote = dir.path().join("remote.git");
+    git(dir.path(), &["init", "--quiet", "--bare", "remote.git"]);
+    git(
+        &repo,
+        &["remote", "add", "origin", remote.to_str().unwrap()],
+    );
+    git(
+        &repo,
+        &["push", "--quiet", "--set-upstream", "origin", "HEAD"],
+    );
+    let other = dir.path().join("other");
+    crate::git::clone(remote.to_str().unwrap(), &other, &[]).unwrap();
+    std::fs::create_dir_all(other.join("modules")).unwrap();
+    std::fs::write(other.join("modules/broken.toml"), "[env\n").unwrap();
+    git(&other, &["add", "--all"]);
+    git(&other, &["commit", "--quiet", "-m", "broken"]);
+    git(&other, &["push", "--quiet", "origin", "HEAD"]);
+
+    daemon.sync_now();
+    assert!(daemon.repo_problem.is_some());
+    daemon.dotfiles_changed();
+    assert!(!dir.path().join(".npmrc").exists());
+}

@@ -182,3 +182,65 @@ fn update_locks_the_newest_commit_and_downloads_it() {
         .success()
         .stdout("Already up to date\n");
 }
+
+/// A lock committed by a run that could not download goes out once a later
+/// run downloads it.
+#[test]
+fn a_lock_goes_out_once_a_retry_downloads_it() {
+    let home = Home::new();
+    home.cmd("rsmt").arg("init").assert().success();
+    let remote = home.root.join("remote.git");
+    common::git(&home.root, &["init", "--quiet", "--bare", "remote.git"]);
+    common::git(
+        &home.repo(),
+        &["remote", "add", "origin", &remote.display().to_string()],
+    );
+    let (url, _) = upstream(&home);
+    home.write(
+        "externals.toml",
+        &format!(
+            "[[external]]\npath = \".zplug/plugins\"\ngit = \"{}\"\n",
+            url.display()
+        ),
+    );
+    common::git(&home.repo(), &["add", "-A"]);
+    common::git(&home.repo(), &["commit", "--quiet", "-m", "externals"]);
+    // A file where its folder goes stops the download, even for root.
+    std::fs::write(home.root.join(".zplug"), "").unwrap();
+    let failed = home
+        .cmd("rsmt")
+        .args(["externals", "update"])
+        .output()
+        .unwrap();
+    std::fs::remove_file(home.root.join(".zplug")).unwrap();
+    assert!(!failed.status.success());
+    let pushed = || {
+        let mut cmd = assert_cmd::Command::new("git");
+        common::git_env(&mut cmd);
+        let out = cmd
+            .arg("-C")
+            .arg(&remote)
+            .args(["log", "--all", "--format=%s"])
+            .output()
+            .unwrap();
+        String::from_utf8_lossy(&out.stdout).into_owned()
+    };
+    assert!(!pushed().contains("update(externals)"));
+
+    let retry = home
+        .cmd("rsmt")
+        .args(["externals", "update"])
+        .output()
+        .unwrap();
+    let said = format!(
+        "{}{}",
+        String::from_utf8_lossy(&retry.stdout),
+        String::from_utf8_lossy(&retry.stderr)
+    );
+    assert!(retry.status.success(), "{said}");
+    let log = pushed();
+    assert!(
+        log.contains("update(externals): .zplug/plugins"),
+        "{said}\n{log}"
+    );
+}

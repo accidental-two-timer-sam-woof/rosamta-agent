@@ -41,6 +41,10 @@ pub struct Adoption {
     /// The module's host and OS limits before joining it for every host.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub limits: Option<Limits>,
+    /// The lines were already in a module that loads here; restoring them
+    /// leaves that module alone.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub duplicate: bool,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -122,9 +126,16 @@ impl Store {
     }
 
     pub(crate) fn save<T: Serialize>(&self, name: &str, value: &T) -> Result<()> {
+        use std::os::unix::fs::PermissionsExt;
         std::fs::create_dir_all(&self.dir).map_err(Error::write(&self.dir))?;
+        // Adoption records and queue items can hold lines that look secret.
+        std::fs::set_permissions(&self.dir, std::fs::Permissions::from_mode(0o700))
+            .map_err(Error::write(&self.dir))?;
+        let path = self.dir.join(name);
         let text = serde_json::to_string_pretty(value).expect("state serializes");
-        crate::edit::write_atomic(&self.dir.join(name), &format!("{text}\n"))
+        crate::edit::write_atomic(&path, &format!("{text}\n"))?;
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600))
+            .map_err(Error::write(&path))
     }
 
     pub fn adoptions(&self) -> Result<Adoptions> {

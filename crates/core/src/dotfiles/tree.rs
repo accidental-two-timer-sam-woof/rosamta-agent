@@ -94,7 +94,7 @@ fn collect(path: &Path, out: &mut Vec<PathBuf>) -> Result<()> {
     }
 }
 
-/// Copy `from` to a new path `to`, keeping symlinks and the executable bit.
+/// Copy `from` to a new path `to`, keeping symlinks and modes.
 fn copy_new(from: &Path, to: &Path) -> Result<()> {
     let meta = std::fs::symlink_metadata(from).map_err(Error::read(from))?;
     if meta.is_symlink() {
@@ -105,7 +105,7 @@ fn copy_new(from: &Path, to: &Path) -> Result<()> {
         for name in names(from)? {
             copy_new(&from.join(&name), &to.join(&name))?;
         }
-        Ok(())
+        std::fs::set_permissions(to, meta.permissions()).map_err(Error::write(to))
     } else {
         std::fs::copy(from, to).map_err(Error::write(to)).map(drop)
     }
@@ -165,12 +165,33 @@ pub fn link(target: &Path, at: &Path) -> Result<()> {
 
 pub fn remove(path: &Path) -> Result<()> {
     let result = match std::fs::symlink_metadata(path) {
-        Ok(meta) if meta.is_dir() => std::fs::remove_dir_all(path),
+        // A copied read-only folder (0555) keeps its children until it is writable.
+        Ok(meta) if meta.is_dir() => std::fs::remove_dir_all(path).or_else(|err| {
+            if err.kind() != std::io::ErrorKind::PermissionDenied {
+                return Err(err);
+            }
+            writable(path);
+            std::fs::remove_dir_all(path)
+        }),
         Ok(_) => std::fs::remove_file(path),
         Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(()),
         Err(err) => Err(err),
     };
     result.map_err(Error::write(path))
+}
+
+/// Give the owner write access to `dir` and every folder in it.
+fn writable(dir: &Path) {
+    use std::os::unix::fs::PermissionsExt;
+    if let Ok(meta) = std::fs::symlink_metadata(dir)
+        && meta.is_dir()
+    {
+        let mode = meta.permissions().mode() | 0o700;
+        let _ = std::fs::set_permissions(dir, std::fs::Permissions::from_mode(mode));
+        for name in names(dir).unwrap_or_default() {
+            writable(&dir.join(name));
+        }
+    }
 }
 
 /// Bytes are decrypted or rendered content that may hold a secret, so the
@@ -209,6 +230,27 @@ pub fn set_mode(path: &Path, mode: u32) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_read_only_folder_can_be_replaced() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().unwrap();
+        let from = dir.path().join("from");
+        std::fs::create_dir_all(from.join("locked")).unwrap();
+        std::fs::write(from.join("locked/file"), "a\n").unwrap();
+        let locked = std::fs::Permissions::from_mode(0o555);
+        std::fs::set_permissions(from.join("locked"), locked).unwrap();
+        let to = dir.path().join("to");
+        put(Content::Tree(&from), &to).unwrap();
+        put(Content::Tree(&from), &to).unwrap();
+        assert_eq!(
+            std::fs::read_to_string(to.join("locked/file")).unwrap(),
+            "a\n"
+        );
+        assert!(!dir.path().join(".to.rosamta-old").exists());
+        remove(&to).unwrap();
+        remove(&from).unwrap();
+    }
 
     #[test]
     fn trees_round_trip() {

@@ -258,7 +258,7 @@ pub fn whole(text: &str) -> Option<Segment> {
 
 /// The heredocs `line` opens, in order: the delimiter, and whether `<<-`
 /// strips leading tabs. Not `<<<`, nor `<<` in quotes, comments or `((…))`.
-fn heredocs(line: &str) -> Vec<(String, bool)> {
+pub(super) fn heredocs(line: &str) -> Vec<(String, bool)> {
     let mut out = Vec::new();
     let (mut single, mut double, mut escaped) = (false, false, false);
     let mut arithmetic = 0;
@@ -286,13 +286,7 @@ fn heredocs(line: &str) -> Vec<(String, bool)> {
                     Some(after) => after,
                     None if arithmetic == 0 => {
                         let spec = after.strip_prefix('-').unwrap_or(after).trim_start();
-                        let len = spec
-                            .find(|c: char| c.is_whitespace() || ";&|<>()".contains(c))
-                            .unwrap_or(spec.len());
-                        let word: String = spec[..len]
-                            .chars()
-                            .filter(|c| !"'\"\\".contains(*c))
-                            .collect();
+                        let word = delimiter(spec);
                         if !word.is_empty() {
                             out.push((word, after.starts_with('-')));
                         }
@@ -317,9 +311,28 @@ fn heredocs(line: &str) -> Vec<(String, bool)> {
     out
 }
 
+/// The delimiter word `spec` starts with, as the shell reads it: quotes
+/// removed and parts joined, so `'END FILE'`, `''EOF` and `E"O"F` count whole.
+fn delimiter(spec: &str) -> String {
+    let mut word = String::new();
+    let mut quote = None;
+    let mut chars = spec.chars();
+    while let Some(c) = chars.next() {
+        match quote {
+            Some(open) if c == open => quote = None,
+            Some(_) => word.push(c),
+            None if c == '\'' || c == '"' => quote = Some(c),
+            None if c == '\\' => word.extend(chars.next()),
+            None if c.is_whitespace() || ";&|<>()".contains(c) => break,
+            None => word.push(c),
+        }
+    }
+    word
+}
+
 /// How far into `rest` the bodies of `pending` heredocs run, through their
 /// closing lines; `None` while one is still open.
-fn heredoc_end(rest: &str, pending: &[(String, bool)]) -> Option<usize> {
+pub(super) fn heredoc_end(rest: &str, pending: &[(String, bool)]) -> Option<usize> {
     let mut pending = pending.iter();
     let Some(mut want) = pending.next() else {
         return Some(0);
@@ -503,6 +516,18 @@ mod tests {
             spans("cat <<-'END' >x\n\ta\n\n\t}\n\tEND\n\nc\n"),
             [(1, 5), (7, 7)]
         );
+        // A quoted delimiter is the whole word, spaces and parts included.
+        assert_eq!(
+            spans("cat <<'END FILE'\nEND\n\nx\nEND FILE\n\nc\n"),
+            [(1, 5), (7, 7)]
+        );
+        for open in ["''EOF", "E\"O\"F", "\\EOF"] {
+            assert_eq!(
+                spans(&format!("cat <<{open} >x\na\n\nb\nEOF\n\nc\n")),
+                [(1, 5), (7, 7)],
+                "{open}"
+            );
+        }
         // Neither a here-string, a shift nor a comment opens one.
         assert_eq!(
             spans("cat <<<x\n\ny=$((1 << 2))\n\nz # <<EOF\n\nw\n"),

@@ -1,6 +1,7 @@
 //! `rsmt apply`, `hook`, `unhook`, `eject` and `restore --original`.
 
 use std::collections::BTreeMap;
+use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -165,6 +166,9 @@ pub struct Plan {
     pub hook_changes: Vec<FileChange>,
     /// Shells that get scripts.
     pub shells: Vec<Shell>,
+    /// Shells that keep the scripts they had, since they could not be checked.
+    #[serde(skip)]
+    pub kept: Vec<Shell>,
     /// Shells that are installed but too old, with the reason.
     pub skipped: Vec<String>,
     pub current: Option<String>,
@@ -215,14 +219,27 @@ pub fn plan(ctx: &Context) -> Result<Plan> {
 
     let generated_dir = ctx.paths.generated();
     let current = generated::current_id(&generated_dir);
-    // Render against the current version's paths, so unchanged modules compare equal.
-    let id = current.clone().unwrap_or_else(generated::new_version_id);
-    let layout = generated::layout(&generated_dir, ctx.paths.state(), &id);
-    let files = render::render(&modules, &shells, &layout);
     let old = match &current {
         Some(id) => generated::read_version(&generated_dir, id)?,
         None => BTreeMap::new(),
     };
+    // A shell not found this time, or whose version did not come back (another
+    // PATH, a slow start), keeps its last checked scripts until it can be checked.
+    let known = |shell: &Shell| {
+        installed
+            .iter()
+            .any(|found| found.shell == *shell && found.version.is_some())
+    };
+    let kept: Vec<Shell> = Shell::ALL
+        .into_iter()
+        .filter(|shell| !shells.contains(shell) && !known(shell))
+        .filter(|shell| old.keys().any(|rel| rel.starts_with(shell.name())))
+        .collect();
+    // Render against the current version's paths, so unchanged modules compare equal.
+    let id = current.clone().unwrap_or_else(generated::new_version_id);
+    let layout = generated::layout(&generated_dir, ctx.paths.state(), &id);
+    let mut files = render::render(&modules, &shells, &layout);
+    files.extend(carried(&old, &kept));
     let mut file_changes = Vec::new();
     for path in old
         .keys()
@@ -249,6 +266,7 @@ pub fn plan(ctx: &Context) -> Result<Plan> {
         file_changes,
         hook_changes,
         shells,
+        kept,
         skipped,
         current,
         installed,
@@ -294,6 +312,31 @@ pub struct Applied {
     pub scripts: Vec<crate::scripts::apply::Step>,
 }
 
+impl Applied {
+    /// `what: why` for each dotfile, external or script that failed.
+    pub fn failures(&self) -> Vec<String> {
+        let line = |what: String, reason: &Option<String>| {
+            format!("{what}: {}", reason.as_deref().unwrap_or("failed"))
+        };
+        let dotfiles = self
+            .dotfiles
+            .iter()
+            .filter(|step| step.action == crate::dotfiles::Action::Failed)
+            .map(|step| line(step.path.display().to_string(), &step.reason));
+        let externals = self
+            .externals
+            .iter()
+            .filter(|step| step.action == crate::externals::Action::Failed)
+            .map(|step| line(step.path.display().to_string(), &step.reason));
+        let scripts = self
+            .scripts
+            .iter()
+            .filter(|step| step.action == crate::scripts::apply::Action::Failed)
+            .map(|step| line(step.source.clone(), &step.reason));
+        dotfiles.chain(externals).chain(scripts).collect()
+    }
+}
+
 /// Download externals and run `before` scripts; render, smoke-test, then
 /// switch; then deploy dotfiles and run `after` scripts. If the shells fail
 /// their check, the current version stays and no dotfile is touched. The
@@ -329,9 +372,26 @@ pub fn with_dotfiles(ctx: &Context, mut applied: Applied) -> Result<Applied> {
 }
 
 /// Apply after `change` edits rc files or modules, judging shell startup
-/// against how shells started before the change.
-pub fn apply_after(ctx: &Context, change: impl FnOnce() -> Result<()>) -> Result<Applied> {
+/// against how shells started before the change. A change for `shells`
+/// that cannot be checked now (not found, no version) is refused.
+pub fn apply_after(
+    ctx: &Context,
+    shells: &[Shell],
+    change: impl FnOnce() -> Result<()>,
+) -> Result<Applied> {
     migrate(ctx)?;
+    let unchecked: Vec<&str> = plan(ctx)?
+        .kept
+        .iter()
+        .filter(|shell| shells.contains(shell))
+        .map(|shell| shell.name())
+        .collect();
+    if !unchecked.is_empty() {
+        return Err(Error::Apply(format!(
+            "cannot start {} to check it, so nothing changed; try again",
+            unchecked.join(", ")
+        )));
+    }
     let installed = ctx.installed();
     let env = ctx.hook_env(&installed);
     let generated_dir = ctx.paths.generated();
@@ -386,7 +446,16 @@ fn finish(ctx: &Context, baselines: &[(Shell, Vec<Smoke>)]) -> Result<Applied> {
     let layout = generated::layout(&generated_dir, ctx.paths.state(), &id);
     let facts = host_facts(&ctx.paths)?;
     let modules = render::select(all_modules(&ctx.paths)?, &facts);
-    let files = render::render(&modules, &plan.shells, &layout);
+    let mut files = render::render(&modules, &plan.shells, &layout);
+    if let Some(old_id) = &plan.current {
+        let old = generated::read_version(&generated_dir, old_id)?;
+        // They name their version's folder, which is now this one.
+        files.extend(
+            carried(&old, &plan.kept)
+                .into_iter()
+                .map(|(rel, text)| (rel, text.replace(old_id.as_str(), &id))),
+        );
+    }
     generated::write_version(&layout, &files)?;
 
     let result = check_and_smoke(ctx, &plan, &layout, &files, baselines);
@@ -398,6 +467,15 @@ fn finish(ctx: &Context, baselines: &[(Shell, Vec<Smoke>)]) -> Result<Applied> {
     generated::prune(&generated_dir)?;
     applied.version = Some(id);
     Ok(applied)
+}
+
+/// The files of `kept` shells in a version.
+fn carried(version: &BTreeMap<PathBuf, String>, kept: &[Shell]) -> BTreeMap<PathBuf, String> {
+    version
+        .iter()
+        .filter(|(rel, _)| kept.iter().any(|shell| rel.starts_with(shell.name())))
+        .map(|(rel, text)| (rel.clone(), text.clone()))
+        .collect()
 }
 
 fn check_and_smoke(
@@ -476,6 +554,16 @@ fn check_and_smoke(
         for (before, after) in before.into_iter().zip(after) {
             let lines = match after {
                 Smoke::Stderr(lines) => lines,
+                Smoke::Stopped(lines) => {
+                    // A shell that already stopped early (`exec tmux`) is not this apply's doing.
+                    if !matches!(before, Smoke::Stopped(_)) {
+                        failures.push(format!(
+                            "{} ({suspects}): exited before startup finished",
+                            found.shell
+                        ));
+                    }
+                    lines
+                }
                 // Slow before this apply too, so not this apply's doing.
                 Smoke::TimedOut if matches!(before, Smoke::TimedOut) => continue,
                 Smoke::TimedOut => {
@@ -488,7 +576,7 @@ fn check_and_smoke(
                 }
             };
             let mut known = match before {
-                Smoke::Stderr(lines) => lines,
+                Smoke::Stderr(lines) | Smoke::Stopped(lines) => lines,
                 Smoke::TimedOut => Vec::new(),
             };
             for line in lines {
@@ -584,9 +672,16 @@ fn first_line(text: &str) -> &str {
     text.lines().next().unwrap_or(text)
 }
 
+/// What a smoke test runs once startup is done, printing `SMOKE_MARK`.
+const SMOKE_COMMAND: &str = "echo rosamta-smoke-reached";
+const SMOKE_MARK: &str = "rosamta-smoke-reached";
+
 #[derive(Clone)]
 enum Smoke {
+    /// Started and ran the command; the error lines.
     Stderr(Vec<String>),
+    /// Ended before the command, as after an `exit` in a module; the error lines.
+    Stopped(Vec<String>),
     TimedOut,
 }
 
@@ -594,9 +689,12 @@ enum Smoke {
 /// way, as bash and zsh read other files as login shells.
 fn smoke(ctx: &Context, found: &Detected, dir: &Path) -> Vec<Smoke> {
     let ways: &[&[&str]] = match found.shell {
-        Shell::Sh => &[&["-l", "-c", "exit"]],
-        Shell::Bash | Shell::Zsh => &[&["-i", "-c", "exit"], &["-l", "-i", "-c", "exit"]],
-        Shell::Fish => &[&["-i", "-c", "exit"]],
+        Shell::Sh => &[&["-l", "-c", SMOKE_COMMAND]],
+        Shell::Bash | Shell::Zsh => &[
+            &["-i", "-c", SMOKE_COMMAND],
+            &["-l", "-i", "-c", SMOKE_COMMAND],
+        ],
+        Shell::Fish => &[&["-i", "-c", SMOKE_COMMAND]],
     };
     ways.iter()
         .map(|args| {
@@ -608,13 +706,20 @@ fn smoke(ctx: &Context, found: &Detected, dir: &Path) -> Vec<Smoke> {
                 .env_remove("ROSAMTA_ENV")
                 .env_remove("ROSAMTA_PROFILE");
             match output_with_timeout(&mut cmd, SMOKE_TIMEOUT) {
-                Ok(Some(output)) => Smoke::Stderr(
-                    String::from_utf8_lossy(&output.stderr)
+                Ok(Some(output)) => {
+                    let lines = String::from_utf8_lossy(&output.stderr)
                         .lines()
                         .map(str::to_string)
                         .filter(|line| !line.is_empty())
-                        .collect(),
-                ),
+                        .collect();
+                    // Startup output need not end in a newline (`printf` of a title).
+                    let reached = String::from_utf8_lossy(&output.stdout).contains(SMOKE_MARK);
+                    if reached {
+                        Smoke::Stderr(lines)
+                    } else {
+                        Smoke::Stopped(lines)
+                    }
+                }
                 Ok(None) => Smoke::TimedOut,
                 Err(err) => Smoke::Stderr(vec![format!(
                     "could not start {}: {err}",
@@ -833,8 +938,8 @@ pub fn plan_restore(ctx: &Context) -> Result<Vec<FileChange>> {
     for original in ctx.snapshots().originals()? {
         let before = match std::fs::read(&original.path) {
             Ok(bytes) => Some(String::from_utf8_lossy(&bytes).into_owned()),
-            // A dotfile directory that did not exist before rosamta.
-            Err(_) if original.path.is_dir() => Some(String::new()),
+            // A dotfile directory that did not exist before rosamta, or a dangling link.
+            Err(_) if original.path.is_dir() || original.path.is_symlink() => Some(String::new()),
             Err(err) if err.kind() == std::io::ErrorKind::NotFound => None,
             Err(err) => {
                 return Err(Error::Read {
@@ -843,16 +948,27 @@ pub fn plan_restore(ctx: &Context) -> Result<Vec<FileChange>> {
                 });
             }
         };
-        let after = original
-            .content
-            .map(|bytes| String::from_utf8_lossy(&bytes).into_owned());
-        changes.push(FileChange {
+        // A link or mode that differs is a change even when the bytes match.
+        let kind_differs = (!legacy(&original)
+            && std::fs::read_link(&original.path).ok() != original.link)
+            || original.mode.is_some_and(|mode| {
+                std::fs::metadata(&original.path)
+                    .is_ok_and(|meta| meta.permissions().mode() & 0o7777 != mode)
+            });
+        let after = match (original.content, &original.link) {
+            (Some(bytes), _) => Some(String::from_utf8_lossy(&bytes).into_owned()),
+            (None, Some(_)) => Some(String::new()),
+            (None, None) => None,
+        };
+        let change = FileChange {
             path: original.path,
             before,
             after,
-        });
+        };
+        if kind_differs || !change.is_noop() {
+            changes.push(change);
+        }
     }
-    changes.retain(|change| !change.is_noop());
     Ok(changes)
 }
 
@@ -873,18 +989,76 @@ pub fn restore_original(ctx: &Context) -> Result<Vec<PathBuf>> {
     }
     snapshots.save(&current, "restore original")?;
     for original in originals {
-        match original.content {
-            Some(bytes) => {
-                if let Some(dir) = original.path.parent() {
-                    std::fs::create_dir_all(dir).map_err(Error::write(dir))?;
-                }
-                std::fs::write(&original.path, bytes).map_err(Error::write(&original.path))?;
-            }
-            None => crate::dotfiles::tree::remove(&original.path)?,
-        }
+        put_back(&original)?;
     }
     ctx.set_unhooked(&Shell::ALL)?;
     Ok(paths)
+}
+
+/// Taken before snapshots kept links and modes: its bytes are written
+/// through whatever link is there, as they were then.
+fn legacy(original: &crate::snapshot::Original) -> bool {
+    original.content.is_some() && original.mode.is_none() && original.link.is_none()
+}
+
+/// One original: its link, then its bytes, written through the link only
+/// when the link was there before rosamta.
+fn put_back(original: &crate::snapshot::Original) -> Result<()> {
+    let path = &original.path;
+    let now_link = std::fs::read_link(path).ok();
+    if original.link.is_some() && now_link != original.link {
+        crate::dotfiles::tree::remove(path)?;
+    } else if original.link.is_none() && now_link.is_some() && !legacy(original) {
+        std::fs::remove_file(path).map_err(Error::write(path))?;
+    }
+    if (original.link.is_some() || original.content.is_some())
+        && let Some(dir) = path.parent()
+    {
+        std::fs::create_dir_all(dir).map_err(Error::write(dir))?;
+    }
+    if let Some(link) = &original.link
+        && std::fs::symlink_metadata(path).is_err()
+    {
+        std::os::unix::fs::symlink(link, path).map_err(Error::write(path))?;
+    }
+    let Some(bytes) = &original.content else {
+        return match original.link {
+            Some(_) => Ok(()),
+            None => crate::dotfiles::tree::remove(path),
+        };
+    };
+    if std::fs::read(path).ok().as_ref() == Some(bytes) {
+        return match original.mode {
+            Some(mode) => crate::dotfiles::tree::set_mode(path, mode),
+            None => Ok(()),
+        };
+    }
+    // Through a link the bytes belong to the file at the end of its chain.
+    let target = match original.link.is_some() || legacy(original) {
+        true => chain_end(path)?,
+        false => path.clone(),
+    };
+    let mode = original
+        .mode
+        .or_else(|| crate::dotfiles::tree::mode_of(&target))
+        .unwrap_or(0o644);
+    // A fresh owner-only file swapped in: the bytes never sit in a file others
+    // can read, and a link put there meanwhile is replaced, not followed.
+    crate::dotfiles::tree::put(crate::dotfiles::tree::Content::Bytes(bytes), &target)?;
+    crate::dotfiles::tree::set_mode(&target, mode)
+}
+
+/// The path a link chain from `path` ends at, even when no file is there.
+fn chain_end(path: &Path) -> Result<PathBuf> {
+    let mut at = path.to_path_buf();
+    // As many hops as the kernel follows.
+    for _ in 0..40 {
+        let Ok(link) = std::fs::read_link(&at) else {
+            return Ok(at);
+        };
+        at = at.parent().expect("a link has a parent").join(link);
+    }
+    Err(Error::Usage(format!("{} links in a loop", path.display())))
 }
 
 /// One shell on this host, for status screens.

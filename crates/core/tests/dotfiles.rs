@@ -253,6 +253,24 @@ fn auto_policy_saves_copies() {
 }
 
 #[test]
+fn a_copy_turned_into_a_link_saves_what_it_shows() {
+    let home = Home::new("auto");
+    home.repo_write("home/.npmrc", "a\n");
+    home.repo_write(
+        "dotfiles.toml",
+        "[[dotfile]]\npath = \".npmrc\"\ndeploy = \"copy\"\n",
+    );
+    home.deploy();
+    write(&home.at("work/npmrc"), "b\n");
+    fs::remove_file(home.at(".npmrc")).unwrap();
+    std::os::unix::fs::symlink(home.at("work/npmrc"), home.at(".npmrc")).unwrap();
+    assert_eq!(home.deploy(), one(".npmrc", Action::Saved));
+    let source = home.repo().join("home/.npmrc");
+    assert!(!source.symlink_metadata().unwrap().is_symlink());
+    assert_eq!(read(&source), "b\n");
+}
+
+#[test]
 fn link_permissions_go_on_the_source() {
     let home = Home::new("ask");
     home.repo_write("home/.netrc", "machine x\n");
@@ -307,6 +325,32 @@ fn undeclared_links_become_files() {
     );
     assert_eq!(read(&home.at(".vimrc")), "set nu\n");
     assert!(home.deploy().is_empty());
+}
+
+#[test]
+fn an_undeclared_private_link_stays_private() {
+    let home = Home::new("ask");
+    home.repo_write("home/.netrc", "machine x\n");
+    home.repo_write(
+        "dotfiles.toml",
+        "[[dotfile]]\npath = \".netrc\"\npermissions = \"0600\"\n",
+    );
+    home.deploy();
+    git(&home.repo(), &["add", "-A"]);
+    git(
+        &home.repo(),
+        &["commit", "--quiet", "--no-verify", "-m", "add"],
+    );
+    // Another host forgot it; the pull deleted the source.
+    home.repo_write("dotfiles.toml", "");
+    git(&home.repo(), &["rm", "--quiet", "home/.netrc"]);
+    git(
+        &home.repo(),
+        &["commit", "--quiet", "--no-verify", "-am", "forget"],
+    );
+    assert_eq!(home.deploy(), one(".netrc", Action::Released));
+    assert_eq!(read(&home.at(".netrc")), "machine x\n");
+    assert_eq!(mode(&home.at(".netrc")), 0o600);
 }
 
 #[test]
@@ -387,6 +431,99 @@ fn restore_original_removes_new_links() {
 }
 
 #[test]
+fn restore_original_keeps_links_and_modes() {
+    let home = Home::new("ask");
+    let tool = home.at(".config/tool");
+    write(&home.at("shared.conf"), "s\n");
+    fs::set_permissions(home.at("shared.conf"), fs::Permissions::from_mode(0o600)).unwrap();
+    write(&tool.join("token"), "t\n");
+    fs::set_permissions(tool.join("token"), fs::Permissions::from_mode(0o600)).unwrap();
+    std::os::unix::fs::symlink("../../shared.conf", tool.join("shared")).unwrap();
+    std::os::unix::fs::symlink("missing.conf", tool.join("dangling")).unwrap();
+    write(&home.at("final.conf"), "f\n");
+    std::os::unix::fs::symlink("final.conf", home.at("pointer.conf")).unwrap();
+    std::os::unix::fs::symlink("../../pointer.conf", tool.join("chain")).unwrap();
+    let snapshots = rosamta_core::snapshot::Snapshots::new(home.ctx.paths.state(), &home.ctx.home);
+    snapshots
+        .save(&dotfiles::tree::files(&tool).unwrap(), "test")
+        .unwrap();
+    fs::remove_dir_all(&tool).unwrap();
+    fs::remove_file(home.at("shared.conf")).unwrap();
+    fs::remove_file(home.at("final.conf")).unwrap();
+    write(&tool.join("shared"), "other\n");
+    // Someone holds a readable file where the private one was.
+    write(&tool.join("token"), "x\n");
+    fs::set_permissions(tool.join("token"), fs::Permissions::from_mode(0o644)).unwrap();
+    let mut held = fs::File::open(tool.join("token")).unwrap();
+    assert_eq!(
+        rosamta_core::apply::plan_restore(&home.ctx).unwrap().len(),
+        4
+    );
+
+    rosamta_core::apply::restore_original(&home.ctx).unwrap();
+
+    assert_eq!(
+        fs::read_link(home.at("pointer.conf")).unwrap(),
+        Path::new("final.conf")
+    );
+    assert_eq!(read(&home.at("final.conf")), "f\n");
+    let mut seen = String::new();
+    std::io::Read::read_to_string(&mut held, &mut seen).unwrap();
+    assert_eq!(
+        seen, "x\n",
+        "the restored bytes went into the readable file"
+    );
+    assert_eq!(mode(&home.at("shared.conf")), 0o600);
+
+    assert_eq!(
+        fs::read_link(tool.join("shared")).unwrap(),
+        Path::new("../../shared.conf")
+    );
+    assert_eq!(read(&home.at("shared.conf")), "s\n");
+    assert_eq!(
+        fs::read_link(tool.join("dangling")).unwrap(),
+        Path::new("missing.conf")
+    );
+    assert_eq!(read(&tool.join("token")), "t\n");
+    assert_eq!(mode(&tool.join("token")), 0o600);
+    assert!(
+        rosamta_core::apply::plan_restore(&home.ctx)
+            .unwrap()
+            .is_empty()
+    );
+}
+
+/// A snapshot taken before links and modes were kept writes through the
+/// link that is there, as restores did then.
+#[test]
+fn restore_original_writes_old_snapshots_through_links() {
+    let home = Home::new("ask");
+    write(&home.at("dots/zshrc"), "old\n");
+    std::os::unix::fs::symlink("dots/zshrc", home.at(".zshrc")).unwrap();
+    let snapshots = rosamta_core::snapshot::Snapshots::new(home.ctx.paths.state(), &home.ctx.home);
+    snapshots.save(&[home.at(".zshrc")], "test").unwrap();
+    fs::remove_file(snapshots.dir().join("original-meta.json")).unwrap();
+    write(&home.at("dots/zshrc"), "old\nhooked\n");
+    assert_eq!(
+        rosamta_core::apply::plan_restore(&home.ctx).unwrap().len(),
+        1
+    );
+
+    rosamta_core::apply::restore_original(&home.ctx).unwrap();
+
+    assert_eq!(
+        fs::read_link(home.at(".zshrc")).unwrap(),
+        Path::new("dots/zshrc")
+    );
+    assert_eq!(read(&home.at("dots/zshrc")), "old\n");
+    assert!(
+        rosamta_core::apply::plan_restore(&home.ctx)
+            .unwrap()
+            .is_empty()
+    );
+}
+
+#[test]
 fn eject_leaves_regular_files() {
     let home = Home::new("ask");
     home.repo_write("home/.config/nvim/init.lua", "vim.o.number = true\n");
@@ -398,11 +535,14 @@ fn eject_leaves_regular_files() {
     home.deploy();
     let nvim = home.at(".config/nvim");
     assert!(nvim.symlink_metadata().unwrap().is_symlink());
+    let source = home.repo().join("home/.config/nvim");
+    fs::set_permissions(&source, fs::Permissions::from_mode(0o700)).unwrap();
 
     let released = dotfiles::manage::eject(&home.ctx).unwrap();
 
     assert_eq!(released, std::slice::from_ref(&nvim));
     assert!(nvim.symlink_metadata().unwrap().is_dir());
+    assert_eq!(mode(&nvim), 0o700);
     assert_eq!(read(&nvim.join("init.lua")), "vim.o.number = true\n");
     assert_eq!(read(&home.at(".npmrc")), "save-exact = true\n");
     let deployed = dotfiles::state::load(home.ctx.paths.state()).unwrap();
@@ -768,6 +908,10 @@ mod manage {
         let err =
             manage::add(&home.ctx, &[home.at(".config/fish")], Deploy::Link, false).unwrap_err();
         assert!(err.to_string().contains("config.fish"), "{err}");
+        write(&home.at(".config/fish/conf.d/bun.fish"), "set -x B 1\n");
+        let path = home.at(".config/fish/conf.d/bun.fish");
+        let err = manage::add(&home.ctx, &[path], Deploy::Link, false).unwrap_err();
+        assert!(err.to_string().contains("conf.d"), "{err}");
         fs::create_dir_all(home.at(".config/empty")).unwrap();
         let err =
             manage::add(&home.ctx, &[home.at(".config/empty")], Deploy::Link, false).unwrap_err();
@@ -824,6 +968,77 @@ mod manage {
         let err = manage::forget(&home.ctx, &ghostty).unwrap_err();
         assert!(err.to_string().contains("is not a dotfile"), "{err}");
     }
+
+    #[test]
+    fn add_leaves_other_staged_changes_out_of_its_commit() {
+        let home = committed();
+        home.repo_write("modules/wip.toml", "[env]\nWIP = \"1\"\n");
+        git(&home.repo(), &["add", "modules/wip.toml"]);
+        write(&home.at(".npmrc"), "save-exact = true\n");
+        manage::add(&home.ctx, &[home.at(".npmrc")], Deploy::Link, false).unwrap();
+        let log = log(&home);
+        assert!(log.starts_with("add(home): .npmrc\n"), "{log}");
+        assert!(!log.contains("wip.toml"), "{log}");
+        let out = Command::new("git")
+            .arg("-C")
+            .arg(home.repo())
+            .args(["diff", "--cached", "--name-only"])
+            .output()
+            .unwrap();
+        assert_eq!(String::from_utf8(out.stdout).unwrap(), "modules/wip.toml\n");
+    }
+
+    #[test]
+    fn forget_keeps_a_source_another_dotfile_uses() {
+        let home = Home::new("ask");
+        home.repo_write("home/.config/ghostty/config", "theme = dark\n");
+        home.repo_write("home/.gitconfig", "[user]\n");
+        home.repo_write(
+            "dotfiles.toml",
+            "[[dotfile]]\npath = \".config/ghostty\"\n\n\
+             [[dotfile]]\npath = \".config/ghostty-work/config\"\nsource = \"home/.config/ghostty/config\"\n\n\
+             [[dotfile]]\npath = \".gitconfig\"\n\n\
+             [[dotfile]]\npath = \".gitconfig-work\"\nsource = \"./home/.gitconfig\"\n",
+        );
+        git(&home.repo(), &["add", "-A"]);
+        git(
+            &home.repo(),
+            &["commit", "--quiet", "--no-verify", "-m", "init"],
+        );
+        home.deploy();
+        manage::forget(&home.ctx, &home.at(".config/ghostty")).unwrap();
+        manage::forget(&home.ctx, &home.at(".gitconfig")).unwrap();
+        let manifest = read(&home.repo().join("dotfiles.toml"));
+        assert!(
+            !manifest.contains("path = \".config/ghostty\"\n"),
+            "{manifest}"
+        );
+        assert!(!manifest.contains("path = \".gitconfig\"\n"), "{manifest}");
+        assert_eq!(
+            read(&home.repo().join("home/.config/ghostty/config")),
+            "theme = dark\n"
+        );
+        assert_eq!(read(&home.repo().join("home/.gitconfig")), "[user]\n");
+        assert_eq!(
+            read(&home.at(".config/ghostty-work/config")),
+            "theme = dark\n"
+        );
+        assert_eq!(read(&home.at(".gitconfig-work")), "[user]\n");
+    }
+}
+
+#[test]
+fn a_fish_conf_d_file_is_a_startup_file() {
+    let home = Home::new("ask");
+    home.repo_write("home/.config/fish/conf.d/bun.fish", "set -x B 1\n");
+    home.repo_write(
+        "dotfiles.toml",
+        "[[dotfile]]\npath = \".config/fish/conf.d/bun.fish\"\n",
+    );
+    let manifest = dotfiles::load(&home.repo()).unwrap();
+    let problems = dotfiles::check(&manifest, &home.repo());
+    assert_eq!(problems.len(), 1, "{problems:?}");
+    assert!(problems[0].contains("startup file"), "{problems:?}");
 }
 
 #[test]

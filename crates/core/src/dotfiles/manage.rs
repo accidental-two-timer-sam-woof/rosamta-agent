@@ -241,11 +241,10 @@ fn check_template(target: &Path, meta: &std::fs::Metadata) -> Result<()> {
 pub fn forget(ctx: &Context, path: &Path) -> Result<PathBuf> {
     let repo = ctx.paths.repo();
     let rel = home_relative(ctx, path)?;
-    let entries: Vec<Dotfile> = super::load(&repo)?
+    let (entries, others): (Vec<Dotfile>, Vec<Dotfile>) = super::load(&repo)?
         .dotfile
         .into_iter()
-        .filter(|entry| super::clean(&entry.path).as_deref() == Some(rel.as_path()))
-        .collect();
+        .partition(|entry| super::clean(&entry.path).as_deref() == Some(rel.as_path()));
     if entries.is_empty() {
         return Err(Error::Usage(format!(
             "~/{} is not a dotfile",
@@ -278,8 +277,21 @@ pub fn forget(ctx: &Context, path: &Path) -> Result<PathBuf> {
     })?;
     let mut changed = vec![MANIFEST.to_string()];
     for entry in &entries {
-        tree::remove(&repo.join(entry.source()))?;
-        changed.push(entry.source());
+        let source = entry.source();
+        // Another declaration may show the same source, or a folder around or
+        // inside it, however it spells the path; one that is unclear is kept.
+        let shared = others.iter().any(|other| {
+            match (super::clean(&source), super::clean(&other.source())) {
+                (Some(mine), Some(theirs)) => {
+                    theirs.starts_with(&mine) || mine.starts_with(&theirs)
+                }
+                _ => true,
+            }
+        });
+        if !shared {
+            tree::remove(&repo.join(&source))?;
+            changed.push(source);
+        }
     }
     let mut deployed = state::load(ctx.paths.state())?;
     deployed.entries.remove(&rel);

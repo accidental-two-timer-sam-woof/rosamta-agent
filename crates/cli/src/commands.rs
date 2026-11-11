@@ -80,19 +80,7 @@ pub fn apply(json: bool, dry_run: bool) -> Result<ExitCode> {
         apply::apply(&ctx)?
     };
     warn_skipped(&applied.skipped);
-    let failed = wrong_passphrase
-        || applied
-            .dotfiles
-            .iter()
-            .any(|step| step.action == Action::Failed)
-        || applied
-            .externals
-            .iter()
-            .any(|step| step.action == externals::Action::Failed)
-        || applied
-            .scripts
-            .iter()
-            .any(|step| step.action == scripts::Action::Failed);
+    let failed = wrong_passphrase || !applied.failures().is_empty();
     if json {
         print_json(&applied);
     } else {

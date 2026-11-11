@@ -43,7 +43,16 @@ pub(crate) fn fetch(dir: &Path, rev: &str) -> Result<()> {
     if run(dir, &["fetch", "--quiet", "--depth", "1", "origin", rev]).is_ok() {
         return Ok(());
     }
-    run(dir, &["fetch", "--quiet", "origin"])?;
+    // A checkout made with `--depth 1` stays shallow unless told otherwise,
+    // and an older locked commit lies past its edge.
+    let shallow =
+        run(dir, &["rev-parse", "--is-shallow-repository"]).is_ok_and(|out| out.trim() == "true");
+    let args: &[&str] = if shallow {
+        &["fetch", "--quiet", "--unshallow", "origin"]
+    } else {
+        &["fetch", "--quiet", "origin"]
+    };
+    run(dir, args)?;
     if succeeds(dir, &["cat-file", "-e", &format!("{rev}^{{commit}}")])? {
         Ok(())
     } else {
