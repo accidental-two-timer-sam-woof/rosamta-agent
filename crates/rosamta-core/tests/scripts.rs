@@ -8,7 +8,7 @@ use std::path::{Path, PathBuf};
 
 use rosamta_core::apply::Context;
 use rosamta_core::paths::Paths;
-use rosamta_core::scripts::Timing;
+use rosamta_core::scripts::{Run, Script, Timing};
 use rosamta_core::scripts::apply::{self, Action, Why};
 
 fn write(path: &Path, text: &str) {
@@ -68,7 +68,7 @@ const SCRIPTS: &str = "[[script]]\nsource = \"scripts/install.sh\"\nrun = \"once
 
 #[test]
 fn once_runs_until_it_succeeds_and_onchange_follows_what_it_watches() {
-    let home = Home::new("auto");
+    let mut home = Home::new("auto");
     home.repo_write("scripts.toml", SCRIPTS);
     // No shebang and no execute bit: sh runs it.
     home.repo_write(
@@ -95,15 +95,12 @@ fn once_runs_until_it_succeeds_and_onchange_follows_what_it_watches() {
         ]
     );
     fs::remove_file(home.at("fail")).unwrap();
-    assert_eq!(
-        home.apply(),
-        [(
-            "scripts/install.sh".into(),
-            Action::Ran,
-            Some(Why::Failed),
-            None
-        )]
-    );
+    // In the background a failed script waits for the user; a terminal runs it.
+    let failed = |action| [("scripts/install.sh".into(), action, Some(Why::Failed), None)];
+    assert_eq!(home.apply(), failed(Action::Queued));
+    home.ctx.interactive = true;
+    assert_eq!(home.apply(), failed(Action::Ran));
+    home.ctx.interactive = false;
     assert_eq!(
         home.log(),
         format!(
@@ -160,4 +157,39 @@ fn ask_lists_scripts_instead_of_running_them() {
     let actions: Vec<Action> = home.apply().into_iter().map(|step| step.1).collect();
     assert_eq!(actions, [Action::Queued, Action::Queued]);
     assert_eq!(home.log(), "");
+}
+
+#[test]
+fn a_service_the_script_starts_does_not_hold_up_the_run() {
+    let home = Home::new("auto");
+    home.repo_write(
+        "scripts.toml",
+        "[[script]]\nsource = \"start.sh\"\nrun = \"once\"\n",
+    );
+    // The background sleep keeps the output pipe open after the script exits.
+    home.repo_write("start.sh", "sleep 20 &\necho started\n");
+    let started = std::time::Instant::now();
+    assert_eq!(home.apply()[0].1, Action::Ran);
+    assert!(started.elapsed().as_secs() < 10, "{:?}", started.elapsed());
+    let text = fs::read_to_string(apply_log(&home, "start.sh")).unwrap();
+    assert!(text.ends_with("started\n# exited with 0\n"), "{text}");
+}
+
+#[test]
+fn how_the_watch_list_is_written_does_not_count_as_a_change() {
+    let home = Home::new("auto");
+    home.repo_write("brew", "");
+    home.repo_write("a", "1");
+    home.repo_write("b", "2");
+    let script = |watch: &[&str]| Script {
+        source: "brew".into(),
+        run: Run::Onchange,
+        timing: Timing::After,
+        watch: watch.iter().map(|path| path.to_string()).collect(),
+        when: Default::default(),
+    };
+    let repo = home.ctx.paths.repo();
+    let hash = |watch: &[&str]| apply::hash(&repo, &script(watch)).unwrap();
+    assert_eq!(hash(&["a", "b"]), hash(&["b", "./a", "a"]));
+    assert_ne!(hash(&["a", "b"]), hash(&["a"]));
 }
