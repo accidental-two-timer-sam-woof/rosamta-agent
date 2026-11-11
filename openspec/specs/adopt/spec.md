@@ -43,7 +43,7 @@ rosamta SHALL 把連續的非空白行切成一段，並把緊接在上方的註
 - **THEN** 整段保存為一個片段 module
 
 ### Requirement: Raw module scope
-片段 module SHALL 只套用到實際讀取來源檔的 shell：`~/.profile` 的內容套用到 sh，以及會執行它的 bash 與 zsh（login bash 沒有 `~/.bash_profile` 與 `~/.bash_login`，或讀取的那一個執行 `~/.profile`；zsh 的啟動檔執行 `~/.profile`）；bash 檔案的內容只套用到 bash；zsh 檔案的內容只套用到 zsh；fish 檔案的內容只套用到 fish。
+片段 module SHALL 只套用到實際讀取來源檔的 shell：`~/.profile` 的內容套用到 sh，以及會執行它的 bash 與 zsh（login bash 沒有 `~/.bash_profile` 與 `~/.bash_login`，或讀取的那一個、或 `~/.bashrc` 執行 `~/.profile`；zsh 的啟動檔執行 `~/.profile`；執行 `~/.profile` 的那一行已接管進該 shell 的 module 時也算）；bash 檔案的內容只套用到 bash；zsh 檔案的內容只套用到 zsh；fish 檔案的內容只套用到 fish。
 
 #### Scenario: Snippet from zprofile
 - **WHEN** 從 `~/.zprofile` 接管一段無法辨識的內容

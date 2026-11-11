@@ -694,6 +694,51 @@ fn profile_lines_stay_with_the_shells_that_read_them() {
     );
 }
 
+/// Interactive bash reads `.bashrc`, so a `.profile` it runs is bash's too.
+#[test]
+fn a_bashrc_that_runs_the_profile_makes_bash_a_reader() {
+    if !has("bash") || !has("sh") {
+        return;
+    }
+    let home = hooked(&[
+        (".bash_profile", "export EDITOR=vim\n"),
+        (".bashrc", ". \"$HOME\"/.profile\n"),
+        (".profile", "export ONE=1\n"),
+    ]);
+    run(&home, &["adopt", "--yes"]);
+    let one = fs::read_dir(home.repo().join("modules/adopted"))
+        .unwrap()
+        .map(|entry| fs::read_to_string(entry.unwrap().path()).unwrap())
+        .find(|text| text.contains("ONE"))
+        .expect("the .profile line was adopted");
+    assert!(one.contains("shells = [\"sh\", \"bash\"]"), "{one}");
+}
+
+/// A `.bash_profile` line that runs `.profile` moves into a module on the
+/// first adoption; bash still reads `.profile` through it, so what lands in
+/// `.profile` later is adopted for bash too.
+#[test]
+fn bash_keeps_reading_the_profile_after_its_source_line_moves() {
+    if !has("bash") || !has("sh") {
+        return;
+    }
+    let home = hooked(&[
+        (".bash_profile", "source ~/.profile\n"),
+        (".profile", "export ONE=1\n"),
+    ]);
+    run(&home, &["adopt", "--yes"]);
+    let profile = home.root.join(".profile");
+    let text = fs::read_to_string(&profile).unwrap();
+    fs::write(&profile, format!("{text}export TWO=2\n")).unwrap();
+    run(&home, &["adopt", "--yes"]);
+    let two = fs::read_dir(home.repo().join("modules/adopted"))
+        .unwrap()
+        .map(|entry| fs::read_to_string(entry.unwrap().path()).unwrap())
+        .find(|text| text.contains("TWO"))
+        .expect("the second .profile line was adopted");
+    assert!(two.contains("shells = [\"sh\", \"bash\"]"), "{two}");
+}
+
 const MY_OS: &str = if cfg!(target_os = "macos") {
     "macos"
 } else {

@@ -1,7 +1,6 @@
 //! Watched files and how their content splits into segments.
 
 use std::path::{Path, PathBuf};
-use std::sync::OnceLock;
 
 use regex::Regex;
 
@@ -105,16 +104,27 @@ pub fn watched_files(env: &HookEnv) -> Vec<Watched> {
 }
 
 /// sh reads `~/.profile`. Login bash reads it only without a `.bash_profile`
-/// or `.bash_login`, or when the one it reads runs it; zsh only when one of
-/// its startup files runs it.
+/// or `.bash_login`, or when the one it reads runs it; any bash when
+/// `.bashrc` runs it; zsh only when one of its startup files runs it. A line that runs it may already sit in an
+/// adopted module, so the generated scripts count too.
 fn profile_readers(env: &HookEnv) -> Vec<Shell> {
-    let runs = |path: &Path| std::fs::read_to_string(path).is_ok_and(|text| runs_profile(&text));
+    let runs = |path: &Path| {
+        std::fs::read_to_string(path).is_ok_and(|text| runs_profile(&text, &env.home))
+    };
+    let generated = |shell: Shell| {
+        std::fs::read_dir(env.current.join(shell.name()))
+            .into_iter()
+            .flatten()
+            .filter_map(|entry| Some(entry.ok()?.path()))
+            .any(|path| runs(&path))
+    };
     let mut shells = vec![Shell::Sh];
     let bash = [".bash_profile", ".bash_login"]
         .iter()
         .map(|name| env.home.join(name))
         .find(|path| path.exists());
-    if bash.as_deref().is_none_or(runs) {
+    if bash.as_deref().is_none_or(runs) || runs(&env.home.join(".bashrc")) || generated(Shell::Bash)
+    {
         shells.push(Shell::Bash);
     }
     let zsh = [
@@ -123,21 +133,22 @@ fn profile_readers(env: &HookEnv) -> Vec<Shell> {
         env.zdotdir.join(".zshrc"),
         env.zdotdir.join(".zlogin"),
     ];
-    if zsh.iter().any(|path| runs(path)) {
+    if zsh.iter().any(|path| runs(path)) || generated(Shell::Zsh) {
         shells.push(Shell::Zsh);
     }
     shells
 }
 
-/// A line such as `. ~/.profile` or `emulate sh -c '. "$HOME/.profile"'`.
-fn runs_profile(text: &str) -> bool {
-    static LINE: OnceLock<Regex> = OnceLock::new();
-    LINE.get_or_init(|| {
-        Regex::new(
-            r#"(?m)^[^#\n]*?(?:^|[\s;&|'"(])(?:\.|source)\s+["']?(?:~|\$HOME|\$\{HOME\})/\.profile(?:["'\s;&|)]|$)"#,
-        )
-        .unwrap()
-    })
+/// A line such as `. ~/.profile`, `. "$HOME"/.profile`, `. /home/me/.profile`
+/// or `emulate sh -c '. ~/.profile'`. Text that only looks like one (in a
+/// function never called, say) counts too: that renders `.profile` for the
+/// shell, as every host did before.
+fn runs_profile(text: &str, home: &Path) -> bool {
+    let home = regex::escape(&home.to_string_lossy());
+    Regex::new(&format!(
+        r#"(?m)^[^#\n]*?(?:^|[\s;&|'"(])(?:\.|source)\s+["']?(?:~|\$HOME|\$\{{HOME\}}|{home})["']?/\.profile(?:["'\s;&|)]|$)"#
+    ))
+    .unwrap()
     .is_match(text)
 }
 
@@ -509,21 +520,25 @@ mod tests {
 
     #[test]
     fn lines_that_run_the_profile() {
+        let home = Path::new("/home/me");
         for text in [
             ". ~/.profile",
             "[ -r \"$HOME/.profile\" ] && . \"$HOME/.profile\"",
             "emulate sh -c '. ~/.profile'",
             "  source ${HOME}/.profile",
+            ". \"$HOME\"/.profile",
+            ". /home/me/.profile",
         ] {
-            assert!(runs_profile(text), "{text}");
+            assert!(runs_profile(text, home), "{text}");
         }
         for text in [
             "# . ~/.profile",
             ". ~/.profile.local",
             ". \"$HOME/.cargo/env\"",
             "export PROFILE=~/.profile",
+            ". /home/other/.profile",
         ] {
-            assert!(!runs_profile(text), "{text}");
+            assert!(!runs_profile(text, home), "{text}");
         }
     }
 
