@@ -59,10 +59,11 @@ fn literal_assignments() -> &'static [Regex; 2] {
 }
 
 /// A quoted literal (`$'...'` too), and a quoted or bare one: no expansion
-/// inside. In double quotes a `$` expands only before a name, `{`, `(` or a
-/// special parameter; `"Summer2024$"` is a literal.
-const QUOTED: &str = r#"(?:\$?'[^']+'|"(?:[^"$`\\]|\\.|\$[^A-Za-z0-9_{(?!#@*$"\\`=^~+-])+\$?")"#;
-const VALUE: &str = r#"(?:\$?'[^']+'|"(?:[^"$`\\]|\\.|\$[^A-Za-z0-9_{(?!#@*$"\\`=^~+-])+\$?"|(?:[^\s'"$`\\;()]|\\.)+)"#;
+/// inside. A `$` expands only before a name, `{`, `(`, `[`, a quote or a
+/// special parameter; `Summer2024$` is a literal.
+const QUOTED: &str =
+    r#"(?:\$?'[^']+'|"(?:[^"$`\\]|\\.|\$[^A-Za-z0-9_{(\[?!#@*$'"\\`=^~+\s;()-])+\$?")"#;
+const VALUE: &str = r#"(?:\$?'[^']+'|"(?:[^"$`\\]|\\.|\$[^A-Za-z0-9_{(\[?!#@*$'"\\`=^~+\s;()-])+\$?"|(?:[^\s'"$`\;()]|\\.|\$[^A-Za-z0-9_{(\[?!#@*$'"\\`=^~+\s;()-])+\$?)"#;
 
 /// Every `NAME=literal` word in `command` with its value, as in
 /// `export A=1 TOKEN=x` or `local -r KEY=x`.
@@ -233,7 +234,8 @@ fn ends_secret(name: &str) -> bool {
 /// A value no secret has: a switch or a path whatever the name
 /// (`TOKENIZERS_PARALLELISM=false`, `PASSWORD_STORE_DIR=~/.password-store`),
 /// and a short number (`KEYTIMEOUT=1`), of four digits or more only when
-/// the name does not end in the secret's word (`DB_PASSWORD=482913`).
+/// no part of the name ends in the secret's word (`MAX_TOKENS=4096`, but
+/// not `DB_PASSWORD=482913`).
 fn plain(name: &str, value: &str) -> bool {
     let value = value.strip_prefix('$').unwrap_or(value);
     let value = value
@@ -241,11 +243,12 @@ fn plain(name: &str, value: &str) -> bool {
         .and_then(|rest| rest.strip_suffix(['\'', '"']))
         .unwrap_or(value);
     let upper = name.to_ascii_uppercase();
-    let last = upper.rsplit('_').next().unwrap_or_default();
-    let names_it = SECRET_NAMES
-        .iter()
-        .chain(&SECRET_ENDINGS)
-        .any(|word| last.ends_with(word));
+    let names_it = upper.split('_').any(|part| {
+        SECRET_NAMES
+            .iter()
+            .chain(&SECRET_ENDINGS)
+            .any(|word| part.ends_with(word))
+    });
     let number =
         value.len() <= if names_it { 3 } else { 6 } && value.bytes().all(|b| b.is_ascii_digit());
     let switch =
@@ -565,6 +568,9 @@ mod tests {
             "export AWS_SECRET_ACCESS_KEY=/k7FAKEfake+bPxRfiCYFAKEKEYwJalrXUtnFAKE",
             "export DB_PASSWORD=\"Summer2024$\"",
             "export DB_PASSWORD=\"pa$%word1\"",
+            "export DB_PASSWORD=Summer2024$",
+            "export DB_PASSWORD=pa$%word1",
+            "export DB_PASSWORD_PROD=482913",
         ] {
             assert_eq!(secret_rule(text), Some("secret-name"), "{text}");
         }
@@ -577,6 +583,9 @@ mod tests {
             "export API_TOKEN=\"$OTHER_TOKEN\"",
             "export API_TOKEN=\"prefix-${USER}\"",
             "export API_TOKEN=\"$(pass show api)\"",
+            "export API_TOKEN=prefix$OTHER",
+            "export SUM_TOKEN=\"$[1+2]\"",
+            "export OPENAI_MAX_TOKENS=4096",
         ] {
             assert!(!looks_secret(text), "{text}");
         }
