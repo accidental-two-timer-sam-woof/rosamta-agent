@@ -4,6 +4,7 @@
 //! shell reminder still are.
 
 use std::sync::mpsc::Sender;
+use std::time::{Duration, Instant};
 
 use crate::i18n::{self, Lang};
 
@@ -100,35 +101,45 @@ pub trait Notifier: Send {
 /// would stay unannounced for good.
 pub struct GiveUp {
     inner: Box<dyn Notifier>,
-    tries: u32,
-    missed: std::sync::Mutex<std::collections::BTreeMap<String, u32>>,
+    /// How long a note is tried, however many times in that time.
+    limit: Duration,
+    /// Without a try for this long, a note that reads the same is a new one.
+    pause: Duration,
+    /// By note text: when it was first and last refused.
+    refused: std::sync::Mutex<std::collections::BTreeMap<String, (Instant, Instant)>>,
 }
 
 impl GiveUp {
-    /// Counts a note as shown once `inner` refused it `tries` times.
-    pub fn after(tries: u32, inner: Box<dyn Notifier>) -> Self {
+    pub fn new(inner: Box<dyn Notifier>, limit: Duration, pause: Duration) -> Self {
         Self {
             inner,
-            tries,
-            missed: Default::default(),
+            limit,
+            pause,
+            refused: Default::default(),
         }
+    }
+
+    /// Whether the note refused at `now` has been tried for long enough.
+    pub(super) fn done(&self, body: &str, now: Instant) -> bool {
+        let mut refused = self.refused.lock().unwrap();
+        refused.retain(|_, (_, last)| now.duration_since(*last) <= self.pause);
+        let (first, last) = refused.entry(body.to_string()).or_insert((now, now));
+        *last = now;
+        let done = now.duration_since(*first) >= self.limit;
+        if done {
+            refused.remove(body);
+        }
+        done
     }
 }
 
 impl Notifier for GiveUp {
     fn show(&self, note: &Note) -> bool {
-        let mut missed = self.missed.lock().unwrap();
         if self.inner.show(note) {
-            missed.remove(&note.body);
+            self.refused.lock().unwrap().remove(&note.body);
             return true;
         }
-        let count = missed.entry(note.body.clone()).or_default();
-        *count += 1;
-        let done = *count >= self.tries;
-        if done {
-            missed.remove(&note.body);
-        }
-        done
+        self.done(&note.body, Instant::now())
     }
 }
 
