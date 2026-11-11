@@ -182,3 +182,56 @@ fn update_locks_the_newest_commit_and_downloads_it() {
         .success()
         .stdout("Already up to date\n");
 }
+
+/// A lock committed by a run that could not download goes out once a later
+/// run downloads it.
+#[test]
+fn a_lock_goes_out_once_a_retry_downloads_it() {
+    use std::os::unix::fs::PermissionsExt;
+    let home = Home::new();
+    home.cmd("rsmt").arg("init").assert().success();
+    let remote = home.root.join("remote.git");
+    common::git(&home.root, &["init", "--quiet", "--bare", "remote.git"]);
+    common::git(
+        &home.repo(),
+        &["remote", "add", "origin", &remote.display().to_string()],
+    );
+    let (url, _) = upstream(&home);
+    home.write(
+        "externals.toml",
+        &format!(
+            "[[external]]\npath = \".zplug\"\ngit = \"{}\"\n",
+            url.display()
+        ),
+    );
+    common::git(&home.repo(), &["add", "-A"]);
+    common::git(&home.repo(), &["commit", "--quiet", "-m", "externals"]);
+    let set_mode =
+        |mode| std::fs::set_permissions(&home.root, std::fs::Permissions::from_mode(mode)).unwrap();
+    set_mode(0o555);
+    let failed = home
+        .cmd("rsmt")
+        .args(["externals", "update"])
+        .output()
+        .unwrap();
+    set_mode(0o755);
+    assert!(!failed.status.success());
+    let pushed = || {
+        let mut cmd = assert_cmd::Command::new("git");
+        common::git_env(&mut cmd);
+        let out = cmd
+            .arg("-C")
+            .arg(&remote)
+            .args(["log", "--format=%s"])
+            .output()
+            .unwrap();
+        String::from_utf8_lossy(&out.stdout).into_owned()
+    };
+    assert!(!pushed().contains("update(externals)"));
+
+    home.cmd("rsmt")
+        .args(["externals", "update"])
+        .assert()
+        .success();
+    assert!(pushed().contains("update(externals): .zplug"));
+}
