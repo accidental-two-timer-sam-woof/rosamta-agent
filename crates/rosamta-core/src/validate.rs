@@ -131,11 +131,13 @@ pub fn validate(repo_dir: &Path) -> Result<Report> {
         }
     }
 
+    let mut dotfiles = DotfileManifest::default();
     let path = repo_dir.join(crate::dotfiles::MANIFEST);
     if path.is_file() {
         let rel = PathBuf::from(crate::dotfiles::MANIFEST);
         match read(&path)?.and_then(|text| parse::<DotfileManifest>(&text)) {
             Ok(manifest) => {
+                dotfiles = manifest.clone();
                 let problems = crate::dotfiles::check(&manifest, repo_dir);
                 report
                     .file(rel.clone())
@@ -145,6 +147,26 @@ pub fn validate(repo_dir: &Path) -> Result<Report> {
                     for host in entry.when.hosts.iter().filter(|host| !hosts.contains(host)) {
                         report.file(rel.clone()).warnings.push(Issue::at(format!(
                             "dotfile `{}`: host ID `{host}` is not in the host list in rosamta.toml",
+                            entry.path
+                        )));
+                    }
+                }
+            }
+            Err(issue) => report.file(rel).errors.push(issue),
+        }
+    }
+    let path = repo_dir.join(crate::externals::MANIFEST);
+    if path.is_file() {
+        let rel = PathBuf::from(crate::externals::MANIFEST);
+        match read(&path)?.and_then(|text| parse::<crate::externals::ExternalManifest>(&text)) {
+            Ok(manifest) => {
+                let problems = crate::externals::check(&manifest, &dotfiles);
+                let file = report.file(rel);
+                file.errors.extend(problems.into_iter().map(Issue::at));
+                for entry in &manifest.external {
+                    for host in entry.when.hosts.iter().filter(|host| !hosts.contains(host)) {
+                        file.warnings.push(Issue::at(format!(
+                            "external `{}`: host ID `{host}` is not in the host list in rosamta.toml",
                             entry.path
                         )));
                     }

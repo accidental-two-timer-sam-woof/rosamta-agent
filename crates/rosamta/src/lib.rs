@@ -221,6 +221,8 @@ enum SchemaKind {
     Dotfiles,
     /// secrets.toml
     Secrets,
+    /// externals.toml
+    Externals,
 }
 
 /// Entry point shared by the `rosamta` and `rsmt` binaries.
@@ -265,6 +267,7 @@ fn run(cli: &Cli) -> Result<ExitCode> {
                 SchemaKind::Host => Kind::Host,
                 SchemaKind::Dotfiles => Kind::Dotfiles,
                 SchemaKind::Secrets => Kind::Secrets,
+                SchemaKind::Externals => Kind::Externals,
             };
             print_json(&schema::schema(kind));
             Ok(ExitCode::SUCCESS)
