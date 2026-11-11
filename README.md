@@ -216,7 +216,7 @@ rsmt review ignore <編號>
 rsmt add ~/.config/nvim ~/.gitconfig
 ```
 
-把檔案或目錄移進 repo 的 `home/`，在 `dotfiles.toml` 加上宣告，再以 symlink 放回原位，並建立一個 commit。之後在其他主機執行 `rsmt apply` 也會部署這些設定檔。內容看起來像 API key 或 token 時，`rsmt add` 會拒絕，請改用 `--encrypt`。shell 的啟動檔（例如 `~/.zshrc`）不能加入，shell 的設定放在 module。
+把檔案或目錄移進 repo 的 `home/`，在 `dotfiles.toml` 加上宣告，再以 symlink 放回原位，並建立一個 commit。之後在其他主機執行 `rsmt apply` 也會部署這些設定檔。內容看起來像 API key、token 或密碼時，`rsmt add` 會拒絕，請改用 `--encrypt`，或列在 `allow.toml`。shell 的啟動檔（例如 `~/.zshrc`）不能加入，shell 的設定放在 module。
 
 每個設定檔在 `dotfiles.toml` 有一筆宣告，例如：
 
@@ -464,7 +464,18 @@ rsmt include --all
 
 #### 推送受阻
 
-推送前會檢查要推送的內容。看起來像 API key 或 token 時，推送會停止並列出檔案、行號與符合的規則，手動修改的內容也不會被 commit；把該內容移出 repo 後再推送一次。內容如果已經在 commit 中，要先修改那個 commit。
+推送前會檢查要推送的內容。看起來像 API key、token 或密碼時，推送會停止並列出檔案、行號、符合的規則與該行的雜湊，手動修改的內容也不會被 commit；把該內容移出 repo 後再推送一次。內容如果已經在 commit 中，要先修改那個 commit。
+
+不是秘密的內容列在 repo 的 `allow.toml`，就不再檢查：
+
+```toml
+# 整個檔案或目錄
+files = ["home/.p10k.zsh"]
+# 單獨一行：推送受阻時列出的雜湊
+lines = ["9f86d081884c7d65"]
+```
+
+檢查依據已知的 token 格式、變數名稱、網址中的密碼與字串的隨機程度，不保證找到所有秘密。接管偏好為「自動」時，含有較長且不像單字的字面值的內容不會自動接管，會列在待處理清單。
 
 | 情況 | 結果 |
 |---|---|

@@ -14,7 +14,7 @@ use std::path::{Path, PathBuf};
 use serde::Serialize;
 
 pub use recognize::{Dialect, Recognizer, Structured, recognize, recognizers};
-pub use secret::{looks_secret, secret_rule};
+pub use secret::{Allowed, looks_secret, secret_rule};
 pub use segment::{Source, Watched, watched_files};
 pub use store::{Adoption, Limits, QueueItem};
 
@@ -66,6 +66,9 @@ pub struct Candidate {
     pub module: Option<PathBuf>,
     /// Looks like a secret, so the module stays on this host.
     pub local: bool,
+    /// Holds a literal that may be a secret no rule knows.
+    #[serde(skip)]
+    unsure: bool,
     #[serde(skip)]
     source: Source,
     #[serde(skip)]
@@ -85,9 +88,7 @@ impl Candidate {
 
     /// Whether adopting would put a literal that may be a secret in the repo.
     fn unsure(&self) -> bool {
-        !self.local
-            && matches!(self.kind, Kind::Structured | Kind::Snippet)
-            && secret::unsure(&self.text)
+        self.unsure && !self.local && matches!(self.kind, Kind::Structured | Kind::Snippet)
     }
 }
 
@@ -146,6 +147,7 @@ pub fn scan(ctx: &Context) -> Result<Vec<Candidate>> {
     let store = Store::new(ctx.paths.state());
     let adoptions = store.adoptions()?;
     let ignored = store.ignored()?;
+    let allowed = Allowed::load(&ctx.paths.repo())?;
     let repo_modules = apply::load_modules(&ctx.paths.repo())?;
     let mut existing = repo_modules.clone();
     existing.extend(apply::load_local_modules(&ctx.paths)?);
@@ -223,6 +225,7 @@ pub fn scan(ctx: &Context) -> Result<Vec<Candidate>> {
                 name: None,
                 module: None,
                 local: false,
+                unsure: false,
                 source: watched.source,
                 shells: watched.shells.clone(),
                 whole_file: watched.whole_file,
@@ -299,7 +302,8 @@ pub fn scan(ctx: &Context) -> Result<Vec<Candidate>> {
             };
             // Only the shells that read the file ran it before.
             module.shells = shells.to_vec();
-            let local = secret::looks_secret(&text);
+            let local = allowed.rule(&text).is_some();
+            candidate.unsure = allowed.unsure(&text);
             if let Some((name, old)) =
                 shared::find(&repo_modules, &module, &facts, order).filter(|_| !local)
             {
