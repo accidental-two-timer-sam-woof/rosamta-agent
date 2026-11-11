@@ -453,8 +453,6 @@ impl Session {
     }
 }
 
-/// Runs a secret command in the terminal; its output without the last
-/// line break.
 fn run_command(
     name: &str,
     command: &SecretCommand,
