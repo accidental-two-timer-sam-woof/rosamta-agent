@@ -6641,7 +6641,7 @@ dependencies = [
 
 [[package]]
 name = "rosamta"
-version = "0.1.0-rc.1"
+version = "0.1.0-rc.2"
 dependencies = [
  "assert_cmd",
  "clap",
@@ -6655,7 +6655,7 @@ dependencies = [
 
 [[package]]
 name = "rosamta-core"
-version = "0.1.0-rc.1"
+version = "0.1.0-rc.2"
 dependencies = [
  "age",
  "block2 0.6.2",
@@ -6690,7 +6690,7 @@ dependencies = [
 
 [[package]]
 name = "rosamta-gui"
-version = "0.1.0-rc.1"
+version = "0.1.0-rc.2"
 dependencies = [
  "gpui-kit",
  "gpui-pre",
