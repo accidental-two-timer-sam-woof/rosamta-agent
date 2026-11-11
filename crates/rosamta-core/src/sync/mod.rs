@@ -564,7 +564,10 @@ fn rebase(ctx: &Context, repo_dir: &Path, upstream: &str) -> Result<()> {
         .lines()
         .map(str::to_string)
         .collect();
-    git::run(repo_dir, &["rebase", "--abort"])?;
+    // A rebase that could not even start (an untracked file in the way) has nothing to abort.
+    if git::rebasing(repo_dir) {
+        git::run(repo_dir, &["rebase", "--abort"])?;
+    }
     if !files.is_empty() {
         return Err(conflict(ctx, files));
     }
@@ -656,6 +659,20 @@ mod tests {
         let state = load_state(ctx.paths.state()).unwrap();
         assert_eq!(state.unpushed, 1);
         assert_eq!(state.pull.unwrap().outcome, Outcome::Ok);
+
+        // A file this host has not committed is in the way of the pull:
+        // the failure is recorded, not lost to a failed abort.
+        std::fs::write(other.join("modules/c.toml"), "[env]\nC = \"1\"\n").unwrap();
+        git::commit_all(&other, "c").unwrap();
+        git::run(&other, &["push", "--quiet"]).unwrap();
+        std::fs::write(repo_dir.join("modules/c.toml"), "[env]\nC = \"2\"\n").unwrap();
+        assert!(matches!(sync_per_policy(&ctx, false), Err(Error::Sync(_))));
+        let state = load_state(ctx.paths.state()).unwrap();
+        assert_eq!(state.pull.unwrap().outcome, Outcome::Failed);
+        assert!(!git::rebasing(&repo_dir));
+        std::fs::remove_file(repo_dir.join("modules/c.toml")).unwrap();
+        sync_per_policy(&ctx, false).unwrap();
+        let remote_head = git::run(&bare, &["rev-parse", "HEAD"]).unwrap();
 
         // An edit that does not apply is held back under `auto` too.
         std::fs::write(ctx.paths.host_config(), "id = \"a\"\npublish = \"auto\"\n").unwrap();
