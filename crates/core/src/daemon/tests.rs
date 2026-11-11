@@ -279,6 +279,43 @@ fn waiting_commits_are_pushed_again_a_minute_after_going_offline() {
 }
 
 #[test]
+fn pushes_again_wait_longer_after_three_misses() {
+    let dir = tempfile::tempdir().unwrap();
+    let (mut daemon, _) = daemon(dir.path());
+    let delays: Vec<u64> = (0..9)
+        .map(|misses| {
+            daemon.push_misses = misses;
+            daemon.push_delay().as_secs()
+        })
+        .collect();
+    assert_eq!(delays, [60, 60, 60, 120, 240, 480, 900, 900, 900]);
+
+    let state = daemon.ctx.paths.state().to_path_buf();
+    let offline_since = |seconds: u64, unpushed| {
+        let attempt = sync::Attempt {
+            at: crate::time::now() - seconds,
+            ..sync::Attempt::new(Outcome::Offline, None)
+        };
+        let sync_state = sync::SyncState {
+            publish: Some(attempt),
+            unpushed,
+            ..Default::default()
+        };
+        Store::new(&state).save("sync.json", &sync_state).unwrap();
+    };
+    daemon.push_misses = 4;
+    offline_since(200, 1);
+    assert!(!daemon.push_due());
+    offline_since(241, 1);
+    assert!(daemon.push_due());
+    // Pushed some other way: the next time offline starts over.
+    offline_since(10, 0);
+    daemon.next_sync = Instant::now() + Duration::from_secs(600);
+    daemon.tick();
+    assert_eq!(daemon.push_misses, 0);
+}
+
+#[test]
 fn a_locked_key_is_notified_once() {
     crate::git::tests::isolate();
     let dir = tempfile::tempdir().unwrap();
