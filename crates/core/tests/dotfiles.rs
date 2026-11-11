@@ -1293,6 +1293,67 @@ mod templates {
     }
 
     #[test]
+    fn secrets_asked_before_the_lock_are_not_asked_again() {
+        let mut home = Home::new("ask");
+        let log = with_secret(&mut home);
+        home.ctx.interactive = true;
+        dotfiles::deploy::prepare(&home.ctx);
+        assert_eq!(runs(&log), 1);
+        assert!(!home.at(".npmrc").exists());
+        dotfiles::deploy::deploy_all(&home.ctx).unwrap();
+        assert_eq!(runs(&log), 1);
+        assert_eq!(read(&home.at(".npmrc")), "token=npm_1\n");
+    }
+
+    #[test]
+    fn a_secret_command_changed_after_preparing_runs_again() {
+        let mut home = Home::new("ask");
+        let log = with_secret(&mut home);
+        home.ctx.interactive = true;
+        let prepared = dotfiles::deploy::prepare(&home.ctx);
+        let manifest = fs::read_to_string(home.ctx.paths.repo().join("secrets.toml")).unwrap();
+        home.repo_write("secrets.toml", &manifest.replace("{arg}", "--{arg}"));
+        dotfiles::deploy::keep_prepared(&mut home.ctx, prepared);
+        dotfiles::deploy::deploy_all(&home.ctx).unwrap();
+        assert_eq!(runs(&log), 2);
+        assert_eq!(read(&home.at(".npmrc")), "token=--npm_1\n");
+    }
+
+    #[test]
+    fn a_failed_secret_command_is_not_run_again_in_the_same_apply() {
+        let mut home = Home::new("ask");
+        let log = with_secret(&mut home);
+        let program = home.ctx.home.join("fetch");
+        write(
+            &program,
+            &format!("#!/bin/sh\necho run >> '{}'\nexit 1\n", log.display()),
+        );
+        home.ctx.interactive = true;
+        dotfiles::deploy::prepare(&home.ctx);
+        let _ = dotfiles::deploy::deploy_all(&home.ctx);
+        assert_eq!(runs(&log), 1);
+        assert!(!home.at(".npmrc").exists());
+    }
+
+    #[test]
+    fn setup_holds_the_secrets_until_it_ran() {
+        let home = Home::new("ask");
+        assert!(!rosamta_core::apply::setup_pending(&home.ctx));
+        home.repo_write(
+            "externals.toml",
+            "[[external]]\npath = \".local/bin/op\"\narchive = \"https://example.com/op.tar.gz\"\nsha256 = \"0000000000000000000000000000000000000000000000000000000000000000\"\n",
+        );
+        assert!(rosamta_core::apply::setup_pending(&home.ctx));
+        fs::remove_file(home.ctx.paths.repo().join("externals.toml")).unwrap();
+        home.repo_write(
+            "scripts.toml",
+            "[[script]]\nsource = \"scripts/install.sh\"\nrun = \"once\"\ntiming = \"before\"\n",
+        );
+        home.repo_write("scripts/install.sh", "true\n");
+        assert!(rosamta_core::apply::setup_pending(&home.ctx));
+    }
+
+    #[test]
     fn a_terminal_unlocks_bw_once_for_the_whole_run() {
         let mut home = Home::new("ask");
         let bin = home.ctx.home.join("bin");

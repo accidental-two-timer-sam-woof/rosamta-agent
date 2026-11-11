@@ -109,7 +109,9 @@ struct State {
     bws_secrets: Option<Vec<Value>>,
     /// The stored bws token, once read.
     bws_token: Option<Option<String>>,
-    outputs: BTreeMap<(String, String), String>,
+    /// Secret command results, failures too: a command that failed is not
+    /// run, and asked, again in the same apply.
+    outputs: BTreeMap<(String, String), std::result::Result<String, Failure>>,
     waiting: Vec<Waiting>,
     /// Whether the tool in use could be read, once checked.
     unlocked: Option<std::result::Result<(), Failure>>,
@@ -440,36 +442,45 @@ impl Session {
         let key = (name.to_string(), arg.to_string());
         let cached = self.state().outputs.get(&key).cloned();
         if let Some(output) = cached {
-            return Ok(self.hand(output));
+            return output.map(|output| self.hand(output));
         }
         if !self.interactive {
             return Err(self.wait(Waiting::Command(name.to_string())));
         }
-        let run: Vec<String> = command
-            .run
-            .iter()
-            .map(|part| part.replace("{arg}", arg))
-            .collect();
-        let failed = |why: String| Failure::Error(format!("secret command `{name}` failed: {why}"));
-        let (program, args) = run
-            .split_first()
-            .ok_or_else(|| failed("run is empty".into()))?;
-        let out = run_in_terminal(program, args).map_err(|err| failed(err.to_string()))?;
-        if !out.status.success() {
-            let stderr = String::from_utf8_lossy(&out.stderr);
-            let last = stderr.lines().rev().find(|line| !line.trim().is_empty());
-            return Err(failed(last.unwrap_or("no error output").trim().to_string()));
-        }
-        let mut output = String::from_utf8_lossy(&out.stdout).into_owned();
-        if output.ends_with('\n') {
-            output.pop();
-            if output.ends_with('\r') {
-                output.pop();
-            }
-        }
+        let output = run_command(name, command, arg);
         self.state().outputs.insert(key, output.clone());
-        Ok(self.hand(output))
+        output.map(|output| self.hand(output))
     }
+}
+
+fn run_command(
+    name: &str,
+    command: &SecretCommand,
+    arg: &str,
+) -> std::result::Result<String, Failure> {
+    let run: Vec<String> = command
+        .run
+        .iter()
+        .map(|part| part.replace("{arg}", arg))
+        .collect();
+    let failed = |why: String| Failure::Error(format!("secret command `{name}` failed: {why}"));
+    let (program, args) = run
+        .split_first()
+        .ok_or_else(|| failed("run is empty".into()))?;
+    let out = run_in_terminal(program, args).map_err(|err| failed(err.to_string()))?;
+    if !out.status.success() {
+        let stderr = String::from_utf8_lossy(&out.stderr);
+        let last = stderr.lines().rev().find(|line| !line.trim().is_empty());
+        return Err(failed(last.unwrap_or("no error output").trim().to_string()));
+    }
+    let mut output = String::from_utf8_lossy(&out.stdout).into_owned();
+    if output.ends_with('\n') {
+        output.pop();
+        if output.ends_with('\r') {
+            output.pop();
+        }
+    }
+    Ok(output)
 }
 
 impl BitwardenTool {
