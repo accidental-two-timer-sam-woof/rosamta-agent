@@ -31,6 +31,9 @@ pub struct Record {
     pub source_hash: String,
     /// What was written at the path; for a link, the same as `source_hash`.
     pub target_hash: String,
+    /// The declared `permissions`, kept for a link turned back into a copy.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mode: Option<u32>,
 }
 
 /// Content hashes of the two sides of a dotfile.
