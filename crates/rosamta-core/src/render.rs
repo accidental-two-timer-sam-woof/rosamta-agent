@@ -464,21 +464,24 @@ pub(crate) fn env_guard(shell: Shell, version_id: &str) -> (String, &'static str
 const NOT_BASH: &str =
     "case ${BASH-}:${SHELLOPTS-} in *bash:*posix*) true ;; *bash:*) false ;; *) true ;; esac";
 
-/// Moves `$1` to the front of PATH, removing it elsewhere; other entries,
-/// empty ones too, keep their order.
-const FRONT: &str = r#"_rosamta_front() { _rosamta_p=":${PATH}:"; while :; do case $_rosamta_p in *":$1:"*) _rosamta_p=${_rosamta_p%%":$1:"*}:${_rosamta_p#*":$1:"} ;; *) break ;; esac; done; _rosamta_p=${_rosamta_p#:}; _rosamta_p=${_rosamta_p%:}; PATH=$1${_rosamta_p:+:$_rosamta_p}; }
+/// Move `$1` to the front or the back of PATH, removing it elsewhere; other
+/// entries, empty ones too, keep their order.
+const MOVE: &str = r#"_rosamta_drop() { _rosamta_p=":${PATH}:"; while :; do case $_rosamta_p in *":$1:"*) _rosamta_p=${_rosamta_p%%":$1:"*}:${_rosamta_p#*":$1:"} ;; *) break ;; esac; done; _rosamta_p=${_rosamta_p#:}; _rosamta_p=${_rosamta_p%:}; }
+_rosamta_front() { _rosamta_drop "$1"; PATH=$1${_rosamta_p:+:$_rosamta_p}; }
+_rosamta_back() { _rosamta_drop "$1"; PATH=${_rosamta_p:+$_rosamta_p:}$1; }
 "#;
 
 /// One module's PATH entries. Prepending in reverse keeps the declared order,
 /// and a later module's entries go before an earlier one's. Entries PATH
-/// already has stay put, unless `front` moves prepended ones to the front.
+/// already has stay put, unless `ends` moves prepended ones to the front and
+/// ones this shell appended (`_rosamta_appended`) to the back.
 /// An entry that expands to nothing is skipped: it would mean the current
 /// directory.
-fn posix_path(module: &Module, front: bool) -> String {
+fn posix_path(module: &Module, ends: bool) -> String {
     let mut out = String::new();
     for dir in module.path.prepend.iter().rev() {
         let dir = posix_value(dir);
-        if front {
+        if ends {
             writeln!(out, "[ -n {dir} ] && _rosamta_front {dir}").unwrap();
         } else {
             writeln!(
@@ -490,9 +493,14 @@ fn posix_path(module: &Module, front: bool) -> String {
     }
     for dir in &module.path.append {
         let dir = posix_value(dir);
+        let present = if ends {
+            format!("case \":${{_rosamta_appended-}}:\" in *:{dir}:*) _rosamta_back {dir} ;; esac")
+        } else {
+            String::new()
+        };
         writeln!(
             out,
-            "[ -n {dir} ] && case \":${{PATH}}:\" in *:{dir}:*) ;; *) PATH=\"${{PATH}}:\"{dir} ;; esac"
+            "[ -n {dir} ] && case \":${{PATH}}:\" in *:{dir}:*) {present} ;; *) PATH=\"${{PATH}}:\"{dir}; _rosamta_appended=\"${{_rosamta_appended-}}:\"{dir} ;; esac"
         )
         .unwrap();
     }
@@ -503,8 +511,10 @@ fn posix_path(module: &Module, front: bool) -> String {
 /// before `~/.profile` and bash's profile file, the global zprofile after
 /// `.zshenv`. Login snippets first, then every module's PATH entries put
 /// back in place: macOS `path_helper` pushes them behind system paths,
-/// Debian and Alpine replace PATH, and a nested login shell (tmux, `bash -l`)
-/// does not run env again to add them.
+/// Debian and Alpine replace PATH, AlmaLinux and Arch append behind them,
+/// and a nested login shell (tmux, `bash -l`) does not run env again to add
+/// them. Appended ones go last, as they were in the startup file they came
+/// from.
 fn profile(shell: Shell, modules: &[(String, Module)], login: &[&Fragment], dir: &Path) -> String {
     let mut out = String::from(HEADER);
     for frag in login {
@@ -520,7 +530,9 @@ fn profile(shell: Shell, modules: &[(String, Module)], login: &[&Fragment], dir:
     if path.is_empty() {
         return out;
     }
-    let path = format!("{FRONT}{path}unset -f _rosamta_front; unset _rosamta_p\n");
+    let path = format!(
+        "{MOVE}{path}unset -f _rosamta_drop _rosamta_front _rosamta_back; unset _rosamta_p _rosamta_appended\n"
+    );
     if shell == Shell::Sh {
         writeln!(out, "if {NOT_BASH}; then\n{path}fi").unwrap();
     } else {
