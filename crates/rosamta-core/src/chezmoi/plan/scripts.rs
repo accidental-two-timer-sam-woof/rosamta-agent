@@ -10,7 +10,8 @@ impl Planner<'_> {
         attrs: &FileAttrs,
         script: ScriptAttrs,
     ) -> Result<()> {
-        let repo_path = format!("scripts/{target}");
+        let name = target.strip_prefix(".chezmoiscripts/").unwrap_or(target);
+        let repo_path = format!("scripts/{name}");
         let scope = self.scope(target);
         if scope.platforms == 0 {
             self.report(
@@ -36,6 +37,11 @@ impl Planner<'_> {
             );
             return Ok(());
         }
+        // chezmoi tells apart scripts that become the same repo path.
+        if self.plan.scripts.iter().any(|new| new.source == repo_path) {
+            self.aside(source, &repo_path, Reason::Exists, None);
+            return Ok(());
+        }
         let Ok(text) = String::from_utf8(self.read(source)?) else {
             self.aside(
                 source,
@@ -51,6 +57,7 @@ impl Planner<'_> {
             convert::check_script(&text).map(|()| Converted {
                 text: text.clone(),
                 template: false,
+                may_be_empty: false,
                 scope: Scope::default(),
                 uses: Default::default(),
             })
@@ -71,6 +78,16 @@ impl Planner<'_> {
                 Outcome::Skipped,
                 Reason::Empty,
                 None,
+            );
+            return Ok(());
+        }
+        if let Some(rule) = crate::adopt::secret_rule(&converted.text) {
+            self.report(
+                source,
+                Some(&repo_path),
+                Outcome::Manual,
+                Reason::Secret,
+                Some(rule.into()),
             );
             return Ok(());
         }
@@ -98,7 +115,8 @@ impl Planner<'_> {
                 None,
             );
         }
-        if target.contains('/') {
+        // Scripts in `.chezmoiscripts/` run in the home directory there too.
+        if name == target && target.contains('/') {
             self.report(
                 source,
                 Some(&repo_path),

@@ -24,7 +24,76 @@ fn put(path: &Path, bytes: &[u8], mode: u32) -> Result<()> {
         .map_err(Error::write(path))
 }
 
+/// What the import writes in the repo.
+const PATHS: [&str; 7] = [
+    "home",
+    crate::dotfiles::MANIFEST,
+    "scripts",
+    crate::scripts::MANIFEST,
+    crate::externals::MANIFEST,
+    crate::secrets::MANIFEST,
+    ASIDE,
+];
+
+/// Write the plan and commit it, then record what is only this host's:
+/// vars and the scripts chezmoi ran. A failure leaves the repo as it was.
 pub(crate) fn write(ctx: &Context, root: &Path, plan: Plan) -> Result<Report> {
+    let repo = ctx.paths.repo();
+    let status = |paths: &[&str]| {
+        let mut args = vec!["status", "--porcelain", "--untracked-files=all", "--"];
+        args.extend_from_slice(paths);
+        crate::git::run(&repo, &args)
+    };
+    // Otherwise they would be committed with the import, or undone with it.
+    if !status(&PATHS)?.trim().is_empty() {
+        return Err(Error::Usage(
+            "the repo has changes that are not published yet; run `rsmt publish` first".into(),
+        ));
+    }
+    let scripts = match write_repo(ctx, root, &plan) {
+        Ok(scripts) => scripts,
+        Err(err) => {
+            undo(&repo);
+            return Err(err);
+        }
+    };
+    let host = crate::adopt::host_config(ctx)?;
+    let vars: Vec<(String, String)> = plan
+        .vars
+        .iter()
+        .filter(|(name, _)| !host.vars.contains_key(*name))
+        .map(|(name, value)| (name.clone(), value.clone()))
+        .collect();
+    if !vars.is_empty() {
+        crate::host::set_vars(&ctx.paths, &vars)?;
+    }
+    remember_scripts(ctx, &scripts)?;
+    Ok(plan.report)
+}
+
+/// Put the import's paths back as committed; they were clean before it.
+fn undo(repo: &Path) {
+    for path in PATHS {
+        let tracked = crate::git::run(repo, &["ls-files", "--", path])
+            .is_ok_and(|files| !files.trim().is_empty());
+        if tracked {
+            let _ = crate::git::run(
+                repo,
+                &[
+                    "restore",
+                    "--source=HEAD",
+                    "--staged",
+                    "--worktree",
+                    "--",
+                    path,
+                ],
+            );
+        }
+        let _ = crate::git::run(repo, &["clean", "-fdq", "--", path]);
+    }
+}
+
+fn write_repo(ctx: &Context, root: &Path, plan: &Plan) -> Result<Vec<Script>> {
     let repo = ctx.paths.repo();
     for new in &plan.dotfiles {
         let bytes = if new.entry.encrypted {
@@ -92,30 +161,16 @@ pub(crate) fn write(ctx: &Context, root: &Path, plan: Plan) -> Result<Report> {
         add_op(&repo.join(crate::secrets::MANIFEST))?;
     }
     for source in &plan.aside {
+        let to = repo.join(ASIDE).join(source);
+        // What the user converted there from an earlier import stays.
+        if to.exists() {
+            continue;
+        }
         let from = root.join(source);
         let bytes = std::fs::read(&from).map_err(Error::read(&from))?;
-        put(&repo.join(ASIDE).join(source), &bytes, 0o644)?;
+        put(&to, &bytes, 0o644)?;
     }
-    let host = crate::adopt::host_config(ctx)?;
-    let vars: Vec<(String, String)> = plan
-        .vars
-        .iter()
-        .filter(|(name, _)| !host.vars.contains_key(*name))
-        .map(|(name, value)| (name.clone(), value.clone()))
-        .collect();
-    if !vars.is_empty() {
-        crate::host::set_vars(&ctx.paths, &vars)?;
-    }
-    let candidates = [
-        "home",
-        crate::dotfiles::MANIFEST,
-        "scripts",
-        crate::scripts::MANIFEST,
-        crate::externals::MANIFEST,
-        crate::secrets::MANIFEST,
-        ASIDE,
-    ];
-    let paths: Vec<&str> = candidates
+    let paths: Vec<&str> = PATHS
         .into_iter()
         .filter(|path| repo.join(path).exists())
         .collect();
@@ -127,8 +182,7 @@ pub(crate) fn write(ctx: &Context, root: &Path, plan: Plan) -> Result<Report> {
         plan.report.summary()
     );
     crate::sync::commit_scanned(ctx, &paths, Some(&message))?;
-    remember_scripts(ctx, &scripts)?;
-    Ok(plan.report)
+    Ok(scripts)
 }
 
 /// `secret("op", …)` reads with the 1Password CLI.

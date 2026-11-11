@@ -260,3 +260,74 @@ Library/**
         .is_err()
     );
 }
+
+#[test]
+fn ignore_lines_read_as_chezmoi_reads_them() {
+    for (line, pattern) in [
+        ("README.md # docs", Some("README.md")),
+        (".config/nvim/", Some(".config/nvim")),
+        ("./a//b", Some("a/b")),
+        ("!./keep/", Some("!keep")),
+        ("# only a comment", None),
+    ] {
+        assert_eq!(ignore_pattern(line).as_deref(), pattern, "{line}");
+    }
+    let fixture = plain();
+    // A hostname rule inside an OS block applies on some platforms only.
+    let source =
+        "{{ if eq .chezmoi.os \"linux\" }}{{ if ne .chezmoi.hostname \"x\" }}a{{ end }}{{ end }}";
+    assert!(ignore(source, &fixture.machine()).is_err());
+}
+
+#[test]
+fn what_cannot_be_known_or_read_alike_is_reported() {
+    let fixture = Fixture::new(json!({ "big": 1234567.0, "size": 14.0 }), json!({}));
+    let machine = fixture.machine();
+    // Go prints a whole float without `.0`, and big ones with an exponent.
+    let converted = file("{{ .size }}", &machine).unwrap();
+    assert_eq!(converted.text, "14");
+    assert!(file("{{ .big }}", &machine).is_err());
+    // chezmoi's data has no `email`: chezmoi would fail too.
+    assert!(file("{{ .email }}", &machine).is_err());
+    let err = file(
+        "# chezmoi:template:left-delimiter=\"[[\"\n[[ .x ]]",
+        &machine,
+    )
+    .unwrap_err();
+    assert_eq!(err.line, 1);
+    // Without chezmoi this host's hostname is not known.
+    let blind = Machine {
+        hostname: None,
+        ..fixture.machine()
+    };
+    assert!(file("{{ if eq .chezmoi.hostname \"a\" }}x{{ end }}", &blind).is_err());
+    assert!(
+        file(
+            "{{ if eq .chezmoi.hostname \"a\" }}x{{ else }}y{{ end }}",
+            &blind
+        )
+        .is_err()
+    );
+}
+
+#[test]
+fn a_brace_before_a_tag_stays_a_brace() {
+    let fixture = plain();
+    let source = "{\n{{- if eq .chezmoi.os \"darwin\" }}\n  \"mac\": true\n{{- end }}\n}\n";
+    let converted = file(source, &fixture.machine()).unwrap();
+    assert!(!converted.may_be_empty);
+    assert_eq!(
+        render(&converted.text, "macos", "aarch64", "x", json!({})),
+        "{\n  \"mac\": true\n}\n"
+    );
+    assert_eq!(
+        render(&converted.text, "linux", "aarch64", "x", json!({})),
+        "{\n}\n"
+    );
+    let work = Fixture::new(json!({}), json!({ "work": false }));
+    let either = |source| file(source, &work.machine()).unwrap().may_be_empty;
+    assert!(!either(
+        "{{ if eq .chezmoi.os \"darwin\" }}a{{ else }}b{{ end }}\n"
+    ));
+    assert!(either("{{ if .work }}a{{ end }}\n"));
+}

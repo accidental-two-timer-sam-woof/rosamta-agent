@@ -101,13 +101,15 @@ pub struct Machine<'a> {
 }
 
 impl Machine<'_> {
-    /// The host ID a chezmoi hostname stands for.
-    fn host(&self, hostname: &str) -> String {
-        if Some(hostname) == self.hostname {
+    /// The host ID a chezmoi hostname stands for; `None` without chezmoi,
+    /// which tells this host's hostname.
+    fn host(&self, hostname: &str) -> Option<String> {
+        let here = self.hostname?;
+        Some(if hostname == here {
             self.host_id.to_string()
         } else {
             crate::host::sanitize(hostname)
-        }
+        })
     }
 }
 
@@ -196,7 +198,12 @@ fn scope(cond: &Expr, machine: &Machine) -> Option<Scope> {
     if let Some(names) = hostnames(cond, "eq") {
         return Some(Scope {
             platforms: ALL,
-            hosts: Some(names.iter().map(|name| machine.host(name)).collect()),
+            hosts: Some(
+                names
+                    .iter()
+                    .map(|name| machine.host(name))
+                    .collect::<Option<_>>()?,
+            ),
         });
     }
     match cond {
@@ -229,6 +236,8 @@ pub struct Converted {
     pub text: String,
     /// Still a template after the conversion.
     pub template: bool,
+    /// All of it is inside conditions, so it renders to nothing on some hosts.
+    pub may_be_empty: bool,
     pub scope: Scope,
     pub uses: Uses,
 }
@@ -264,9 +273,35 @@ fn unwrap(mut nodes: Vec<Node>, machine: &Machine) -> (Vec<Node>, Scope) {
     }
 }
 
+/// Whether some text or output is there whichever way the conditions go.
+fn always_text(nodes: &[Node]) -> bool {
+    nodes.iter().any(|node| match node {
+        Node::Text(text) => !text.trim().is_empty(),
+        Node::Output { .. } => true,
+        Node::If {
+            branches,
+            otherwise: Some(otherwise),
+        } => always_text(otherwise) && branches.iter().all(|(_, body)| always_text(body)),
+        Node::If { .. } => false,
+    })
+}
+
+/// chezmoi's `chezmoi:template:` options change how the file is read.
+fn no_directives(source: &str) -> Result<(), Unsupported> {
+    match source.find("chezmoi:template:") {
+        Some(at) => Err(Unsupported {
+            line: source[..at].matches('\n').count() + 1,
+            what: "`chezmoi:template:` options".into(),
+        }),
+        None => Ok(()),
+    }
+}
+
 /// A dotfile template.
 pub fn file(source: &str, machine: &Machine) -> Result<Converted, Unsupported> {
+    no_directives(source)?;
     let (nodes, scope) = unwrap(parse(source)?, machine);
+    let may_be_empty = !always_text(&nodes);
     let mut writer = Writer {
         machine,
         uses: Uses::default(),
@@ -274,9 +309,16 @@ pub fn file(source: &str, machine: &Machine) -> Result<Converted, Unsupported> {
         template: false,
     };
     writer.nodes(&nodes)?;
+    if writer.template && crate::template::check("converted", &writer.out).is_err() {
+        return Err(Unsupported {
+            line: 1,
+            what: "a template that does not convert cleanly".into(),
+        });
+    }
     Ok(Converted {
         text: writer.out,
         template: writer.template,
+        may_be_empty: writer.template && may_be_empty,
         scope,
         uses: writer.uses,
     })
@@ -285,6 +327,7 @@ pub fn file(source: &str, machine: &Machine) -> Result<Converted, Unsupported> {
 /// A script template: rosamta's scripts are not templates, so only text,
 /// whole-file conditions and `include "<path>" | sha256sum` convert.
 pub fn script(source: &str, machine: &Machine) -> Result<Converted, Unsupported> {
+    no_directives(source)?;
     let (nodes, scope) = unwrap(parse(source)?, machine);
     let mut text = String::new();
     let mut uses = Uses::default();
@@ -324,6 +367,7 @@ pub fn script(source: &str, machine: &Machine) -> Result<Converted, Unsupported>
     Ok(Converted {
         text,
         template: false,
+        may_be_empty: false,
         scope,
         uses,
     })
@@ -369,11 +413,10 @@ fn ignore_nodes(
     for node in nodes {
         match node {
             Node::Text(text) => {
-                for pattern in text.lines() {
-                    let pattern = pattern.trim();
-                    if !pattern.is_empty() && !pattern.starts_with('#') {
+                for line in text.lines() {
+                    if let Some(pattern) = ignore_pattern(line) {
                         out.push(IgnoreRule {
-                            pattern: pattern.to_string(),
+                            pattern,
                             platforms: on,
                             except: except.clone(),
                         });
@@ -394,15 +437,29 @@ fn ignore_nodes(
                 if let ([(cond, body)], None) = (branches.as_slice(), otherwise)
                     && let Some(names) = hostnames(cond, "ne")
                 {
-                    if except.is_some() {
+                    // A hostname rule applies on every platform.
+                    if except.is_some() || on != ALL {
                         return Err(Unsupported {
                             line,
-                            what: "nested hostname conditions".into(),
+                            what: "a hostname condition inside another condition".into(),
                         });
                     }
-                    let hosts = names.iter().map(|name| machine.host(name)).collect();
+                    let hosts = names
+                        .iter()
+                        .map(|name| machine.host(name))
+                        .collect::<Option<_>>()
+                        .ok_or_else(|| Unsupported {
+                            line,
+                            what: "`.chezmoi.hostname` without chezmoi installed".into(),
+                        })?;
                     ignore_nodes(body, on, &Some(hosts), machine, out)?;
                     continue;
+                }
+                if except.is_some() {
+                    return Err(Unsupported {
+                        line,
+                        what: "a condition inside a hostname condition".into(),
+                    });
                 }
                 let mut left = on;
                 for (cond, body) in branches {
@@ -466,6 +523,11 @@ impl Writer<'_> {
 
     fn tag(&mut self, tag: &str) {
         self.template = true;
+        // A `{` right before the tag would make a different one.
+        if self.out.ends_with('{') {
+            self.out.pop();
+            self.out.push_str("{{ \"{\" }}");
+        }
         self.out.push_str(tag);
     }
 
@@ -496,10 +558,16 @@ impl Writer<'_> {
             }
             _ => None,
         };
-        Ok(value.map(|value| match value {
-            Value::String(text) => text,
-            other => other.to_string(),
-        }))
+        value
+            .map(|value| match value {
+                Value::String(text) => Ok(text),
+                Value::Number(number) => go_number(&number).ok_or_else(|| Unsupported {
+                    line,
+                    what: format!("printing {number}"),
+                }),
+                other => Ok(other.to_string()),
+            })
+            .transpose()
     }
 
     /// A `.chezmoidata` value, which is the same on every host.
@@ -654,7 +722,10 @@ impl Writer<'_> {
                 return Ok(format!("host.arch {op} {}", literal(value)));
             }
             if is(field, &["chezmoi", "hostname"]) {
-                let id = self.machine.host(value);
+                let id = self.machine.host(value).ok_or_else(|| Unsupported {
+                    line,
+                    what: "`.chezmoi.hostname` without chezmoi installed".into(),
+                })?;
                 self.uses.hostnames.insert(value.clone(), id.clone());
                 return Ok(format!("host.id {op} {}", literal(&id)));
             }
@@ -704,7 +775,7 @@ impl Writer<'_> {
             });
         }
         match (names.as_slice(), self.machine.data.get(names[0])) {
-            ([name], None | Some(Value::String(_) | Value::Bool(_))) if is_name(name) => {
+            ([name], Some(Value::String(_) | Value::Bool(_))) if is_name(name) => {
                 self.uses.vars.insert(name.to_string());
                 Ok(format!("vars.{name}"))
             }
@@ -716,11 +787,40 @@ impl Writer<'_> {
     }
 }
 
+/// A `.chezmoiignore` line as chezmoi reads it: up to the first `#`, as a
+/// clean path.
+fn ignore_pattern(line: &str) -> Option<String> {
+    let line = line.split('#').next().unwrap_or_default().trim();
+    let (bang, path) = match line.strip_prefix('!') {
+        Some(path) => ("!", path),
+        None => ("", line),
+    };
+    let path: Vec<&str> = path
+        .split('/')
+        .filter(|part| !part.is_empty() && *part != ".")
+        .collect();
+    (!path.is_empty()).then(|| format!("{bang}{}", path.join("/")))
+}
+
 fn is_name(name: &str) -> bool {
     name.chars()
         .next()
         .is_some_and(|c| c.is_ascii_alphabetic() || c == '_')
         && name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
+}
+
+/// A number as Go's templates print it: a float without a fraction has no
+/// `.0`. `None` where Go switches to an exponent.
+fn go_number(number: &serde_json::Number) -> Option<String> {
+    let Some(float) = number.as_f64().filter(|_| number.is_f64()) else {
+        return Some(number.to_string());
+    };
+    let exponent = if float == 0.0 {
+        0
+    } else {
+        float.abs().log10().floor() as i32
+    };
+    (-4..6).contains(&exponent).then(|| format!("{float}"))
 }
 
 /// A minijinja string literal.

@@ -108,6 +108,7 @@ fn why(reason: Reason) -> &'static str {
         Reason::Nested => "inside another dotfile or external",
         Reason::Format => "unsupported file format",
         Reason::Special => "chezmoi-only file",
+        Reason::Link => "a symlink in the source directory",
         Reason::Hostname => "hostnames became host IDs",
         Reason::EveryApply => "ran on every chezmoi apply; now runs when it changes",
         Reason::ScriptDir => "now runs in the home directory",

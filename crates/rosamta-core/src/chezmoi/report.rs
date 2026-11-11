@@ -64,6 +64,8 @@ pub enum Reason {
     Format,
     /// `.chezmoiremove` or `.chezmoitemplates`.
     Special,
+    /// A symlink in the source: what it points to is not read.
+    Link,
     // Notes.
     /// chezmoi hostnames compared in it became host IDs; the detail lists them.
     Hostname,

@@ -81,6 +81,9 @@ fn why(reason: Reason) -> &'static str {
         Reason::Nested => "import.why_nested",
         Reason::Format => "import.why_format",
         Reason::Special => "import.why_special",
+        Reason::Link => "import.why_link",
+        Reason::MayBeEmpty => "import.why_may_be_empty",
+        Reason::Exists => "import.why_exists",
         // Not the reason of an item that was not imported.
         _ => "import.manual",
     }
