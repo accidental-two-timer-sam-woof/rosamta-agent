@@ -34,6 +34,12 @@ pub enum Error {
     /// Downloading or extracting an external failed.
     #[error("{0}")]
     External(String),
+    /// The review item is no longer listed.
+    #[error("no review item {0}; run `rsmt review`")]
+    NoItem(u32),
+    /// The review item changed since it was listed.
+    #[error("review item {0} changed since it was listed; run `rsmt review`")]
+    Stale(u32),
     /// A template cannot render outside a terminal yet.
     #[error("{}", .0.describe())]
     Waiting(crate::dotfiles::review::WaitingFor),
@@ -42,7 +48,10 @@ pub enum Error {
 impl Error {
     /// Usage errors exit with 2, everything else with 1.
     pub fn is_usage(&self) -> bool {
-        matches!(self, Error::Usage(_) | Error::Waiting(_))
+        matches!(
+            self,
+            Error::Usage(_) | Error::NoItem(_) | Error::Stale(_) | Error::Waiting(_)
+        )
     }
 
     pub(crate) fn read(path: impl Into<PathBuf>) -> impl FnOnce(std::io::Error) -> Error {

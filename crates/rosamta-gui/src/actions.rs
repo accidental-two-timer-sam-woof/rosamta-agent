@@ -9,8 +9,8 @@ use rosamta_core::daemon::service;
 use rosamta_core::dotfiles;
 use rosamta_core::edit;
 use rosamta_core::generated;
-use rosamta_core::scripts::review as scripts;
-use rosamta_core::{Error, Result, host, repo, sync};
+use rosamta_core::scripts::review::{self as scripts, ScriptItem};
+use rosamta_core::{Result, host, repo, sync};
 
 use crate::text::tf;
 
@@ -47,13 +47,18 @@ pub fn ignore(ctx: &Context, id: u32) -> Done {
     adopt::ignore(ctx, id).map(|_| None)
 }
 
-/// Run a script item. One that fails stays listed, with its log to read.
-pub fn run_script(ctx: &Context, id: u32) -> Done {
+/// Run the script item as shown. One that fails stays listed, with its log
+/// to read.
+pub fn run_script(ctx: &Context, id: u32, shown: ScriptItem) -> Done {
     let _lock = adopt::lock(ctx)?;
-    let listed =
-        scripts::item_of(ctx, id)?.ok_or_else(|| Error::Usage(format!("no review item {id}")))?;
-    let outcome = scripts::accept(ctx, id, &listed)?;
-    Ok((!outcome.ok).then(|| tf("item.script_failed", &[("script", &listed.source)]).to_string()))
+    let outcome = scripts::accept(ctx, id, &shown)?;
+    Ok((!outcome.ok).then(|| tf("item.script_failed", &[("script", &shown.source)]).to_string()))
+}
+
+/// Count the script item as shown as run, without running it.
+pub fn mark_run(ctx: &Context, id: u32, shown: ScriptItem) -> Done {
+    let _lock = adopt::lock(ctx)?;
+    scripts::ignore(ctx, id, &shown).map(|_| None)
 }
 
 /// Put the repo's version of a dotfile back.

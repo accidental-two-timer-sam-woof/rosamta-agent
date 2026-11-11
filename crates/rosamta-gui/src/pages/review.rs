@@ -39,8 +39,8 @@ pub enum Detail {
     Error(String),
 }
 
-/// Enough of a log to see how the last run ended.
-const LOG_TAIL: usize = 64 * 1024;
+/// Enough of a script to read, and of a log to see how the last run ended.
+const SHOWN: usize = 64 * 1024;
 
 fn script_detail(core: &Core, script: &ScriptItem) -> rosamta_core::Result<Detail> {
     let path = core.paths.repo().join(&script.source);
@@ -48,11 +48,18 @@ fn script_detail(core: &Core, script: &ScriptItem) -> rosamta_core::Result<Detai
     let log = std::fs::read(log_path(core, &script.source))
         .ok()
         .map(|log| {
-            let start = log.len().saturating_sub(LOG_TAIL);
+            let mut start = log.len().saturating_sub(SHOWN);
+            if start > 0 {
+                // From the first whole line on.
+                start += log[start..]
+                    .iter()
+                    .position(|byte| *byte == b'\n')
+                    .map_or(0, |at| at + 1);
+            }
             String::from_utf8_lossy(&log[start..]).into_owned()
         });
     Ok(Detail::Script {
-        text: String::from_utf8_lossy(&text).into_owned(),
+        text: String::from_utf8_lossy(&text[..text.len().min(SHOWN)]).into_owned(),
         log,
     })
 }
@@ -259,7 +266,7 @@ fn selected(app: &Rosamta, cx: &mut Context<Rosamta>) -> Option<impl IntoElement
         .on_click(cx.listener(move |this, _, window, cx| {
             this.run(window, cx, move |core| actions::ignore(core, id));
         }));
-    let buttons = if item.script.is_some() {
+    let buttons = if let Some(shown) = item.script.clone() {
         // Marking it as run is what ignoring a script does.
         h_flex()
             .gap(px(S8))
@@ -267,8 +274,12 @@ fn selected(app: &Rosamta, cx: &mut Context<Rosamta>) -> Option<impl IntoElement
                 super::glass(Button::new("mark-run"), cx)
                     .label(t("item.mark_run"))
                     .disabled(busy)
-                    .on_click(cx.listener(move |this, _, window, cx| {
-                        this.run(window, cx, move |core| actions::ignore(core, id));
+                    .on_click(cx.listener({
+                        let shown = shown.clone();
+                        move |this, _, window, cx| {
+                            let shown = shown.clone();
+                            this.run(window, cx, move |core| actions::mark_run(core, id, shown));
+                        }
                     })),
             )
             .child(
@@ -276,7 +287,8 @@ fn selected(app: &Rosamta, cx: &mut Context<Rosamta>) -> Option<impl IntoElement
                     .label(t("action.run"))
                     .loading(busy)
                     .on_click(cx.listener(move |this, _, window, cx| {
-                        this.run(window, cx, move |core| actions::run_script(core, id));
+                        let shown = shown.clone();
+                        this.run(window, cx, move |core| actions::run_script(core, id, shown));
                     })),
             )
     } else if item.dotfile.is_some() {

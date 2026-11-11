@@ -1066,7 +1066,7 @@ pub(crate) fn take_item(ctx: &Context, id: u32) -> Result<(QueueItem, Queue)> {
         .items
         .iter()
         .position(|item| item.id == id)
-        .ok_or_else(|| Error::Usage(format!("no review item {id}; run `rsmt review`")))?;
+        .ok_or(Error::NoItem(id))?;
     let item = queue.items.remove(index);
     Ok((item, queue))
 }
@@ -1076,11 +1076,7 @@ fn candidate_of(ctx: &Context, id: u32, item: &QueueItem) -> Result<Candidate> {
     scan(ctx)?
         .into_iter()
         .find(|candidate| candidate.file == item.file && candidate.hash == item.hash)
-        .ok_or_else(|| {
-            Error::Usage(format!(
-                "review item {id} changed since it was listed; run `rsmt review`"
-            ))
-        })
+        .ok_or(Error::Stale(id))
 }
 
 /// What accepting an rc file item would write, writing nothing.

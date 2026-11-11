@@ -112,6 +112,7 @@ script = "Script"
 last_run = "Last run"
 mark_run = "Mark as Run"
 script_failed = "{script} failed"
+stale = "This item has changed"
 
 [phase]
 env = "Environment"
