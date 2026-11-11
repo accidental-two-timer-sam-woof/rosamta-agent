@@ -91,14 +91,17 @@ fn items(identifier: &str) -> Vec<u32> {
 }
 
 pub trait Notifier: Send {
-    fn show(&self, note: &Note);
+    /// Whether the note reached the notification service.
+    fn show(&self, note: &Note) -> bool;
 }
 
-/// For hosts without a notification service.
+/// For hosts without a notification service: there is nothing to wait for.
 pub struct Silent;
 
 impl Notifier for Silent {
-    fn show(&self, _note: &Note) {}
+    fn show(&self, _note: &Note) -> bool {
+        true
+    }
 }
 
 #[cfg(target_os = "linux")]
@@ -149,9 +152,9 @@ mod linux {
     }
 
     impl Notifier for Desktop {
-        fn show(&self, note: &Note) {
+        fn show(&self, note: &Note) -> bool {
             let Some(actions) = self.actions() else {
-                return;
+                return false;
             };
             let mut notification = notify_rust::Notification::new();
             notification
@@ -169,10 +172,10 @@ mod linux {
                 }
             }
             let Ok(handle) = notification.show() else {
-                return;
+                return false;
             };
             if !ask {
-                return;
+                return true;
             }
             let id = handle.id();
             let ids = items(&identifier(note));
@@ -195,6 +198,7 @@ mod linux {
             if let Some(previous) = previous {
                 previous.close();
             }
+            true
         }
     }
 }
@@ -348,7 +352,7 @@ mod macos {
     }
 
     impl Notifier for UserNotifications {
-        fn show(&self, note: &Note) {
+        fn show(&self, note: &Note) -> bool {
             let content = UNMutableNotificationContent::new();
             content.setTitle(&NSString::from_str("rosamta"));
             content.setBody(&NSString::from_str(&note.body));
@@ -376,6 +380,8 @@ mod macos {
             });
             UNUserNotificationCenter::currentNotificationCenter()
                 .addNotificationRequest_withCompletionHandler(&request, Some(&done));
+            // Delivery is reported later, to the log.
+            true
         }
     }
 
