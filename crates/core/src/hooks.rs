@@ -388,15 +388,11 @@ pub fn commit(changes: &[FileChange], snapshots: &Snapshots, reason: &str) -> Re
         reason,
     )?;
     for change in real {
-        match &change.after {
-            Some(text) => {
-                if let Some(dir) = change.path.parent() {
-                    std::fs::create_dir_all(dir).map_err(Error::write(dir))?;
-                }
-                crate::edit::write_atomic(&change.path, text)?;
-            }
-            None => std::fs::remove_file(&change.path).map_err(Error::write(&change.path))?,
-        }
+        crate::adopt::replace(
+            &change.path,
+            change.before.as_deref(),
+            change.after.as_deref(),
+        )?;
     }
     Ok(())
 }

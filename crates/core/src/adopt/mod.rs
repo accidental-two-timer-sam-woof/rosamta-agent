@@ -946,6 +946,24 @@ pub(crate) fn unchanged(path: &Path, before: Option<&str>) -> Result<()> {
     Ok(())
 }
 
+/// Writes `text` (or removes the file for `None`) only while `path` still
+/// holds `before`, checked at the last moment: an installer may append to
+/// an rc file at any time.
+pub(crate) fn replace(path: &Path, before: Option<&str>, text: Option<&str>) -> Result<()> {
+    match text {
+        Some(text) => {
+            if let Some(dir) = path.parent() {
+                std::fs::create_dir_all(dir).map_err(Error::write(dir))?;
+            }
+            crate::edit::write_atomic_if(path, text, || unchanged(path, before))
+        }
+        None => {
+            unchanged(path, before)?;
+            write_text(path, None)
+        }
+    }
+}
+
 fn write_text(path: &Path, text: Option<&str>) -> Result<()> {
     match text {
         Some(text) => {
@@ -1004,10 +1022,14 @@ pub fn execute(ctx: &Context, plan: Plan) -> Result<Vec<Adoption>> {
             write_module(ctx, path, text)?;
         }
         for edit in &plan.edits {
-            write_text(&edit.path, edit.after.as_deref())?;
+            replace(&edit.path, edit.before.as_deref(), edit.after.as_deref())?;
         }
         for change in &plan.files {
-            write_text(&change.path, change.after.as_deref())?;
+            replace(
+                &change.path,
+                change.before.as_deref(),
+                change.after.as_deref(),
+            )?;
         }
         Ok(())
     };
@@ -1019,7 +1041,11 @@ pub fn execute(ctx: &Context, plan: Plan) -> Result<Vec<Adoption>> {
     if let Err(err) = apply::apply_after(ctx, &shells, write) {
         if written {
             for change in plan.files.iter().chain(&plan.edits) {
-                let _ = write_text(&change.path, change.before.as_deref());
+                let _ = replace(
+                    &change.path,
+                    change.after.as_deref(),
+                    change.before.as_deref(),
+                );
             }
             for (path, _) in &plan.modules {
                 let _ = std::fs::remove_file(path);
@@ -1456,9 +1482,13 @@ pub fn undo(ctx: &Context, plan: Undo) -> Result<()> {
             unchanged(path, Some(text))?;
         }
         written = true;
-        write_text(&plan.file.path, plan.file.after.as_deref())?;
-        if let Some((path, _)) = &plan.module {
-            write_text(path, plan.module_after.as_deref())?;
+        replace(
+            &plan.file.path,
+            plan.file.before.as_deref(),
+            plan.file.after.as_deref(),
+        )?;
+        if let Some((path, text)) = &plan.module {
+            replace(path, Some(text), plan.module_after.as_deref())?;
         }
         Ok(())
     };
@@ -1469,7 +1499,11 @@ pub fn undo(ctx: &Context, plan: Undo) -> Result<()> {
         .map_or_else(|| vec![plan.adoption.shell], |watched| watched.shells);
     if let Err(err) = apply::apply_after(ctx, &shells, write) {
         if written {
-            let _ = write_text(&plan.file.path, plan.file.before.as_deref());
+            let _ = replace(
+                &plan.file.path,
+                plan.file.after.as_deref(),
+                plan.file.before.as_deref(),
+            );
             if let Some((path, text)) = &plan.module {
                 let _ = write_module(ctx, path, text);
             }
