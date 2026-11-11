@@ -988,7 +988,12 @@ fn apply_warns_when_chezmoi_would_drop_the_block() {
     let path = format!("{}:{}", bin.display(), std::env::var("PATH").unwrap());
     let apply = |target: &str| {
         fs::write(home.root.join("target"), target).unwrap();
-        let out = home.cmd("rsmt").arg("apply").env("PATH", &path).output().unwrap();
+        let out = home
+            .cmd("rsmt")
+            .arg("apply")
+            .env("PATH", &path)
+            .output()
+            .unwrap();
         assert!(out.status.success());
         String::from_utf8(out.stderr).unwrap()
     };
