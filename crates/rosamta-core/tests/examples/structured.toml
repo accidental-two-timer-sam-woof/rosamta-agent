@@ -1,0 +1,12 @@
+# Editor, local bin and a few aliases, for every shell.
+[env]
+EDITOR = "nvim"
+VISUAL = "$EDITOR"
+
+[path]
+prepend = ["~/.local/bin", "$HOME/.cargo/bin"]
+append = ["/opt/homebrew/opt/postgresql@16/bin"]
+
+[aliases]
+ll = "ls -lh"
+gs = "git status --short"

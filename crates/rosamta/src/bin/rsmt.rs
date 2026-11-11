@@ -1,3 +1,3 @@
-fn main() {
-    rosamta::main();
+fn main() -> std::process::ExitCode {
+    rosamta::main()
 }

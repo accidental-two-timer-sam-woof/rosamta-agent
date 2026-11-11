@@ -9,3 +9,17 @@ repository.workspace = true
 # Pinned exactly: upgrades are separate changes (ADR 0005).
 gpui-kit = "=0.9.1"
 rosamta-core.workspace = true
+toml = "1.2.1"
+toml_edit = "0.25.19"
+# Only for their test-support features, which gpui-kit's own cannot resolve.
+gpui-pre = { version = "=0.3.12", optional = true }
+gpui-pre-platform = { version = "=0.3.12", optional = true }
+
+[dev-dependencies]
+# gpui's test platform, for tests of the views.
+gpui-pre = { version = "=0.3.12", features = ["test-support"] }
+tempfile = "3.27.0"
+
+[features]
+# Development only: save each page as a PNG (see src/screenshot.rs).
+screenshot = ["gpui-pre/test-support", "gpui-pre-platform/test-support"]

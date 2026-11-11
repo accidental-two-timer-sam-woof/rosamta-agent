@@ -63,7 +63,9 @@ jobs:
         env:
           SIGN_IDENTITY: ${{ secrets.MACOS_SIGN_IDENTITY }}
         run: |
+          # Inside out: nested code first, the app that contains it last.
           codesign --force --options runtime --timestamp --sign "${SIGN_IDENTITY}" dist/rosamta.app/Contents/MacOS/rosamta
+          codesign --force --options runtime --timestamp --sign "${SIGN_IDENTITY}" dist/rosamta.app/Contents/Library/LoginItems/rosamta-agent.app
           codesign --force --options runtime --timestamp --sign "${SIGN_IDENTITY}" dist/rosamta.app
 
       - run: hdiutil create -volname rosamta -srcfolder dist/rosamta.app -ov -format UDZO "dist/rosamta-${VERSION}-macos-universal.dmg"

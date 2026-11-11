@@ -1,0 +1,120 @@
+# daemon Specification
+
+## Purpose
+在使用者登入後常駐背景，於 rc 檔或 repo 變動時自動執行接管、套用與同步，讓使用者不需要記得手動操作。
+
+## Requirements
+
+### Requirement: Runs at login
+`rsmt daemon enable` SHALL 讓背景服務在使用者登入後自動啟動：macOS 以登入項目註冊主程式內的 helper app，Linux 以 systemd 使用者服務註冊。系統要求使用者核准時，SHALL 說明如何到系統設定中允許。
+
+#### Scenario: macOS approval required
+- **WHEN** 使用者在 macOS 上第一次執行 `rsmt daemon enable`
+- **THEN** 指令說明需要到「系統設定 › 一般 › 登入項目」允許 rosamta，`rsmt daemon status` 顯示等待核准
+
+#### Scenario: Linux
+- **WHEN** 使用者在有 systemd 使用者服務的 Linux 上執行 `rsmt daemon enable`
+- **THEN** 背景服務立即啟動，且重新登入後仍會自動啟動
+
+### Requirement: Single instance
+同一個使用者同時 SHALL 只有一個背景服務在執行；第二個實例 SHALL 偵測到後立即結束。
+
+#### Scenario: Started twice
+- **WHEN** 背景服務已在執行時，使用者再執行 `rsmt daemon run`
+- **THEN** 新的程序說明已有實例在執行並以 1 結束
+
+### Requirement: Waits for setup
+背景服務在尚未執行 `rsmt init` 的 host 上啟動時，SHALL 持續執行並等待，在 repo 與 `host.toml` 出現後開始監看，而不是結束後被反覆重新啟動。啟動時 `host.toml` 格式錯誤，SHALL 同樣持續執行，把原因記錄在 `daemon.log`，等檔案被修改後再讀一次。
+
+#### Scenario: Enabled before init
+- **WHEN** 背景服務在使用者執行 `rsmt init` 之前啟動，之後使用者執行 `rsmt init`
+- **THEN** 背景服務不需要重新啟動，就開始處理 rc 檔的變動
+
+#### Scenario: Invalid host.toml at startup
+- **WHEN** 背景服務啟動時 `host.toml` 格式錯誤，之後使用者修正它
+- **THEN** 背景服務沒有結束，`daemon.log` 記錄了錯誤，修正後開始處理 rc 檔的變動
+
+### Requirement: Login shell environment
+背景服務啟動時 SHALL 從使用者的 login shell 讀取一次環境變數，並以這組環境執行 git 與 shell 相關的操作。
+
+#### Scenario: SSH agent set in zprofile
+- **WHEN** 使用者在 `~/.zprofile` 設定 `SSH_AUTH_SOCK` 指向 Bitwarden 的 SSH agent
+- **THEN** 背景服務推送到 GitHub 時使用該 agent
+
+### Requirement: React to rc file changes
+watched file 被修改後，背景服務 SHALL 在變動停止約 2 秒後掃描一次，並依接管偏好處理新內容。安裝程式以「寫新檔再改名」的方式寫入時 SHALL 同樣被偵測到。
+
+#### Scenario: Installer appends to zshrc
+- **WHEN** 接管偏好為「詢問」，某個安裝程式在 `~/.zshrc` 加了兩行
+- **THEN** 數秒內待處理清單出現這兩行，rc 檔不變
+
+#### Scenario: Atomic rename write
+- **WHEN** 某個程式以寫入暫存檔再改名的方式更新 `~/.bashrc`
+- **THEN** 背景服務仍偵測到變動並掃描
+
+### Requirement: React to repo changes
+repo 的內容被修改（使用者手動編輯或拉取）後，背景服務 SHALL 驗證並套用；驗證失敗時 SHALL 不套用並通知。推送偏好為「自動」時 SHALL 接著推送。
+
+#### Scenario: Manual edit
+- **WHEN** 使用者在編輯器中修改 `modules/aliases.toml` 並存檔
+- **THEN** 新開的 shell 已使用新的 alias，且推送偏好為「自動」時遠端也已更新
+
+### Requirement: Periodic sync
+拉取偏好為「自動」時，背景服務 SHALL 依設定的間隔執行同步；電腦從睡眠喚醒後 SHALL 立即同步一次，連不上遠端時 SHALL 在約 30 秒與 2 分鐘後各重試一次，之後回到設定的間隔。推送偏好為「手動」時，這些同步 SHALL 只拉取，不推送，也不 commit 使用者手動的修改。
+
+#### Scenario: Interval
+- **WHEN** 拉取間隔為 15 分鐘
+- **THEN** 背景服務大約每 15 分鐘執行一次同步
+
+#### Scenario: Network not back after waking
+- **WHEN** 電腦從睡眠喚醒時網路還沒恢復
+- **THEN** 背景服務在約 30 秒與 2 分鐘後再同步，不必等到下一個間隔
+
+### Requirement: Settings reload
+`host.toml` 被修改後，背景服務 SHALL 不需重新啟動就套用新的設定。
+
+#### Scenario: Change adopt policy
+- **WHEN** 使用者在 GUI 把接管偏好改成「自動」
+- **THEN** 下一次 rc 檔變動時直接接管，不再加入待處理清單
+
+### Requirement: Restart after upgrade
+rosamta 的執行檔被新版本取代後，背景服務 SHALL 自行重新啟動成新版本。
+
+#### Scenario: Upgrade via Homebrew
+- **WHEN** 使用者以 Homebrew 升級 rosamta
+- **THEN** `rsmt daemon status` 顯示的版本為新版本
+
+### Requirement: Status
+`rsmt daemon status` SHALL 顯示是否執行中、啟動時間、版本、上次同步的時間與結果，以及待處理項目的數量；支援 `--json`。
+
+#### Scenario: Status output
+- **WHEN** 使用者執行 `rsmt daemon status --json`
+- **THEN** stdout 是包含上述欄位的 JSON 文件
+
+### Requirement: Watch deployed dotfiles
+背景服務 SHALL 監看部署出去的 dotfile：`link` 的目標是否被換掉，`copy` 的目標內容是否改變，並在數秒內依 dotfile 的規則處理。背景服務自己寫入目標 SHALL 不再觸發一次處理。
+
+#### Scenario: App rewrites a copied file
+- **WHEN** 接管偏好為「自動」，某個 app 修改了 `copy` 部署的設定檔，repo 的來源沒有改變
+- **THEN** 數秒內 repo 的來源更新為新內容
+
+### Requirement: Re-render on variable changes
+`host.toml` 改變時，背景服務 SHALL 重新部署 dotfile，讓 `[vars]` 的修改反映到 template；只有輸入改變的 template 會重新 render。
+
+#### Scenario: Change an email
+- **WHEN** 使用者把 `host.toml` 的 `vars.email` 改成新的值
+- **THEN** 引用 `vars.email` 的 template 重新 render，其他 template 不動
+
+### Requirement: Retry after an rbw unlock
+有 template 在等待 rbw 解鎖時，背景服務 SHALL 每分鐘重新部署一次，rbw 在其他地方解鎖後 SHALL 自動 render 並移除等待項目。bw 的解鎖只存在於執行解鎖的 shell，秘密指令只在終端機執行，因此這兩種等待項目 SHALL NOT 重試。
+
+#### Scenario: Unlock in another terminal
+- **WHEN** `~/.npmrc` 在等待 rbw 解鎖，使用者在另一個終端機執行 `rbw unlock`
+- **THEN** 一分鐘內 `~/.npmrc` 依 template 寫入，待處理清單不再有該項目
+
+### Requirement: Externals and scripts in the background
+背景服務套用時（包括拉取之後）SHALL 下載與更新 external，與 `rsmt apply` 相同；腳本 SHALL 依 `host.toml` 的 `scripts` 偏好處理，`ask` 時 SHALL NOT 執行任何腳本。背景服務執行的腳本 SHALL 沒有終端機，stdin 為 `/dev/null`。
+
+#### Scenario: Auto on a server
+- **WHEN** `scripts = "auto"`，背景服務拉取到修改過的 `onchange` 腳本
+- **THEN** 背景服務執行該腳本，輸出寫進紀錄檔
