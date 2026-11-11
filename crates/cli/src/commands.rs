@@ -73,7 +73,9 @@ pub fn apply(json: bool, dry_run: bool) -> Result<ExitCode> {
         crate::dotfiles::ask_vars(&ctx)?;
     }
     ctx.interactive = interactive;
-    if interactive {
+    // A `before` script may set up a secret source, so templates then wait
+    // for it, under the lock.
+    if interactive && !apply::before_scripts_pending(&ctx) {
         dotfiles::deploy::prepare(&ctx);
     }
     let applied = {

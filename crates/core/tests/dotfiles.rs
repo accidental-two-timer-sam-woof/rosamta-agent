@@ -1306,6 +1306,34 @@ mod templates {
     }
 
     #[test]
+    fn a_failed_secret_command_is_not_run_again_in_the_same_apply() {
+        let mut home = Home::new("ask");
+        let log = with_secret(&mut home);
+        let program = home.ctx.home.join("fetch");
+        write(
+            &program,
+            &format!("#!/bin/sh\necho run >> '{}'\nexit 1\n", log.display()),
+        );
+        home.ctx.interactive = true;
+        dotfiles::deploy::prepare(&home.ctx);
+        let _ = dotfiles::deploy::deploy_all(&home.ctx);
+        assert_eq!(runs(&log), 1);
+        assert!(!home.at(".npmrc").exists());
+    }
+
+    #[test]
+    fn before_scripts_hold_the_secrets_until_they_ran() {
+        let home = Home::new("ask");
+        assert!(!rosamta_core::apply::before_scripts_pending(&home.ctx));
+        home.repo_write(
+            "scripts.toml",
+            "[[script]]\nsource = \"scripts/install.sh\"\nrun = \"once\"\ntiming = \"before\"\n",
+        );
+        home.repo_write("scripts/install.sh", "true\n");
+        assert!(rosamta_core::apply::before_scripts_pending(&home.ctx));
+    }
+
+    #[test]
     fn a_terminal_unlocks_bw_once_for_the_whole_run() {
         let mut home = Home::new("ask");
         let bin = home.ctx.home.join("bin");
