@@ -213,15 +213,22 @@ fn check(files: &[Added], hosts: &[String], allowed: &Allowed) -> Vec<Hit> {
             if added.lines.first().is_some_and(|(line, _)| *line == 1) && armored(&text) {
                 return None;
             }
-            let rule = matched(&text)?;
-            let own = added.lines.iter().find(|(_, text)| matched(text).is_some());
-            let (line, _) = own.unwrap_or(&added.lines[0]);
+            let across = matched(&text)?;
+            // A line that matches on its own is reported with its own rule.
+            let own = added
+                .lines
+                .iter()
+                .find_map(|(line, text)| Some((*line, matched(text)?, Allowed::hash(text))));
+            let (line, rule, hash) = match own {
+                Some((line, rule, hash)) => (line, rule, Some(hash)),
+                None => (added.lines[0].0, across, None),
+            };
             Some(Hit {
                 commit: added.commit.clone(),
                 file: added.file.clone(),
-                line: *line,
+                line,
                 rule,
-                hash: own.map(|(_, text)| Allowed::hash(text)),
+                hash,
             })
         })
         .collect()
@@ -507,5 +514,15 @@ deleted file mode 100644
         let hits = check(&added, &[], &Allowed::default());
         assert_eq!(hits.len(), 1, "{hits:?}");
         assert_eq!((hits[0].line, &hits[0].hash), (1, &None));
+
+        // With a line that matches alone, that line, its rule and its hash.
+        let key = "export MY_API_KEY=abc123";
+        let mut added = added;
+        added[0].lines.push((3, key.into()));
+        let hits = check(&added, &[], &Allowed::default());
+        assert_eq!(
+            (hits[0].line, hits[0].rule, hits[0].hash.clone()),
+            (3, "secret-name", Some(Allowed::hash(key)))
+        );
     }
 }
