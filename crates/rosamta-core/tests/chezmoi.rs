@@ -151,6 +151,8 @@ fn fixture(home: &Home) {
     home.add("dot_blank", "  \n");
     home.add("dot_zshrc", "export EDITOR=vim\n");
     home.add("dot_env", "LEVEL=debug\n");
+    home.add("dot_empty/.gitkeep", "");
+    home.add("run_onchange_after_report.py", "print('done')\n");
     home.add("symlink_dot_vimrc", ".config/nvim/init.vim\n");
     home.add("dot_bad.tmpl", "{{ range .list }}x{{ end }}\n");
     home.add("dot_Brewfile", "brew \"git\"\n");
@@ -189,6 +191,7 @@ fn a_source_becomes_declarations() {
         ("dot_blank", Outcome::Skipped, Reason::Empty),
         ("dot_zshrc", Outcome::Skipped, Reason::StartupFile),
         ("dot_env", Outcome::Manual, Reason::GitIgnored),
+        ("dot_empty", Outcome::Manual, Reason::EmptyDir),
         ("symlink_dot_vimrc", Outcome::Manual, Reason::Symlink),
         ("dot_bad.tmpl", Outcome::Manual, Reason::Template),
         (
@@ -258,6 +261,10 @@ fn a_source_becomes_declarations() {
         "{scripts}"
     );
     assert_eq!(home.repo("scripts/brew.sh"), "#!/bin/sh\n# \nbrew bundle\n");
+    assert_eq!(
+        home.repo("scripts/report.py"),
+        "#!/usr/bin/env python3\nprint('done')\n"
+    );
     // chezmoi already ran them here.
     assert!(
         rosamta_core::scripts::apply::plan(&home.ctx)
@@ -276,7 +283,7 @@ fn a_source_becomes_declarations() {
 
     let log = git(&repo, &["log", "-1", "--format=%B"]);
     assert!(
-        log.starts_with("import(chezmoi): 7 dotfiles, 2 scripts, 2 externals\n"),
+        log.starts_with("import(chezmoi): 7 dotfiles, 3 scripts, 2 externals\n"),
         "{log}"
     );
     assert!(

@@ -106,7 +106,8 @@ enum Entry {
         source: String,
         target: String,
         attrs: DirAttrs,
-        /// Holds `.keep` and nothing else chezmoi manages.
+        /// Holds nothing chezmoi manages, such as only `.keep` or `.gitkeep`:
+        /// chezmoi creates it empty.
         only_keep: bool,
     },
     Ignore {
@@ -217,7 +218,6 @@ fn collect(
             };
             valid(&name, &source_path)?;
             let dir_target = join(target, &name);
-            let has_keep = root.join(&source_path).join(".keep").exists();
             let inner = collect(
                 root,
                 &source_path,
@@ -231,7 +231,7 @@ fn collect(
                 source: source_path,
                 target: dir_target,
                 attrs,
-                only_keep: has_keep && !inner,
+                only_keep: !inner,
             });
             continue;
         }

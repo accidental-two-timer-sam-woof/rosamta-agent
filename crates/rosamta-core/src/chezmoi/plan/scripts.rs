@@ -136,12 +136,28 @@ impl Planner<'_> {
             None,
         );
         self.plan.scripts.push(NewScript {
+            content: with_interpreter(&repo_path, converted.text).into_bytes(),
             source: repo_path,
-            content: converted.text.into_bytes(),
             before: script.before,
             watch,
             when: when.unwrap_or_default(),
         });
         Ok(())
     }
+}
+
+/// chezmoi runs a script without `#!` by its extension; rosamta runs it
+/// with `sh`, so the interpreter goes in the first line.
+fn with_interpreter(path: &str, text: String) -> String {
+    let interpreter = match path.rsplit_once('.').map(|(_, ext)| ext) {
+        Some("py") => "python3",
+        Some("rb") => "ruby",
+        Some("pl") => "perl",
+        Some("nu") => "nu",
+        _ => return text,
+    };
+    if text.starts_with("#!") {
+        return text;
+    }
+    format!("#!/usr/bin/env {interpreter}\n{text}")
 }
