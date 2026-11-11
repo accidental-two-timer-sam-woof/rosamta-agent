@@ -182,3 +182,30 @@ fn update_locks_the_newest_commit_and_downloads_it() {
         .success()
         .stdout("Already up to date\n");
 }
+
+#[test]
+fn validate_and_schema_cover_scripts_toml() {
+    let home = Home::new();
+    home.write("rosamta.toml", "format = 1\n");
+    home.write(
+        "scripts.toml",
+        "[[script]]\nsource = \"scripts/missing.sh\"\nrun = \"once\"\n",
+    );
+    home.cmd("rsmt")
+        .arg("validate")
+        .assert()
+        .code(2)
+        .stderr(predicate::str::contains(
+            "script `scripts/missing.sh` does not exist",
+        ));
+    let out = home
+        .cmd("rsmt")
+        .args(["schema", "scripts"])
+        .output()
+        .unwrap();
+    let schema: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert!(schema["properties"]["script"].is_object());
+    let out = home.cmd("rsmt").args(["schema", "host"]).output().unwrap();
+    let schema: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert!(schema["properties"]["scripts"].is_object());
+}

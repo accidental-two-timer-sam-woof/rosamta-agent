@@ -2,6 +2,7 @@
 
 use crate::config::{DotfileManifest, HostConfig, Module, RepoManifest};
 use crate::externals::ExternalManifest;
+use crate::scripts::ScriptManifest;
 use crate::secrets::SecretCommands;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -12,6 +13,7 @@ pub enum Kind {
     Dotfiles,
     Secrets,
     Externals,
+    Scripts,
 }
 
 pub fn schema(kind: Kind) -> serde_json::Value {
@@ -22,6 +24,7 @@ pub fn schema(kind: Kind) -> serde_json::Value {
         Kind::Dotfiles => schemars::schema_for!(DotfileManifest),
         Kind::Secrets => schemars::schema_for!(SecretCommands),
         Kind::Externals => schemars::schema_for!(ExternalManifest),
+        Kind::Scripts => schemars::schema_for!(ScriptManifest),
     };
     schema.to_value()
 }
