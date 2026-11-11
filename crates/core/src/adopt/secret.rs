@@ -104,10 +104,11 @@ fn high_entropy(text: &str) -> bool {
         })
 }
 
-/// `NAME=value` is judged by its value; base64 padding (`abc==`) is not an
-/// assignment.
+/// `NAME=value` is judged by its value and `NAME=` (or `NAME+=`) by its name;
+/// base64 padding (`abc==`) is not an assignment.
 fn value(token: &str) -> &str {
     match token.split_once('=') {
+        Some((name, "")) if !name.is_empty() => name.trim_end_matches('+'),
         Some((name, value))
             if !name.is_empty()
                 && !value.is_empty()
@@ -120,13 +121,16 @@ fn value(token: &str) -> &str {
     }
 }
 
-/// Words joined by `-` or `.` in one case, such as `my-macbook-pro` or
-/// `internal-tools.example`: a name, not a key.
+/// Words in one case joined by `-`, `.` or `_`, with few digits, such as
+/// `my-macbook-pro`, `internal-tools.example` or
+/// `POWERLEVEL9K_DIR_FOREGROUND`: a name, not a key.
 fn words(token: &str) -> bool {
-    token.contains(['-', '.'])
+    let digits = token.chars().filter(char::is_ascii_digit).count();
+    token.contains(['-', '.', '_'])
         && token
             .chars()
-            .all(|c| c.is_ascii_alphabetic() || c == '-' || c == '.')
+            .all(|c| c.is_ascii_alphanumeric() || "-._".contains(c))
+        && digits * 5 <= token.len()
         && !(token.chars().any(|c| c.is_ascii_uppercase())
             && token.chars().any(|c| c.is_ascii_lowercase()))
 }
@@ -227,6 +231,7 @@ mod tests {
         assert!(looks_secret("export X=Zk3q9LmP2vR8tY6wB1nC4xJ7"));
         assert!(looks_secret("export credential=qwertyuiopasdfghjklzxcvbnm"));
         assert!(looks_secret("Zk3q9LmP2vR8tY6wB1nC4xJ7=="));
+        assert!(looks_secret("export X=K7Q2M9X4P8R3T6W1Z5N0"));
         assert!(looks_secret(
             "aws_secret_access_key = wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY"
         ));
@@ -252,6 +257,11 @@ mod tests {
             "# Adopted from ~/.zshrc on xinshoutw-macbook-pro.",
             "Host my-company-internal-tools.example",
             "export HOST=my-company-internal-tools.example",
+            "  # as POWERLEVEL9K_MULTILINE_FIRST_PROMPT_GAP_FOREGROUND below.",
+            "  typeset -g POWERLEVEL9K_MULTILINE_FIRST_PROMPT_GAP_BACKGROUND=",
+            "  typeset -g POWERLEVEL9K_VCS_BRANCH_ICON='\\uF126 '",
+            "  # typeset -g POWERLEVEL9K_CPU_ARCH_X86_64_CONTENT_EXPANSION=",
+            "  POWERLEVEL9K_KUBECONTEXT_DEFAULT_CONTENT_EXPANSION+='${P9K_KUBECONTEXT_NAME}'",
         ] {
             assert!(!looks_secret(text), "{text}");
         }
