@@ -706,6 +706,35 @@ fn restoring_keeps_an_every_host_module_for_the_others() {
 }
 
 #[test]
+fn lines_removed_as_duplicates_keep_their_module_and_come_back() {
+    if !has("zsh") {
+        return;
+    }
+    let home = hooked(&[(".zshrc", BUN)]);
+    let out = run(&home, &["adopt", "--yes"]);
+    // An installer writes the same lines into another zsh file.
+    let zprofile = read(&home, ".zprofile");
+    fs::write(home.root.join(".zprofile"), format!("{zprofile}{BUN}")).unwrap();
+    assert!(review(&home).is_empty());
+    assert!(!read(&home, ".zprofile").contains("BUN_INSTALL"));
+
+    run(&home, &["restore", &adopted_id(&out), "--yes"]);
+    assert!(read(&home, ".zshrc").contains("BUN_INSTALL"));
+    assert!(home.root.join(BUN_MODULE).exists());
+
+    let adoptions: serde_json::Value = serde_json::from_str(&adoptions_json(&home)).unwrap();
+    let removed = &adoptions["adoptions"][0];
+    assert!(
+        removed["file"].as_str().unwrap().ends_with(".zprofile"),
+        "{adoptions}"
+    );
+    assert_eq!(removed["module"], "modules/adopted/bun.toml");
+    run(&home, &["restore", &removed["id"].to_string(), "--yes"]);
+    assert!(read(&home, ".zprofile").contains("BUN_INSTALL"));
+    assert!(!home.root.join(BUN_MODULE).exists());
+}
+
+#[test]
 fn joining_for_every_host_comes_undone() {
     if !has("zsh") {
         return;

@@ -237,7 +237,16 @@ pub fn scan(ctx: &Context) -> Result<Vec<Candidate>> {
                     .find(|(_, m)| runs_in(m, shells) && covers(m, module))
             {
                 candidate.kind = Kind::Duplicate;
-                candidate.module = Some(PathBuf::from(name));
+                // Where restore finds it: in the repo, else this host's own.
+                candidate.module = module_files
+                    .iter()
+                    .find(|path| repo::module_name(path) == *name)
+                    .and_then(|path| path.strip_prefix(ctx.paths.repo()).ok())
+                    .map(Path::to_path_buf);
+                if candidate.module.is_none() {
+                    candidate.local = true;
+                    candidate.module = Some(local_dir(ctx).join(format!("{name}.toml")));
+                }
                 out.push(candidate);
                 continue;
             }
@@ -1003,7 +1012,9 @@ pub fn execute(ctx: &Context, plan: Plan) -> Result<Vec<Adoption>> {
             .expect("each record comes from a candidate")
     };
     for mut record in plan.records {
-        if !matches!(candidate_of(&record).kind, Kind::Comment | Kind::Duplicate) {
+        // Duplicates are recorded too: restoring the module's own adoption
+        // must know these lines rely on it, and they can be put back alone.
+        if candidate_of(&record).kind != Kind::Comment {
             adoptions.next_id = adoptions.next_id.max(1);
             record.id = adoptions.next_id;
             adoptions.next_id += 1;
