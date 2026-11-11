@@ -1040,7 +1040,12 @@ pub fn execute(ctx: &Context, plan: Plan) -> Result<Vec<Adoption>> {
         .flat_map(|candidate| candidate.shells.iter().copied())
         .collect();
     if let Err(err) = apply::apply_after(ctx, &shells, write) {
-        if written {
+        // All or none: lines put back in one file and kept in a module for
+        // another would run twice.
+        let restorable = replaced
+            .iter()
+            .all(|change| unchanged(&change.path, change.after.as_deref()).is_ok());
+        if written && restorable {
             let mut restored = true;
             for change in &replaced {
                 restored &= replace(
