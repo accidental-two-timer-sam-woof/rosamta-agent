@@ -253,6 +253,24 @@ fn auto_policy_saves_copies() {
 }
 
 #[test]
+fn a_copy_turned_into_a_link_saves_what_it_shows() {
+    let home = Home::new("auto");
+    home.repo_write("home/.npmrc", "a\n");
+    home.repo_write(
+        "dotfiles.toml",
+        "[[dotfile]]\npath = \".npmrc\"\ndeploy = \"copy\"\n",
+    );
+    home.deploy();
+    write(&home.at("work/npmrc"), "b\n");
+    fs::remove_file(home.at(".npmrc")).unwrap();
+    std::os::unix::fs::symlink(home.at("work/npmrc"), home.at(".npmrc")).unwrap();
+    assert_eq!(home.deploy(), one(".npmrc", Action::Saved));
+    let source = home.repo().join("home/.npmrc");
+    assert!(!source.symlink_metadata().unwrap().is_symlink());
+    assert_eq!(read(&source), "b\n");
+}
+
+#[test]
 fn link_permissions_go_on_the_source() {
     let home = Home::new("ask");
     home.repo_write("home/.netrc", "machine x\n");

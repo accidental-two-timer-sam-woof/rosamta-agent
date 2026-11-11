@@ -689,7 +689,10 @@ fn deploy_with(ctx: &Context, render_all: bool) -> Result<Vec<Step>> {
 /// Write what `target` holds to `source` in the repo, encrypted when declared so.
 pub(crate) fn save(ctx: &Context, entry: &Dotfile, target: &Path, source: &Path) -> Result<()> {
     if !entry.encrypted {
-        return tree::put(Content::Tree(target), source);
+        // A target this host turned into a link saves what the link shows:
+        // the link itself would point nowhere on other hosts.
+        let shown = std::fs::canonicalize(target).map_err(Error::read(target))?;
+        return tree::put(Content::Tree(&shown), source);
     }
     let plain = std::fs::read(target).map_err(Error::read(target))?;
     tree::put(Content::Bytes(&crypt::encrypt(ctx, &plain)?), source)
