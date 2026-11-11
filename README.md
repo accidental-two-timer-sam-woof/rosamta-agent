@@ -32,6 +32,7 @@ rosamta 是跨 shell、跨主機的 dotfile 管理工具。設定宣告在 git r
 - oh-my-zsh、zsh 插件、字型等外部內容鎖定版本下載，每台主機都一樣
 - 新主機第一次套用就執行安裝腳本，之後只在腳本或 Brewfile 改變時再執行
 - 目標位置已有不同內容時不覆蓋，顯示差異讓你決定
+- 可從 chezmoi 匯入檔案、template、腳本與外部內容，轉不了的逐項列出
 
 ### 🔄 **多主機同步**
 - 每次變更都是一個 commit，預設自動推送；背景服務定時拉取其他主機的變更
@@ -401,6 +402,23 @@ when = { os = ["macos"] }
 - 每次執行的輸出寫在 `$XDG_STATE_HOME/rosamta/scripts/<source>.log`，只有自己可讀，超過 1 MiB 的部分不記錄。
 - 沒有終端機時，腳本最多執行 30 分鐘，超過時連同它啟動的程式一起結束。
 - 腳本在背景啟動、要持續執行的程式，輸出要導到別處，例如 `cmd > /dev/null 2>&1 &`；否則 rosamta 結束後，它一寫出輸出就會被終止。
+
+### 從 chezmoi 匯入
+
+```sh
+rsmt import chezmoi --dry-run   # 只列出結果
+rsmt import chezmoi             # 匯入並建立一個 commit
+```
+
+- 讀取參數指定的 source 目錄，否則 `chezmoi source-path` 的位置，否則 `~/.local/share/chezmoi`，並遵循 `.chezmoiroot`。需要先執行 `rsmt init`。
+- 不修改 chezmoi 的 source 與設定，不部署，也不連網路；匯入後以 `rsmt apply --dry-run` 確認。
+- 檔案依 chezmoi 的 `mode` 以複製（預設）或 symlink 部署，權限與 chezmoi 套用的結果相同；`.chezmoiignore` 排除的不匯入。
+- template 轉成 rosamta 的 template，支援作業系統、架構與 hostname 的條件、資料、Bitwarden 與 1Password；整份只適用於某些平台的檔案改為 `when`。chezmoi 設定檔 `[data]` 的值寫入這台主機 `host.toml` 的 `[vars]`，這台主機的 hostname 換成主機識別名稱。安裝了 chezmoi 時，產生的內容與 `chezmoi cat` 不同的 template 不匯入。
+- 加密的檔案以 chezmoi 解密，再以 rosamta 的金鑰加密；repo 還沒有金鑰時在終端機設定密碼。
+- 腳本改為 `onchange` 並記為這台主機已執行過，`include … | sha256sum` 改為 `watch`。
+- `git-repo` 與 `archive` 類型的外部內容寫入 `externals.toml`，git repo 鎖定在目前 clone 的版本。
+- 轉不了的項目（`modify_`、`symlink_`、`exact_` 目錄、不支援的 template 寫法等）不宣告，原檔複製到 repo 的 `chezmoi-import/`。shell 設定檔不匯入，內容由接管處理。
+- 每個項目的結果與原因列在輸出與 commit 內容中，`--json` 以原因代碼輸出。
 
 ### 同步到其他主機
 

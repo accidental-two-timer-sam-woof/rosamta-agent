@@ -4,6 +4,7 @@ mod daemon;
 mod dotfiles;
 mod externals;
 mod github;
+mod import;
 mod secrets;
 mod sync;
 
@@ -93,6 +94,11 @@ enum Command {
     },
     /// Stop managing a dotfile, leaving it in place
     Forget { path: PathBuf },
+    /// Bring dotfiles in from another dotfile manager
+    Import {
+        #[command(subcommand)]
+        from: ImportFrom,
+    },
     /// Manage the git repos and archives downloaded into the home directory
     Externals {
         #[command(subcommand)]
@@ -148,6 +154,18 @@ enum ExternalsAction {
     Update {
         /// Only these externals; all by default
         paths: Vec<PathBuf>,
+    },
+}
+
+#[derive(Subcommand)]
+enum ImportFrom {
+    /// Convert a chezmoi source directory into declarations and commit them
+    Chezmoi {
+        /// The source directory; chezmoi's by default
+        source: Option<PathBuf>,
+        /// Show the report without writing anything
+        #[arg(long)]
+        dry_run: bool,
     },
 }
 
@@ -323,6 +341,9 @@ fn run(cli: &Cli) -> Result<ExitCode> {
             dotfiles::add(cli.json, paths, deploy, *encrypt)
         }
         Command::Forget { path } => dotfiles::forget(cli.json, path),
+        Command::Import {
+            from: ImportFrom::Chezmoi { source, dry_run },
+        } => import::chezmoi(cli.json, source.as_deref(), *dry_run),
         Command::Publish => sync::publish(cli.json),
         Command::Pull => sync::pull(cli.json),
         Command::Sync => sync::sync(cli.json),

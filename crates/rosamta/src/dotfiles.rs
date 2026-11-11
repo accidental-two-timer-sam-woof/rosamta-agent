@@ -60,7 +60,7 @@ fn report(ctx: &Context, json: bool, verb: &str, paths: &[PathBuf]) {
 }
 
 /// Make the key on first use, or unlock the repo's key on this host.
-fn ensure_key(ctx: &Context, json: bool) -> Result<()> {
+pub(crate) fn ensure_key(ctx: &Context, json: bool) -> Result<()> {
     let interactive = !json && std::io::stdin().is_terminal();
     if crypt::repo_has_key(ctx) {
         if !crypt::locked(ctx)? || unlock(ctx, json)? {

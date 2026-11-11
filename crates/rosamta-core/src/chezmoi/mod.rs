@@ -126,17 +126,32 @@ pub fn needs_key(source: &Path) -> Result<bool> {
     Ok(false)
 }
 
-/// Import the source into the repo, or with `dry_run` only report what
-/// would happen. The caller holds the adopt lock.
-pub fn import(ctx: &Context, options: &Options) -> Result<Report> {
-    let repo = ctx.paths.repo();
-    if !repo.join(".git").exists() || !ctx.paths.host_config().is_file() {
+/// Fails unless `rsmt init` has set up the repo and this host.
+pub fn ready(ctx: &Context) -> Result<()> {
+    if !ctx.paths.repo().join(".git").exists() || !ctx.paths.host_config().is_file() {
         return Err(Error::Usage(
             "this host is not set up yet; run `rsmt init` first".into(),
         ));
     }
+    Ok(())
+}
+
+/// Import the source into the repo, or with `dry_run` only report what
+/// would happen. The caller holds the adopt lock, and unlocks the repo key
+/// first when the source has encrypted files.
+pub fn import(ctx: &Context, options: &Options) -> Result<Report> {
+    ready(ctx)?;
     let root = source_dir(ctx, options)?;
-    let config = match &options.chezmoi {
+    // chezmoi reads data and renders from the same source.
+    let chezmoi = options.chezmoi.clone().map(|mut chezmoi| {
+        if let Some(dir) = &options.source {
+            chezmoi
+                .args
+                .extend(["--source".to_string(), dir.display().to_string()]);
+        }
+        chezmoi
+    });
+    let config = match &chezmoi {
         Some(chezmoi) => Config::read(chezmoi)?,
         None => Config {
             umask: 0o022,
@@ -144,14 +159,15 @@ pub fn import(ctx: &Context, options: &Options) -> Result<Report> {
         },
     };
     let host = crate::adopt::host_config(ctx)?;
-    let can_encrypt =
-        crate::dotfiles::crypt::repo_has_key(ctx) && !crate::dotfiles::crypt::locked(ctx)?;
+    // A dry run shows what importing does once the key is unlocked.
+    let can_encrypt = options.dry_run
+        || (crate::dotfiles::crypt::repo_has_key(ctx) && !crate::dotfiles::crypt::locked(ctx)?);
     let plan = plan::plan(&plan::Inputs {
         ctx,
         host: &host,
         root: &root,
         config: &config,
-        chezmoi: options.chezmoi.as_ref(),
+        chezmoi: chezmoi.as_ref(),
         can_encrypt,
     })?;
     if options.dry_run {
