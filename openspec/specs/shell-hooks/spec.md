@@ -48,3 +48,14 @@ bash 的 login 互動 shell 與非 login 互動 shell SHALL 都載入完整的�
 #### Scenario: Unhook zsh
 - **WHEN** 使用者執行 `rsmt unhook zsh`
 - **THEN** zsh 的 rc 檔中不再有 rosamta 區塊，其他內容不變
+
+### Requirement: Block removed by another tool
+`rsmt apply` 完成後，若 chezmoi 也管理某個裝有 rosamta 區塊的 rc 檔，SHALL 在 stderr 警告該檔會在下次 `chezmoi apply` 時失去區塊。目前版本服務的 shell 有 rc 檔失去區塊時，背景服務 SHALL 發出一則列出這些檔案的通知，App 的「需要處理」SHALL 列出同一件事；區塊恢復之前 SHALL 不重複通知。
+
+#### Scenario: chezmoi manages .zshrc
+- **WHEN** chezmoi 管理 `~/.zshrc`，使用者執行 `rsmt apply`
+- **THEN** `rsmt apply` 成功，並警告 chezmoi 也管理 `~/.zshrc`
+
+#### Scenario: chezmoi apply writes over .zshrc
+- **WHEN** `chezmoi apply` 以沒有 rosamta 區塊的版本覆寫 `~/.zshrc`
+- **THEN** 使用者收到一則通知，說明 shell 不再載入 rosamta，以及受影響的檔案
