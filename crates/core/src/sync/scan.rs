@@ -18,8 +18,10 @@ pub struct Hit {
     pub file: String,
     pub line: usize,
     pub rule: &'static str,
-    /// What `allow.toml` lists to let this line through.
-    pub hash: String,
+    /// What `allow.toml` lists to let this line through. `None` when the
+    /// rule matched across lines: listing one of them would turn the rule
+    /// off wherever that line appears.
+    pub hash: Option<String>,
 }
 
 /// Plain patches with zero context, whatever the user's diff settings;
@@ -212,17 +214,14 @@ fn check(files: &[Added], hosts: &[String], allowed: &Allowed) -> Vec<Hit> {
                 return None;
             }
             let rule = matched(&text)?;
-            let (line, text) = added
-                .lines
-                .iter()
-                .find(|(_, text)| matched(text).is_some())
-                .unwrap_or(&added.lines[0]);
+            let own = added.lines.iter().find(|(_, text)| matched(text).is_some());
+            let (line, _) = own.unwrap_or(&added.lines[0]);
             Some(Hit {
                 commit: added.commit.clone(),
                 file: added.file.clone(),
                 line: *line,
                 rule,
-                hash: Allowed::hash(text),
+                hash: own.map(|(_, text)| Allowed::hash(text)),
             })
         })
         .collect()
@@ -460,7 +459,9 @@ deleted file mode 100644
                 file: "modules/env.toml".into(),
                 line: 3,
                 rule: "github-pat",
-                hash: Allowed::hash("GH = \"ghp_0123456789abcdefghijABCDEFGHIJ012345\""),
+                hash: Some(Allowed::hash(
+                    "GH = \"ghp_0123456789abcdefghijABCDEFGHIJ012345\""
+                )),
             }]
         );
     }
@@ -479,12 +480,32 @@ deleted file mode 100644
         let hosts = [host.to_string()];
         let hits = check(&added, &hosts, &Allowed::default());
         assert_eq!(hits.len(), 1, "{hits:?}");
-        assert_eq!(hits[0].hash, Allowed::hash(&line));
+        let hash = hits[0].hash.clone().unwrap();
+        assert_eq!(hash, Allowed::hash(&line));
 
         let dir = tempfile::tempdir().unwrap();
-        let list = format!("lines = [\"{}\"]\n", hits[0].hash);
+        let list = format!("lines = [\"{hash}\"]\n");
         std::fs::write(dir.path().join(Allowed::MANIFEST), list).unwrap();
         let allowed = Allowed::load(dir.path()).unwrap();
         assert_eq!(check(&added, &hosts, &allowed), []);
+    }
+
+    /// A key on the line after its name matches only with both lines:
+    /// neither line's hash is offered.
+    #[test]
+    fn a_hit_across_lines_has_no_line_to_allow() {
+        let lines = [
+            "datadog_api_key:",
+            "  0123456789abcdef0123456789abcdef01234567",
+        ];
+        assert!(lines.iter().all(|line| secret_rule(line).is_none()));
+        let added = [Added {
+            commit: "1111".into(),
+            file: "config.yml".into(),
+            lines: (1..).zip(lines.map(String::from)).collect(),
+        }];
+        let hits = check(&added, &[], &Allowed::default());
+        assert_eq!(hits.len(), 1, "{hits:?}");
+        assert_eq!((hits[0].line, &hits[0].hash), (1, &None));
     }
 }
