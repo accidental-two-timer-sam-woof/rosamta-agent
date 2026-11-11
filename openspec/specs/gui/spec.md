@@ -63,7 +63,7 @@ GUI SHALL 只透過 core 讀寫設定與狀態，寫入前 SHALL 取得與 CLI�
 
 #### Scenario: Change the adopt policy
 - **WHEN** 使用者把接管改成「自動」
-- **THEN** `host.toml` 的 `adopt` 變為 `auto`，背景服務之後直接接管
+- **THEN** `host.toml` 的 `adopt` 變為 `auto`，背景服務之後直接接管（secret-guard 規定要先詢問的內容除外）
 
 ### Requirement: Host not set up
 這台主機還沒有 repo 或 `host.toml` 時，GUI SHALL 只顯示建立新的 repo 與以 URL 加入既有 repo 兩個選項。
