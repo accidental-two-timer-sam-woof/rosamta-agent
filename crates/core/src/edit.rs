@@ -69,6 +69,18 @@ pub(crate) fn write_private(path: &Path, text: &str) -> Result<()> {
 /// A symlink (stow, yadm) stays one: the file it points at is replaced,
 /// keeping its permissions.
 pub(crate) fn write_atomic(path: &Path, text: &str) -> Result<()> {
+    write_atomic_if(path, text, || Ok(()))
+}
+
+/// [`write_atomic`] that runs `check` last, between writing the temporary
+/// file and the rename, so an edit made by then is never overwritten.
+/// shortcut: an edit landing between `check` and the rename is still lost;
+/// installers take no lock, so nothing can keep them out.
+pub(crate) fn write_atomic_if(
+    path: &Path,
+    text: &str,
+    check: impl FnOnce() -> Result<()>,
+) -> Result<()> {
     use std::io::Write;
     use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
     // A link to a file that is not there (a dotfiles folder not cloned yet)
@@ -101,6 +113,10 @@ pub(crate) fn write_atomic(path: &Path, text: &str) -> Result<()> {
     }
     file.write_all(text.as_bytes())
         .map_err(Error::write(&tmp))?;
+    if let Err(err) = check() {
+        let _ = std::fs::remove_file(&tmp);
+        return Err(err);
+    }
     std::fs::rename(&tmp, &target).map_err(Error::write(path))
 }
 
@@ -233,6 +249,21 @@ mod tests {
         std::fs::remove_file(&real).unwrap();
         assert!(write_atomic(&link, "new\n").is_err());
         assert!(link.symlink_metadata().unwrap().file_type().is_symlink());
+    }
+
+    #[test]
+    fn an_edit_made_before_the_rename_is_kept() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join(".zshrc");
+        std::fs::write(&path, "a\n").unwrap();
+        let result = write_atomic_if(&path, "ours\n", || {
+            // An installer appends while rosamta writes.
+            std::fs::write(&path, "a\ninstaller\n").unwrap();
+            crate::adopt::unchanged(&path, Some("a\n"))
+        });
+        assert!(result.is_err());
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "a\ninstaller\n");
+        assert_eq!(std::fs::read_dir(dir.path()).unwrap().count(), 1);
     }
 
     #[test]

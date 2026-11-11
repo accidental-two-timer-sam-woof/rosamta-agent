@@ -641,6 +641,29 @@ fn an_rc_file_edited_after_reading_is_not_overwritten() {
     assert!(home.repo().join("modules/adopted/bun.toml").exists());
 }
 
+/// Startup that edits `.zshrc` and fails once the bun lines left it, the way
+/// an installer could append while the shell check runs.
+const EDITS_AFTER_ADOPTING: &str = "grep -q BUN_INSTALL \"$HOME/.zshrc\" || { echo 'export LATER=1' >> \"$HOME/.zshrc\"; no-such-command; }\n";
+
+#[test]
+fn a_file_edited_during_the_check_gets_its_lines_back_around_the_edit() {
+    if !has("zsh") {
+        return;
+    }
+    let before = format!("{EDITS_AFTER_ADOPTING}{BUN}");
+    let home = hooked(&[(".zshrc", &before)]);
+    home.cmd("rsmt").args(["adopt", "--yes"]).assert().failure();
+    // Nothing is left half adopted: the lines are back, the edit is kept,
+    // and no module holds the lines a second time.
+    let zshrc = read(&home, ".zshrc");
+    assert!(
+        zshrc.contains(before.trim_start()) && zshrc.contains("export LATER=1"),
+        "{zshrc}"
+    );
+    assert!(adopted(&home).is_empty());
+    assert!(repo_git(&home, &["status", "--porcelain"]).is_empty());
+}
+
 /// Structured content keeps to the shells that read its file: login bash
 /// runs `.profile` through the `.bash_profile` rosamta seeds, zsh never does.
 #[test]
