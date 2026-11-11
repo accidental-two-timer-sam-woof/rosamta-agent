@@ -12,7 +12,7 @@ use crate::error::{Error, Result};
 use crate::sync;
 
 /// `path` relative to the home directory, without resolving symlinks.
-fn home_relative(ctx: &Context, path: &Path) -> Result<PathBuf> {
+pub fn home_relative(ctx: &Context, path: &Path) -> Result<PathBuf> {
     let mut abs = PathBuf::new();
     for component in path.components() {
         match component {

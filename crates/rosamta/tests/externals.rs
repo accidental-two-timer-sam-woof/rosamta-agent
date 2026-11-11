@@ -127,3 +127,58 @@ fn something_else_at_the_path_fails_apply() {
         "x"
     );
 }
+
+#[test]
+fn update_locks_the_newest_commit_and_downloads_it() {
+    let home = Home::new();
+    home.cmd("rsmt").arg("init").assert().success();
+    let (url, first) = upstream(&home);
+    home.write(
+        "externals.toml",
+        &format!(
+            "# plugins\n[[external]]\npath = \".zplug\"\ngit = \"{}\"\n",
+            url.display()
+        ),
+    );
+    common::git(&home.repo(), &["add", "-A"]);
+    common::git(&home.repo(), &["commit", "--quiet", "-m", "externals"]);
+    home.cmd("rsmt")
+        .args(["externals", "update"])
+        .assert()
+        .success()
+        .stdout(
+            predicate::str::contains(format!("Locked ~/.zplug to {}", &first[..7]))
+                .and(predicate::str::contains("Downloaded ~/.zplug")),
+        );
+    let manifest = std::fs::read_to_string(home.repo().join("externals.toml")).unwrap();
+    assert!(manifest.starts_with("# plugins\n"), "{manifest}");
+    assert!(
+        manifest.contains(&format!("rev = \"{first}\"")),
+        "{manifest}"
+    );
+    let mut log = assert_cmd::Command::new("git");
+    common::git_env(&mut log);
+    let out = log
+        .arg("-C")
+        .arg(home.repo())
+        .args(["log", "-1", "--format=%s"])
+        .output()
+        .unwrap();
+    assert_eq!(
+        String::from_utf8_lossy(&out.stdout),
+        "update(externals): .zplug\n"
+    );
+
+    home.cmd("rsmt")
+        .args(["externals", "update", ".other"])
+        .current_dir(&home.root)
+        .assert()
+        .code(2)
+        .stderr(predicate::str::contains("is not an external"));
+    home.cmd("rsmt")
+        .args(["externals", "update", ".zplug"])
+        .current_dir(&home.root)
+        .assert()
+        .success()
+        .stdout("Already up to date\n");
+}
