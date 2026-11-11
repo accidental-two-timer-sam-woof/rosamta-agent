@@ -362,6 +362,28 @@ fn auto_asks_about_a_literal_that_may_be_a_key() {
     assert!(!repo_git(&home, &["log", "-p", "--all"]).contains(key));
 }
 
+/// A line after one that waits may read what it sets: it waits too.
+#[test]
+fn auto_keeps_what_follows_a_waiting_literal_in_place() {
+    if !has("zsh") {
+        return;
+    }
+    let key = "0123456789abcdef0123456789abcdef";
+    let later = "export CURRENT_ID=\"$SERVICE_ID\"";
+    let home = hooked(&[(
+        ".zshrc",
+        &format!("{BUN}\nexport SERVICE_ID={key}\n\n{later}\n"),
+    )]);
+    set_host(&home, "adopt", "\"auto\"");
+    run(&home, &["review"]);
+    let zshrc = read(&home, ".zshrc");
+    assert!(
+        zshrc.contains(key) && zshrc.contains(later) && !zshrc.contains("BUN_INSTALL"),
+        "{zshrc}"
+    );
+    assert_eq!(adopted(&home).len(), 1);
+}
+
 #[test]
 fn reinstalled_content_is_removed_without_a_new_module() {
     if !has("zsh") {

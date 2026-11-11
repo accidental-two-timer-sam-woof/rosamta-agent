@@ -1176,11 +1176,22 @@ pub fn refresh(ctx: &Context) -> Result<Reviewed> {
     }
     let candidates = scan(ctx)?;
     // `auto` still asks about a literal that could be a key no rule knows:
-    // adopting it would publish it with nobody having looked.
+    // adopting it would publish it with nobody having looked. What follows
+    // it in its file waits with it: adopted, it would run where the hook
+    // is, ahead of the line it may read from.
+    let mut waiting: Vec<PathBuf> = Vec::new();
     let (now_adopt, ask): (Vec<Candidate>, Vec<Candidate>) =
         candidates.into_iter().partition(|candidate| {
-            candidate.kind == Kind::Duplicate
-                || host.adopt == AdoptPolicy::Auto && !candidate.unsure()
+            if candidate.kind == Kind::Duplicate {
+                return true;
+            }
+            let waits = host.adopt != AdoptPolicy::Auto
+                || candidate.unsure()
+                || waiting.contains(&candidate.file);
+            if waits && !waiting.contains(&candidate.file) {
+                waiting.push(candidate.file.clone());
+            }
+            !waits
         });
     let adopted = adopt(ctx, &now_adopt, Scope::Host)?;
     let old = store.queue()?;
