@@ -6,3 +6,11 @@
 #### Scenario: No network
 - **WHEN** 沒有網路時使用者接受一個接管項目，推送偏好為「自動」
 - **THEN** commit 留在本機，狀態顯示有 1 個未推送的 commit，恢復連線後一分鐘內背景服務把它推送出去
+
+#### Scenario: Connection that stalls
+- **WHEN** 背景服務推送時連線建立後不再有任何回應
+- **THEN** 這次推送在 10 分鐘後被中止，狀態顯示連不上遠端，之後照常重試
+
+#### Scenario: Offline for an hour
+- **WHEN** 有 commit 等待推送，而電腦一小時都沒有網路
+- **THEN** 背景服務前幾次每分鐘重試一次，之後間隔逐次拉長，最長 15 分鐘重試一次
