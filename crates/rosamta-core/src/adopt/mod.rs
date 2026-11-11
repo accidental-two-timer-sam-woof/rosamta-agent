@@ -263,8 +263,8 @@ pub fn scan(ctx: &Context) -> Result<Vec<Candidate>> {
                         .is_some_and(|path| repo::module_name(path) == *name)
                         && runs_in(m, shells)
                         && shells.iter().all(|&shell| {
-                            m.raw.get(shell).map(shared::code)
-                                == code.raw.get(shell).map(shared::code)
+                            m.raw.get(shell).map(|text| shared::code(shell, text))
+                                == code.raw.get(shell).map(|text| shared::code(shell, text))
                         })
                 })
             };
