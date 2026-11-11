@@ -66,6 +66,8 @@ pub enum Reason {
     Special,
     /// A symlink in the source: what it points to is not read.
     Link,
+    /// git ignores its path in the repo, so it would never be committed.
+    GitIgnored,
     // Notes.
     /// chezmoi hostnames compared in it became host IDs; the detail lists them.
     Hostname,

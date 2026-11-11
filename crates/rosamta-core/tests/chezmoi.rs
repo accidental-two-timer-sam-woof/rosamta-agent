@@ -150,6 +150,7 @@ fn fixture(home: &Home) {
     home.add("empty_dot_hushlogin", "");
     home.add("dot_blank", "  \n");
     home.add("dot_zshrc", "export EDITOR=vim\n");
+    home.add("dot_env", "LEVEL=debug\n");
     home.add("symlink_dot_vimrc", ".config/nvim/init.vim\n");
     home.add("dot_bad.tmpl", "{{ range .list }}x{{ end }}\n");
     home.add("dot_Brewfile", "brew \"git\"\n");
@@ -162,7 +163,8 @@ fn fixture(home: &Home) {
         ".chezmoiexternal.toml",
         "[\".oh-my-zsh\"]\ntype = \"git-repo\"\nurl = \"https://github.com/ohmyzsh/ohmyzsh.git\"\nclone.args = [\"--branch\", \"master\"]\nrefreshPeriod = \"168h\"\n\n\
          [\".local/share/fonts/mono\"]\ntype = \"archive\"\nurl = \"https://example.com/mono.tar.gz\"\nstripComponents = 1\nchecksum.sha256 = \"ABCD\"\n\n\
-         [\".local/bin/age\"]\ntype = \"archive-file\"\nurl = \"https://example.com/age.tar.gz\"\npath = \"age/age\"\n",
+         [\".local/bin/age\"]\ntype = \"archive-file\"\nurl = \"https://example.com/age.tar.gz\"\npath = \"age/age\"\n\n\
+         [\".zsh/plugin\"]\ntype = \"git-repo\"\nurl = \"https://example.com/plugin.git\"\nclone.args = [\"--depth\", \"1\", \"--recurse-submodules\"]\n",
     );
 }
 
@@ -170,6 +172,8 @@ fn fixture(home: &Home) {
 fn a_source_becomes_declarations() {
     let home = Home::new();
     fixture(&home);
+    // As a global excludes file of the user's would.
+    write(&home.ctx.paths.repo().join(".git/info/exclude"), ".env\n");
     let dry = home.import(None, true);
     assert_eq!(home.repo("dotfiles.toml"), "", "a dry run writes nothing");
     let report = home.import(None, false);
@@ -184,6 +188,7 @@ fn a_source_becomes_declarations() {
         ("empty_dot_hushlogin", Outcome::Imported, Reason::Dotfile),
         ("dot_blank", Outcome::Skipped, Reason::Empty),
         ("dot_zshrc", Outcome::Skipped, Reason::StartupFile),
+        ("dot_env", Outcome::Manual, Reason::GitIgnored),
         ("symlink_dot_vimrc", Outcome::Manual, Reason::Symlink),
         ("dot_bad.tmpl", Outcome::Manual, Reason::Template),
         (
@@ -210,6 +215,11 @@ fn a_source_becomes_declarations() {
             ".chezmoiexternal.toml: .local/bin/age",
             Outcome::Manual,
             Reason::ExternalType,
+        ),
+        (
+            ".chezmoiexternal.toml: .zsh/plugin",
+            Outcome::Manual,
+            Reason::ExternalField,
         ),
     ];
     for (source, outcome, reason) in expect {
@@ -484,7 +494,15 @@ fn a_host_gets_what_chezmoi_gave_it() {
     ] {
         assert!(scripts.contains(declared), "{declared}\n{scripts}");
     }
-    let sealed = fs::read(home.ctx.paths.repo().join("home/.token")).unwrap();
+    let repo = home.ctx.paths.repo();
+    // The key made for the import is committed with what it seals.
+    assert_eq!(
+        git(&repo, &["ls-files", "key.age", "home/.token"])
+            .lines()
+            .count(),
+        2
+    );
+    let sealed = fs::read(repo.join("home/.token")).unwrap();
     assert!(!String::from_utf8_lossy(&sealed).contains("abc"));
     assert_eq!(
         find(&report, "private_dot_app/settings.tmpl"),

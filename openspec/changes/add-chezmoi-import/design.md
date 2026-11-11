@@ -32,7 +32,7 @@ chezmoi 的 source 目錄把屬性編在檔名（`dot_`、`private_`、`executab
 5. 寫入 repo 的 `home/`、`scripts/`、`dotfiles.toml`、`scripts.toml`、`externals.toml`、`secrets.toml`，轉不了的 source 原樣複製到 repo 的 `chezmoi-import/`（不宣告、不部署），以及本機 `host.toml` 的 `[vars]`，建立一個 commit `import(chezmoi): …`，報告寫在 commit 內容中。匯入的腳本記為本機已執行過，因為 chezmoi 已在這台機器執行過它們。
 6. 不部署、不連網路；使用者之後執行 `rsmt apply`。chezmoi 已經放好的檔案內容相同，不會變成衝突；例外見 externals。
 
-repo 必須已經初始化（`rsmt init`），且上述路徑沒有尚未推送的變更（否則會一起進入匯入的 commit）。寫入或 commit 失敗時，這些路徑回到匯入前的內容；`[vars]` 與腳本的執行紀錄在 commit 成功後才寫入。source 中的 symlink 不讀取、不複製，列為需要手動處理；名稱是 `.` 或 `..` 的項目與指向 source 以外的 `.chezmoiroot` 使匯入以 2 結束，與 chezmoi 相同。`chezmoi-import/` 中已有的檔案不覆蓋。
+repo 必須已經初始化（`rsmt init`），且上述路徑沒有尚未推送的變更（否則會一起進入匯入的 commit）。寫入或 commit 失敗時，這些路徑回到匯入前的內容；`[vars]` 與腳本的執行紀錄在 commit 成功後才寫入。source 中的 symlink 不讀取、不複製，列為需要手動處理；名稱是 `.` 或 `..` 的項目與指向 source 以外的 `.chezmoiroot` 使匯入以 2 結束，與 chezmoi 相同。`chezmoi-import/` 中已有的檔案不覆蓋。git 忽略的目標路徑（例如使用者全域 excludes 中的 `.env`）無法 commit，列為需要手動處理。匯入時才建立的 repo 金鑰與匯入一起 commit。App 匯入失敗時，移除這次建立的 repo 與 `host.toml`，回到設定頁。沒有終端機時 chezmoi 以 `--no-tty` 執行並有時間上限。
 
 目標路徑已經在 `dotfiles.toml` 宣告、`home/` 中已有同名內容、`scripts/` 中已有同名腳本或 externals 已宣告同一路徑時，該項目略過並列在報告中，不覆蓋。
 

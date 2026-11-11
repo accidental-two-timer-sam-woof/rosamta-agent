@@ -126,18 +126,31 @@ pub fn init(url: Option<String>) -> Done {
 
 /// Create a repo and import chezmoi's source into it. Encrypted files are
 /// left to convert by hand: there is no terminal to ask for a passphrase.
+/// When importing fails, what this created is removed, so setting up can
+/// start over.
 pub fn import_chezmoi(ctx: &Context) -> Result<(Report, Option<String>)> {
-    repo::init_new(&ctx.paths)?;
+    let options = chezmoi::Options {
+        source: None,
+        dry_run: false,
+        chezmoi: chezmoi::Chezmoi::find(ctx),
+    };
+    chezmoi::source_dir(ctx, &options)?;
+    let repo_dir = ctx.paths.repo();
+    let new_repo = !repo_dir.exists();
+    let outcome = repo::init_new(&ctx.paths)?;
     let lock = adopt::lock(ctx)?;
-    let report = chezmoi::import(
-        ctx,
-        &chezmoi::Options {
-            source: None,
-            dry_run: false,
-            chezmoi: chezmoi::Chezmoi::find(ctx),
-        },
-    )?;
-    Ok((report, publish(ctx, &lock)))
+    match chezmoi::import(ctx, &options) {
+        Ok(report) => Ok((report, publish(ctx, &lock))),
+        Err(err) => {
+            if new_repo && !outcome.cloned && !outcome.existing {
+                let _ = std::fs::remove_dir_all(&repo_dir);
+                if outcome.host_created {
+                    let _ = std::fs::remove_file(ctx.paths.host_config());
+                }
+            }
+            Err(err)
+        }
+    }
 }
 
 /// Push what was just committed, as the CLI does: a failure is a warning,

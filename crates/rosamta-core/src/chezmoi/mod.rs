@@ -3,7 +3,8 @@
 
 use std::io::Write;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
+use std::process::{Command, Output, Stdio};
+use std::time::Duration;
 
 use serde_json::Value;
 
@@ -33,9 +34,14 @@ pub struct Chezmoi {
 impl Chezmoi {
     /// chezmoi on the user's PATH.
     pub fn find(ctx: &Context) -> Option<Self> {
+        let args = if ctx.interactive {
+            Vec::new()
+        } else {
+            vec!["--no-tty".to_string()]
+        };
         Some(Self {
             program: crate::shells::which("chezmoi", &ctx.path_var)?,
-            args: Vec::new(),
+            args,
             terminal: ctx.interactive,
         })
     }
@@ -56,6 +62,15 @@ impl Chezmoi {
             cmd.stdin(Stdio::null());
         }
         let cannot = |err: std::io::Error| Error::Usage(format!("cannot run chezmoi: {err}"));
+        // Without a terminal nothing can answer chezmoi, so it gets a deadline.
+        if input.is_none() && !self.terminal {
+            let out = crate::process::output_with_timeout(&mut cmd, TIMEOUT)
+                .map_err(cannot)?
+                .ok_or_else(|| {
+                    Error::Usage(format!("chezmoi {} did not finish", args.join(" ")))
+                })?;
+            return checked(args, out);
+        }
         let mut child = cmd.spawn().map_err(cannot)?;
         let stdin = child.stdin.take();
         // Written alongside reading, so a large output cannot block it.
@@ -66,15 +81,7 @@ impl Chezmoi {
             child.wait_with_output()
         })
         .map_err(cannot)?;
-        if !out.status.success() {
-            let stderr = String::from_utf8_lossy(&out.stderr);
-            return Err(Error::Usage(format!(
-                "chezmoi {} failed: {}",
-                args.first().copied().unwrap_or_default(),
-                stderr.trim()
-            )));
-        }
-        Ok(out.stdout)
+        checked(args, out)
     }
 
     fn json(&self, args: &[&str]) -> Result<Value> {
@@ -95,6 +102,21 @@ impl Chezmoi {
     fn render(&self, text: &[u8]) -> Result<Vec<u8>> {
         self.run(&["execute-template"], Some(text))
     }
+}
+
+/// How long chezmoi may take without a terminal.
+const TIMEOUT: Duration = Duration::from_secs(60);
+
+fn checked(args: &[&str], out: Output) -> Result<Vec<u8>> {
+    if !out.status.success() {
+        let stderr = String::from_utf8_lossy(&out.stderr);
+        return Err(Error::Usage(format!(
+            "chezmoi {} failed: {}",
+            args.first().copied().unwrap_or_default(),
+            stderr.trim()
+        )));
+    }
+    Ok(out.stdout)
 }
 
 pub struct Options {
@@ -155,6 +177,12 @@ pub fn needs_key(source: &Path) -> Result<bool> {
         }
     }
     Ok(false)
+}
+
+/// Fails when the repo has changes not published yet, which importing
+/// would commit or undo; checked before asking for a passphrase.
+pub fn writable(ctx: &Context) -> Result<()> {
+    write::writable(&ctx.paths.repo())
 }
 
 /// Fails unless `rsmt init` has set up the repo and this host.
