@@ -291,25 +291,35 @@ pub struct Applied {
     pub hooks_changed: Vec<PathBuf>,
     pub externals: Vec<crate::externals::Step>,
     pub dotfiles: Vec<crate::dotfiles::Step>,
+    pub scripts: Vec<crate::scripts::apply::Step>,
 }
 
-/// Download externals; render, smoke-test, then switch; then deploy
-/// dotfiles. If the shells fail their check, the current version stays and
-/// no dotfile is touched. The caller holds the adopt lock.
+/// Download externals and run `before` scripts; render, smoke-test, then
+/// switch; then deploy dotfiles and run `after` scripts. If the shells fail
+/// their check, the current version stays and no dotfile is touched. The
+/// caller holds the adopt lock.
 pub fn apply(ctx: &Context) -> Result<Applied> {
     migrate(ctx)?;
-    after_externals(ctx, || finish(ctx, &[]))
+    around_shells(ctx, || finish(ctx, &[]))
 }
 
 /// What shells may load comes first: on a new host the module loading
-/// oh-my-zsh needs it downloaded before the smoke test.
-pub fn after_externals(ctx: &Context, shells: impl FnOnce() -> Result<Applied>) -> Result<Applied> {
+/// oh-my-zsh needs it downloaded, and a tool a script installs needs to be
+/// there, before the smoke test.
+pub fn around_shells(ctx: &Context, shells: impl FnOnce() -> Result<Applied>) -> Result<Applied> {
+    use crate::scripts::{Timing, apply as scripts, review};
     let externals = crate::externals::apply(ctx)?;
+    let mut ran = scripts::apply(ctx, Timing::Before)?;
+    review::sync_queue(ctx)?;
     let applied = Applied {
         externals,
         ..shells()?
     };
-    with_dotfiles(ctx, applied)
+    let mut applied = with_dotfiles(ctx, applied)?;
+    ran.extend(scripts::apply(ctx, Timing::After)?);
+    review::sync_queue(ctx)?;
+    applied.scripts = ran;
+    Ok(applied)
 }
 
 /// Deploy dotfiles after the shells switched.
@@ -365,6 +375,7 @@ fn finish(ctx: &Context, baselines: &[(Shell, Vec<Smoke>)]) -> Result<Applied> {
         hooks_changed,
         externals: Vec::new(),
         dotfiles: Vec::new(),
+        scripts: Vec::new(),
     };
     if applied.up_to_date {
         return Ok(applied);

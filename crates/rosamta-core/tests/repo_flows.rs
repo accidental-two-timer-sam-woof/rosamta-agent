@@ -498,8 +498,10 @@ fn an_unknown_bitwarden_tool_is_an_error_with_its_line() {
     )
     .unwrap();
     let err = host::load(&file).unwrap_err().to_string();
+    // After the blank line and the table header.
+    let line = text.lines().count() + 3;
     assert!(
-        err.contains("lastpass") && err.contains("host.toml:11:"),
+        err.contains("lastpass") && err.contains(&format!("host.toml:{line}:")),
         "{err}"
     );
     fs::write(
