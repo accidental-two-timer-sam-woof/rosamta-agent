@@ -944,6 +944,15 @@ impl Daemon {
     /// if it comes back.
     fn report_problems(&mut self) {
         let mut problems: Vec<(&'static str, String)> = self.repo_problem.iter().cloned().collect();
+        if let Ok(missing) = apply::missing_hooks(&self.ctx, &self.env)
+            && !missing.is_empty()
+        {
+            let files: Vec<String> = missing
+                .iter()
+                .map(|path| adopt::display(path, &self.ctx.home))
+                .collect();
+            problems.push(("hooks_missing", files.join(", ")));
+        }
         if dotfiles::needs_key(&self.ctx).unwrap_or(false) {
             problems.push(("locked", String::new()));
         }
@@ -1001,6 +1010,7 @@ impl Daemon {
             if !state.notified.contains(&key) {
                 let (text, arg) = match *kind {
                     "conflict" => ("problem.conflict", "files"),
+                    "hooks_missing" => ("problem.hooks_missing", "files"),
                     "offline" if reason == "1" => ("problem.offline_one", "count"),
                     "offline" => ("problem.offline", "count"),
                     _ => (&*format!("problem.{kind}"), "reason"),

@@ -324,6 +324,21 @@ pub fn hooked_files(shell: Shell, env: &HookEnv) -> Result<Vec<PathBuf>> {
     Ok(out)
 }
 
+/// Files that should hold `shell`'s block and do not, as when another tool
+/// writes its own copy of an rc file over rosamta's.
+pub fn missing(shell: Shell, env: &HookEnv) -> Result<Vec<PathBuf>> {
+    Ok(plan_install(shell, env)?
+        .into_iter()
+        .filter(|change| {
+            change
+                .before
+                .as_deref()
+                .is_none_or(|text| find_block(text).is_none())
+        })
+        .map(|change| change.path)
+        .collect())
+}
+
 /// Changes that remove `shell`'s hooks. fish's file goes away entirely.
 pub fn plan_remove(shell: Shell, env: &HookEnv) -> Result<Vec<FileChange>> {
     let mut changes = Vec::new();

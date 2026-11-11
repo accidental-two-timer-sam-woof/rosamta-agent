@@ -66,11 +66,11 @@ impl Context {
         Snapshots::new(self.paths.state(), &self.home)
     }
 
-    pub(crate) fn installed(&self) -> Vec<Detected> {
+    pub fn installed(&self) -> Vec<Detected> {
         shells::detect(&self.path_var, &self.paths.state().join("shells.toml"))
     }
 
-    pub(crate) fn hook_env(&self, installed: &[Detected]) -> HookEnv {
+    pub fn hook_env(&self, installed: &[Detected]) -> HookEnv {
         let exe = |shell| {
             installed
                 .iter()
@@ -1109,6 +1109,26 @@ pub fn shells(ctx: &Context) -> Result<Vec<ShellStatus>> {
             })
         })
         .collect()
+}
+
+/// Startup files that lost the block of a shell the current version serves:
+/// those shells no longer load rosamta.
+pub fn missing_hooks(ctx: &Context, env: &HookEnv) -> Result<Vec<PathBuf>> {
+    let generated_dir = ctx.paths.generated();
+    let Some(id) = generated::current_id(&generated_dir) else {
+        return Ok(Vec::new());
+    };
+    let unhooked = ctx.unhooked();
+    let mut out = Vec::new();
+    for found in ctx.installed() {
+        if found.unsupported().is_none()
+            && !unhooked.contains(&found.shell)
+            && generated_dir.join(&id).join(found.shell.name()).is_dir()
+        {
+            out.extend(hooks::missing(found.shell, env)?);
+        }
+    }
+    Ok(out)
 }
 
 /// Today's UTC date as YYYY-MM-DD.
