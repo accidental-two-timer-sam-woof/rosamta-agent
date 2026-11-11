@@ -1,6 +1,7 @@
 //! Commands that change shell startup: apply, hook, unhook, eject, restore.
 
 use std::io::{BufRead, IsTerminal, Write};
+use std::path::PathBuf;
 use std::process::ExitCode;
 
 use rosamta_core::adopt;
@@ -85,7 +86,7 @@ pub fn apply(json: bool, dry_run: bool) -> Result<ExitCode> {
         apply::apply(&ctx)?
     };
     warn_skipped(&applied.skipped);
-    warn_chezmoi(&ctx);
+    warn_chezmoi(&ctx, &applied.hooks_changed);
     let failed = wrong_passphrase || !applied.failures().is_empty();
     if json {
         print_json(&applied);
@@ -261,19 +262,13 @@ fn print_step(ctx: &Context, step: &Step) {
 }
 
 /// An rc file chezmoi also manages loses rosamta's block at the next
-/// `chezmoi apply`.
-fn warn_chezmoi(ctx: &Context) {
-    if rosamta_core::chezmoi::Chezmoi::find(ctx).is_none() {
+/// `chezmoi apply`. Asked only about the files this apply hooked: chezmoi
+/// renders their templates to answer, which can run a password manager.
+fn warn_chezmoi(ctx: &Context, hooked: &[PathBuf]) {
+    if hooked.is_empty() {
         return;
     }
-    let Ok(shells) = apply::shells(ctx) else {
-        return;
-    };
-    let hooked: Vec<_> = shells
-        .into_iter()
-        .flat_map(|status| status.hooked)
-        .collect();
-    for path in rosamta_core::chezmoi::drops_block(ctx, &hooked) {
+    for path in rosamta_core::chezmoi::drops_block(ctx, hooked) {
         let path = adopt::display(&path, &ctx.home);
         eprintln!(
             "warning: chezmoi also manages {path}, so `chezmoi apply` will remove rosamta's block; run `chezmoi forget {path}`, or move everything over with `rsmt import chezmoi`"
