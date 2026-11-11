@@ -3,37 +3,54 @@
 use std::sync::Mutex;
 use std::time::Duration;
 
+use gpui_kit::assets::IconName;
 use gpui_kit::component::input::{InputEvent, InputState};
 use gpui_kit::component::notification::Notification;
-use gpui_kit::component::{WindowExt, h_flex, v_flex};
+use gpui_kit::component::{Disableable, Icon, WindowExt, h_flex, v_flex};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 use rosamta_core::adopt::{QueueItem, Scope};
 use rosamta_core::apply::Context as Core;
+use rosamta_core::config::SyncPolicy;
+use rosamta_core::problems::Problem;
+use rosamta_core::sync::Outcome;
 
 use crate::actions;
 use crate::pages::{self, review::Detail};
 use crate::state::{self, Snapshot};
-use crate::text::t;
-use crate::theme::{palette, space::*};
+use crate::text::{t, tf, when};
+use crate::theme::{self, font, palette, radius, size, space::*};
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum Page {
-    Overview,
     Review,
-    Modules,
-    Dotfiles,
+    Library,
     History,
-    Settings,
 }
 
-const PAGES: [(Page, &str); 6] = [
-    (Page::Overview, "nav.overview"),
-    (Page::Review, "nav.review"),
-    (Page::Modules, "nav.modules"),
-    (Page::Dotfiles, "nav.dotfiles"),
-    (Page::History, "nav.history"),
-    (Page::Settings, "nav.settings"),
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum LibraryTab {
+    Modules,
+    Dotfiles,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum HistoryTab {
+    Changes,
+    Snapshots,
+}
+
+/// A row of the review list: a queue item by its ID, or a problem by its key.
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub enum Selection {
+    Item(u32),
+    Problem(String),
+}
+
+const PAGES: [(Page, &str, IconName); 3] = [
+    (Page::Review, "nav.review", IconName::Inbox),
+    (Page::Library, "nav.library", IconName::Folder),
+    (Page::History, "nav.history", IconName::ClockFading),
 ];
 
 /// How often the files core keeps are checked for changes.
@@ -44,20 +61,22 @@ pub static URLS: Mutex<Vec<String>> = Mutex::new(Vec::new());
 
 pub struct Rosamta {
     pub page: Page,
+    pub library: LibraryTab,
+    pub history: HistoryTab,
     pub snap: Snapshot,
-    /// An action is running; buttons wait for it.
-    pub busy: bool,
-    pub selected: Option<u32>,
+    /// The action that is running, by the name of what started it; every
+    /// other action waits for it.
+    pub busy: Option<&'static str>,
+    pub selected: Option<Selection>,
     pub scope: Scope,
     pub detail: Option<Detail>,
     pub search: Entity<InputState>,
-    pub tag: Entity<InputState>,
-    pub host_id: Entity<InputState>,
     pub url: Entity<InputState>,
-    /// The host ID last put into `host_id`, so a new one replaces what is typed.
-    pub shown_host_id: Option<String>,
     /// What importing from chezmoi did, shown until dismissed.
     pub imported: Option<rosamta_core::chezmoi::Report>,
+    /// The settings window, once it was opened.
+    pub settings: Option<AnyWindowHandle>,
+    window: AnyWindowHandle,
     fingerprint: u64,
     /// Bumped per request, so only the newest snapshot or preview is shown.
     reloads: u64,
@@ -78,9 +97,7 @@ impl Rosamta {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
-        let search = cx.new(|cx| InputState::new(window, cx).placeholder(t("modules.search")));
-        let tag = cx.new(|cx| InputState::new(window, cx));
-        let host_id = cx.new(|cx| InputState::new(window, cx));
+        let search = cx.new(|cx| InputState::new(window, cx).placeholder(t("library.search")));
         let url = cx.new(|cx| InputState::new(window, cx).placeholder(t("setup.url")));
         let subscriptions = vec![
             cx.subscribe_in(&search, window, |_, _, event, _, cx| {
@@ -88,21 +105,12 @@ impl Rosamta {
                     cx.notify();
                 }
             }),
-            cx.subscribe_in(&tag, window, |this, _, event, window, cx| {
-                if matches!(event, InputEvent::PressEnter { .. }) {
-                    this.add_tag(window, cx);
-                }
-            }),
-            cx.subscribe_in(&host_id, window, |this, _, event, window, cx| {
-                // Enter only: renaming commits to the repo, so not on leaving the field.
-                if matches!(event, InputEvent::PressEnter { .. }) {
-                    this.rename(window, cx);
-                }
-            }),
             // Without the background service, new rc file content shows up
             // when the app is opened or brought back.
             cx.observe_window_activation(window, |this, window, cx| {
                 if window.is_window_active() {
+                    // macOS tells of a changed setting only when asked.
+                    gpui_kit::base::apply_system_reduce_motion(cx);
                     this.refresh_queue(window, cx);
                 }
             }),
@@ -116,7 +124,7 @@ impl Rosamta {
                     if this.fingerprint != fingerprint {
                         this.fingerprint = fingerprint;
                         this.reload(cx);
-                    } else if this.busy && this.selected_script() {
+                    } else if this.busy.is_some() && this.selected_script() {
                         // The log of a script being run grows as it runs.
                         this.load_detail(cx);
                     }
@@ -127,18 +135,19 @@ impl Rosamta {
             }
         });
         let mut this = Rosamta {
-            page: Page::Overview,
+            page: Page::Review,
+            library: LibraryTab::Modules,
+            history: HistoryTab::Changes,
             snap: Snapshot::empty(),
-            busy: false,
+            busy: None,
             selected: None,
             scope: Scope::Host,
             detail: None,
             search,
-            tag,
-            host_id,
             url,
-            shown_host_id: None,
             imported: None,
+            settings: None,
+            window: window.window_handle(),
             fingerprint: 0,
             reloads: 0,
             previews: 0,
@@ -181,7 +190,7 @@ impl Rosamta {
                 if let Some(err) = this.environment_error.take() {
                     window.push_notification(Notification::warning(err), cx);
                 }
-                let problem = result.unwrap_or_else(|err| Some(err.to_string()));
+                let problem = result.unwrap_or_else(|err| Some(said(&err)));
                 if let Some(text) = problem.as_ref().filter(|_| problem != this.refresh_problem) {
                     window.push_notification(Notification::error(text.clone()), cx);
                 }
@@ -196,18 +205,10 @@ impl Rosamta {
     fn show(&mut self, snap: Snapshot, cx: &mut Context<Self>) {
         self.snap = snap;
         if std::mem::take(&mut self.settling) {
-            self.busy = false;
+            self.busy = None;
         }
-        let item = |id| {
-            self.snap
-                .queue
-                .iter()
-                .find(|item: &&QueueItem| item.id == id)
-        };
-        let selected = self.selected.and_then(item).map(|item| item.id);
-        let selected = selected.or_else(|| self.snap.queue.first().map(|item| item.id));
-        if selected != self.selected {
-            self.selected = selected;
+        if !self.selected.as_ref().is_some_and(|row| self.listed(row)) {
+            self.selected = self.first_row();
             self.scope = Scope::Host;
             self.detail = None;
         }
@@ -216,15 +217,50 @@ impl Rosamta {
         cx.notify();
     }
 
-    pub fn select(&mut self, id: u32, cx: &mut Context<Self>) {
+    fn listed(&self, row: &Selection) -> bool {
+        match row {
+            Selection::Item(id) => self.snap.queue.iter().any(|item| item.id == *id),
+            Selection::Problem(key) => self.snap.problems.iter().any(|one| one.key() == *key),
+        }
+    }
+
+    /// The review list's first row: a problem, else a decision, else what waits.
+    fn first_row(&self) -> Option<Selection> {
+        let queue = &self.snap.queue;
+        let item = queue
+            .iter()
+            .find(|item| !pages::review::waits(item))
+            .or(queue.first());
+        match self.snap.problems.first() {
+            Some(problem) => Some(Selection::Problem(problem.key())),
+            None => item.map(|item| Selection::Item(item.id)),
+        }
+    }
+
+    /// Open a row of the review list.
+    pub fn select(&mut self, row: Selection, cx: &mut Context<Self>) {
         self.page = Page::Review;
-        if self.selected != Some(id) {
-            self.selected = Some(id);
+        if self.selected.as_ref() != Some(&row) {
+            self.selected = Some(row);
             self.scope = Scope::Host;
             self.detail = None;
             self.load_detail(cx);
         }
         cx.notify();
+    }
+
+    pub fn selected_item(&self) -> Option<&QueueItem> {
+        let Some(Selection::Item(id)) = &self.selected else {
+            return None;
+        };
+        self.snap.queue.iter().find(|item| item.id == *id)
+    }
+
+    pub fn selected_problem(&self) -> Option<&Problem> {
+        let Some(Selection::Problem(key)) = &self.selected else {
+            return None;
+        };
+        self.snap.problems.iter().find(|one| one.key() == *key)
     }
 
     pub fn set_scope(&mut self, scope: Scope, cx: &mut Context<Self>) {
@@ -237,17 +273,12 @@ impl Rosamta {
     }
 
     fn selected_script(&self) -> bool {
-        self.snap
-            .queue
-            .iter()
-            .any(|item| Some(item.id) == self.selected && item.script.is_some())
+        self.selected_item()
+            .is_some_and(|item| item.script.is_some())
     }
 
     fn load_detail(&mut self, cx: &mut Context<Self>) {
-        let Some(id) = self.selected else {
-            return;
-        };
-        let Some(item) = self.snap.queue.iter().find(|item| item.id == id).cloned() else {
+        let Some(item) = self.selected_item().cloned() else {
             return;
         };
         let scope = self.scope;
@@ -268,15 +299,22 @@ impl Rosamta {
         .detach();
     }
 
-    /// Run a write in the background; show its error or warning, then read
-    /// everything again. Buttons wait until the new snapshot is shown.
+    /// Run a write in the background; show its error or warning in the
+    /// window that asked, then read everything again. `name` says which
+    /// button waits with a spinner; the others are off until the new
+    /// snapshot is shown.
     pub fn run(
         &mut self,
         window: &mut Window,
         cx: &mut Context<Self>,
+        name: &'static str,
         action: impl FnOnce(&Core) -> actions::Done + Send + 'static,
     ) {
-        self.run_then(window, cx, action, |_, warning| warning);
+        self.run_then(window, cx, name, action, |_, warning| warning);
+    }
+
+    pub fn sync(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.run(window, cx, "sync", actions::sync_now);
     }
 
     /// Create a repo from chezmoi's source, then show what was imported.
@@ -284,6 +322,7 @@ impl Rosamta {
         self.run_then(
             window,
             cx,
+            "import",
             actions::import_chezmoi,
             |this, (report, warning)| {
                 this.imported = Some(report);
@@ -298,66 +337,43 @@ impl Rosamta {
         &mut self,
         window: &mut Window,
         cx: &mut Context<Self>,
+        name: &'static str,
         action: impl FnOnce(&Core) -> rosamta_core::Result<T> + Send + 'static,
         done: impl FnOnce(&mut Self, T) -> Option<String> + 'static,
     ) {
-        if self.busy {
+        if self.busy.is_some() {
             return;
         }
-        self.busy = true;
+        self.busy = Some(name);
         cx.notify();
         cx.spawn_in(window, async move |this, cx| {
             let result = cx
                 .background_spawn(async move { Core::from_env().and_then(|core| action(&core)) })
                 .await;
-            this.update_in(cx, |this, window, cx| {
-                match result.map(|value| done(this, value)) {
-                    Ok(None) => {}
-                    Ok(Some(warning)) => {
-                        window.push_notification(Notification::warning(warning), cx)
-                    }
-                    Err(err) => {
-                        let text = match &err {
-                            // In this app's words, without the terminal advice.
-                            rosamta_core::Error::Waiting(waiting) => {
-                                crate::pages::review::waiting_text(waiting).to_string()
-                            }
-                            // The queue is read again below; the list shows what is there now.
-                            rosamta_core::Error::NoItem(_) | rosamta_core::Error::Stale(_) => {
-                                crate::text::t("item.stale").to_string()
-                            }
-                            err => err.to_string(),
-                        };
-                        window.push_notification(Notification::error(text), cx);
-                        // Put back what is saved, such as a host ID that was refused.
-                        this.shown_host_id = None;
-                    }
-                }
+            let note = this.update(cx, |this, cx| {
+                let note = match result.map(|value| done(this, value)) {
+                    Ok(None) => None,
+                    Ok(Some(warning)) => Some(Notification::warning(warning)),
+                    Err(err) => Some(Notification::error(said(&err))),
+                };
                 this.settling = true;
                 this.reload(cx);
-            })
-            .ok();
+                note
+            });
+            // The window that asked may be closed by now; the app goes on.
+            if let Ok(Some(note)) = note {
+                cx.update(|window, cx| window.push_notification(note, cx))
+                    .ok();
+            }
         })
         .detach();
     }
 
-    pub fn add_tag(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let tag = self.tag.read(cx).value().trim().to_string();
-        if tag.is_empty() || self.busy {
-            return;
-        }
-        self.tag
-            .update(cx, |input, cx| input.set_value("", window, cx));
-        self.run(window, cx, move |core| actions::add_tag(core, tag));
-    }
-
-    fn rename(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let id = self.host_id.read(cx).value().trim().to_string();
-        let current = self.snap.host.as_ref().map(|host| host.id.as_str());
-        if id.is_empty() || Some(id.as_str()) == current {
-            return;
-        }
-        self.run(window, cx, move |core| actions::rename(core, id));
+    /// Open the settings window; the app is not being updated then, so the
+    /// window can read it.
+    pub fn open_settings(&mut self, cx: &mut Context<Self>) {
+        let app = cx.entity();
+        cx.defer(move |cx| pages::settings::open(&app, cx));
     }
 
     /// Open the item a `rosamta://review/<id>` URL names.
@@ -365,97 +381,196 @@ impl Rosamta {
         let urls = std::mem::take(&mut *URLS.lock().unwrap_or_else(|err| err.into_inner()));
         for url in urls {
             if let Some(id) = review_id(&url) {
-                self.select(id, cx);
+                self.select(Selection::Item(id), cx);
+                // The settings window may be in front.
+                let window = self.window;
+                cx.defer(move |cx| {
+                    window
+                        .update(cx, |_, window, _| window.activate_window())
+                        .ok();
+                });
             }
+        }
+    }
+
+    /// One line on where syncing stands.
+    fn sync_status(&self) -> SharedString {
+        let snap = &self.snap;
+        if self.busy == Some("sync") {
+            return t("status.syncing");
+        }
+        if snap.remote.is_none() {
+            return t("status.no_remote");
+        }
+        let manual = snap
+            .host
+            .as_ref()
+            .is_some_and(|host| host.publish == SyncPolicy::Manual);
+        if manual && snap.sync.unpushed > 0 {
+            let count = snap.sync.unpushed.to_string();
+            return tf("status.unpushed", &[("count", &count)]);
+        }
+        let synced = [&snap.sync.publish, &snap.sync.pull]
+            .into_iter()
+            .flatten()
+            .filter(|attempt| attempt.outcome == Outcome::Ok)
+            .map(|attempt| attempt.at)
+            .max();
+        match synced {
+            Some(at) => tf("status.synced", &[("time", &when(at))]),
+            None => t("status.never_synced"),
         }
     }
 
     fn sidebar(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let p = palette(cx);
-        let count = self.snap.queue.len();
-        v_flex()
-            .w(px(200.))
-            .h_full()
-            .flex_none()
-            .bg(p.panel)
-            .border_r_1()
-            .border_color(p.line)
-            .px(px(S12))
-            .py(px(S16))
+        let snap = &self.snap;
+        let count = snap.problems.len()
+            + snap
+                .queue
+                .iter()
+                .filter(|item| !pages::review::waits(item))
+                .count();
+        let busy = self.busy.is_some();
+        let nav = PAGES.into_iter().map(|(page, key, icon)| {
+            let active = self.page == page;
+            h_flex()
+                .id(key)
+                .h(px(S32))
+                .px(px(S12))
+                .gap(px(S8))
+                .rounded(px(radius::ROW))
+                .cursor_pointer()
+                .when(active, |row| row.bg(p.accent_soft))
+                .when(!active, |row| {
+                    row.hover(|style| style.bg(p.text.opacity(0.06)))
+                })
+                .child(Icon::new(icon).size(px(S16)).text_color(if active {
+                    p.accent
+                } else {
+                    p.muted
+                }))
+                .child(div().flex_1().child(t(key)))
+                .when(page == Page::Review && count > 0, |row| {
+                    row.child(pages::count_badge(count, cx))
+                })
+                .on_click(cx.listener(move |this, _, _, cx| {
+                    this.page = page;
+                    cx.notify();
+                }))
+        });
+        let footer = v_flex()
             .gap(px(S4))
-            .child(
-                div()
-                    .px(px(S12))
-                    .pb(px(S12))
-                    .text_base()
-                    .font_weight(FontWeight::SEMIBOLD)
-                    .child("rosamta"),
-            )
-            .children(PAGES.into_iter().map(|(page, key)| {
-                let active = self.page == page;
-                h_flex()
-                    .id(key)
-                    .px(px(S12))
-                    .py(px(S8))
-                    .rounded(px(S8))
-                    .cursor_pointer()
-                    .text_sm()
-                    .text_color(if active { p.accent } else { p.text })
-                    .when(active, |row| row.bg(p.accent_soft))
-                    .when(!active, |row| row.hover(|style| style.bg(p.line)))
-                    .child(div().flex_1().child(t(key)))
-                    .when(page == Page::Review && count > 0, |row| {
-                        row.child(pages::count_badge(count, cx))
-                    })
-                    .on_click(cx.listener(move |this, _, _, cx| {
-                        this.page = page;
-                        cx.notify();
-                    }))
-            }))
-            .child(div().flex_1())
+            .px(px(S4))
+            .pt(px(S8))
+            .border_t_1()
+            .border_color(p.line)
             .child(
                 h_flex()
-                    .px(px(S12))
+                    .h(px(28.))
                     .gap(px(S8))
-                    .text_sm()
-                    .text_color(p.muted)
-                    .child(pages::dot(self.snap.running, cx))
+                    .child(pages::dot(snap.running, cx))
                     .child(
                         div()
                             .flex_1()
                             .min_w_0()
                             .truncate()
-                            .children(self.snap.host.as_ref().map(|host| host.id.clone())),
+                            .children(snap.host.as_ref().map(|host| host.id.clone())),
+                    )
+                    .child(
+                        pages::icon_button("settings", IconName::Settings, t("nav.settings"))
+                            .on_click(cx.listener(|this, _, _, cx| this.open_settings(cx))),
                     ),
             )
+            .child(
+                h_flex()
+                    .h(px(28.))
+                    .pl(px(S16))
+                    .gap(px(S8))
+                    .text_size(px(font::CAPTION))
+                    .text_color(p.muted)
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w_0()
+                            .truncate()
+                            .child(self.sync_status()),
+                    )
+                    .child(
+                        pages::icon_button("sync", IconName::RefreshCw, t("action.sync"))
+                            .loading(self.busy == Some("sync"))
+                            .disabled(busy || snap.remote.is_none())
+                            .on_click(cx.listener(|this, _, window, cx| this.sync(window, cx))),
+                    ),
+            );
+        v_flex()
+            .w(px(size::SIDEBAR))
+            .h_full()
+            .flex_none()
+            // Over a blurred window the desktop shows through.
+            .bg(if theme::TRANSLUCENT {
+                p.panel.opacity(0.7)
+            } else {
+                p.panel
+            })
+            .border_r_1()
+            .border_color(p.line)
+            .px(px(S12))
+            .pb(px(S12))
+            .child(
+                // Beside the toolbar: on macOS the window's buttons are here.
+                div()
+                    .flex_none()
+                    .h(px(if cfg!(target_os = "macos") {
+                        size::TOOLBAR
+                    } else {
+                        S12
+                    }))
+                    .on_mouse_down(MouseButton::Left, |_, window, _| window.start_window_move()),
+            )
+            .child(v_flex().gap(px(S2)).children(nav))
+            .child(div().flex_1())
+            .child(footer)
+    }
+}
+
+/// A core error in this app's words.
+fn said(err: &rosamta_core::Error) -> String {
+    match err {
+        rosamta_core::Error::Waiting(waiting) => pages::review::waiting_text(waiting).to_string(),
+        // The queue is read again afterwards; the list shows what is there now.
+        rosamta_core::Error::NoItem(_) | rosamta_core::Error::Stale(_) => {
+            t("item.stale").to_string()
+        }
+        err => crate::text::plain(&err.to_string()).to_string(),
     }
 }
 
 impl Render for Rosamta {
-    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let p = palette(cx);
+        let root = h_flex()
+            .size_full()
+            .text_color(p.text)
+            .text_size(px(font::BODY));
+        if !self.snap.loaded {
+            // Nothing is known yet; the setup page is for a host without a repo.
+            return root.bg(p.bg);
+        }
+        let sidebar = self.snap.ready && self.imported.is_none();
         let page = if self.imported.is_some() {
             pages::import::render(self, cx).into_any_element()
         } else if !self.snap.ready {
             pages::setup::render(self, cx).into_any_element()
         } else {
             match self.page {
-                Page::Overview => pages::overview::render(self, cx).into_any_element(),
                 Page::Review => pages::review::render(self, cx).into_any_element(),
-                Page::Modules => pages::modules::render(self, cx).into_any_element(),
-                Page::Dotfiles => pages::dotfiles::render(self, cx).into_any_element(),
+                Page::Library => pages::library::render(self, cx).into_any_element(),
                 Page::History => pages::history::render(self, cx).into_any_element(),
-                Page::Settings => pages::settings::render(self, window, cx).into_any_element(),
             }
         };
-        h_flex()
-            .size_full()
-            .bg(p.bg)
-            .text_color(p.text)
-            .when(self.snap.ready && self.imported.is_none(), |root| {
-                root.child(self.sidebar(cx))
-            })
-            .child(div().flex_1().h_full().min_w_0().child(page))
+        root.when(sidebar, |root| root.child(self.sidebar(cx)))
+            .child(v_flex().flex_1().h_full().min_w_0().bg(p.bg).child(page))
     }
 }
 
@@ -490,7 +605,7 @@ mod view_tests {
     use rosamta_core::chezmoi::Outcome;
 
     // Not `super::*`: gpui's `test` attribute would replace the standard one.
-    use super::{Detail, Page, Rosamta, actions};
+    use super::{Detail, Page, Rosamta, Selection, actions};
 
     /// Set by the parent test for the child run in a home of its own.
     const OWN_HOME: &str = "ROSAMTA_TEST_OWN_HOME";
@@ -621,7 +736,7 @@ mod view_tests {
         cx.update(|window, cx| view.update(cx, |view, cx| view.import_chezmoi(window, cx)));
         cx.run_until_parked();
         view.read_with(cx, |view, _| {
-            assert!(view.snap.ready && !view.busy);
+            assert!(view.snap.ready && view.busy.is_none());
             let report = view.imported.as_ref().expect("the result is shown");
             assert_eq!(report.count(Outcome::Imported), 1);
             assert_eq!(report.count(Outcome::Manual), 1);
@@ -648,15 +763,15 @@ mod view_tests {
         assert_eq!(ids.len(), 3);
         let diff_has = |view: &Rosamta, text: &str| matches!(&view.detail, Some(Detail::Dotfile(diff)) if diff.contains(text));
         view.read_with(cx, |view, _| {
-            assert_eq!(view.snap.problem, None);
-            assert_eq!(view.selected, Some(ids[0]));
+            assert!(view.snap.problems.is_empty(), "{:?}", view.snap.problems);
+            assert_eq!(view.selected, Some(Selection::Item(ids[0])));
             assert!(diff_has(view, "+repo.a"));
         });
 
         // Choosing an item opens it on the review page with its own diff.
         view.update(cx, |view, cx| {
-            view.page = Page::Overview;
-            view.select(ids[1], cx);
+            view.page = Page::History;
+            view.select(Selection::Item(ids[1]), cx);
         });
         view.read_with(cx, |view, _| {
             assert!(view.page == Page::Review && view.detail.is_none());
@@ -669,15 +784,19 @@ mod view_tests {
         let (first, second) = (ids[0], ids[1]);
         cx.update(|window, cx| {
             view.update(cx, |view, cx| {
-                view.run(window, cx, move |core| actions::discard(core, second));
-                view.run(window, cx, move |core| actions::discard(core, first));
+                view.run(window, cx, "discard", move |core| {
+                    actions::discard(core, second)
+                });
+                view.run(window, cx, "discard", move |core| {
+                    actions::discard(core, first)
+                });
             })
         });
         cx.run_until_parked();
         view.read_with(cx, |view, _| {
-            assert!(!view.busy);
+            assert!(view.busy.is_none());
             assert_eq!(view.snap.queue.len(), 2);
-            assert_eq!(view.selected, Some(first));
+            assert_eq!(view.selected, Some(Selection::Item(first)));
             assert!(diff_has(view, "+repo.a"));
         });
         let read = |name| std::fs::read_to_string(core.home.join(name)).unwrap();
@@ -689,10 +808,10 @@ mod view_tests {
         // A script shows what it would run, and after a failed run its log;
         // it stays listed until it succeeds.
         let script = ids[2];
-        view.update(cx, |view, cx| view.select(script, cx));
+        view.update(cx, |view, cx| view.select(Selection::Item(script), cx));
         cx.run_until_parked();
         let shown = |view: &Rosamta| match &view.detail {
-            Some(Detail::Script { text, log }) => (text.clone(), log.clone()),
+            Some(Detail::Script { text, log, .. }) => (text.clone(), log.clone()),
             _ => panic!("not a script"),
         };
         let (text, log) = view.read_with(cx, |view, _| shown(view));
@@ -702,7 +821,7 @@ mod view_tests {
                 view.update(cx, |view, cx| {
                     let shown = view.snap.queue.iter().find(|item| item.id == script);
                     let shown = shown.and_then(|item| item.script.clone()).unwrap();
-                    view.run(window, cx, move |core| {
+                    view.run(window, cx, "run", move |core| {
                         actions::run_script(core, script, shown)
                     });
                 })
@@ -711,7 +830,7 @@ mod view_tests {
         };
         run(cx);
         let (_, log) = view.read_with(cx, |view, _| {
-            assert_eq!(view.selected, Some(script));
+            assert_eq!(view.selected, Some(Selection::Item(script)));
             shown(view)
         });
         assert!(log.unwrap().ends_with("# exited with 3\n"));
@@ -722,5 +841,21 @@ mod view_tests {
             assert!(view.snap.queue.iter().all(|item| item.script.is_none()));
         });
         assert_eq!(read("ran"), "ran\n");
+
+        // The settings window opens once; asking again brings it forward.
+        cx.update(|_, cx| {
+            crate::pages::settings::open(&view, cx);
+            crate::pages::settings::open(&view, cx);
+            assert_eq!(cx.windows().len(), 2);
+        });
+
+        // What cannot be read is a problem in the list, in front of the items.
+        write(&core.paths.host_config(), "id = [\n");
+        view.update(cx, |view, cx| view.reload(cx));
+        cx.run_until_parked();
+        view.read_with(cx, |view, _| {
+            let kinds: Vec<&str> = view.snap.problems.iter().map(|one| one.kind).collect();
+            assert_eq!(kinds, ["read"]);
+        });
     }
 }

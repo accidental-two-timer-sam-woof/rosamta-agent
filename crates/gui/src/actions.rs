@@ -1,7 +1,7 @@
 //! Writes, each through core under the same lock the CLI and the background
 //! service take. Run off the main thread.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use rosamta_core::adopt::{self, Lock, Scope};
 use rosamta_core::apply::{self, Context};
@@ -167,4 +167,31 @@ fn apply_if_applied(ctx: &Context) -> Done {
         return Ok(None);
     }
     Ok(apply::apply(ctx)?.failures().into_iter().next())
+}
+
+/// What to hand to the system to open `path`: the file itself, or its
+/// folder when the file is not there, made first when that is missing too.
+pub fn to_open(path: &Path) -> std::io::Result<PathBuf> {
+    if path.exists() {
+        return Ok(path.to_path_buf());
+    }
+    let folder = path.parent().unwrap_or(path);
+    std::fs::create_dir_all(folder)?;
+    Ok(folder.to_path_buf())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::to_open;
+
+    #[test]
+    fn a_missing_file_opens_its_folder_made_when_missing_too() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("a/b/file.toml");
+        let folder = file.parent().unwrap();
+        assert_eq!(to_open(&file).unwrap(), folder);
+        assert!(folder.is_dir());
+        std::fs::write(&file, "").unwrap();
+        assert_eq!(to_open(&file).unwrap(), file);
+    }
 }
