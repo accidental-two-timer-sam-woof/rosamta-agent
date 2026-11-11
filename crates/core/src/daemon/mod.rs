@@ -58,6 +58,8 @@ const LOG_LIMIT: u64 = 1 << 20;
 const RBW_RETRY: Duration = Duration::from_secs(60);
 /// Seconds between pushes of commits that could not reach the remote.
 const PUSH_RETRY: Duration = Duration::from_secs(60);
+/// How often a problem the notification service did not take is shown again.
+const NOTIFY_RETRY: Duration = Duration::from_secs(60);
 
 /// Directories to watch: the parents of watched files, without recursion,
 /// so an installer writing a new file and renaming it over the old one is
@@ -260,6 +262,9 @@ struct Daemon {
     exe: Option<(PathBuf, Identity)>,
     /// A problem found by applying the repo: kind and reason.
     repo_problem: Option<(&'static str, String)>,
+    /// Problems logged but not shown yet, by key.
+    unshown: BTreeSet<String>,
+    next_notify_retry: Instant,
 }
 
 /// Watch and react until the executable is replaced or the event channel
@@ -388,6 +393,8 @@ impl Daemon {
             clock: (Instant::now(), SystemTime::now()),
             exe: None,
             repo_problem: None,
+            unshown: BTreeSet::new(),
+            next_notify_retry: Instant::now(),
             ctx,
         }
     }
@@ -688,6 +695,10 @@ impl Daemon {
         if self.push_due() {
             self.push_again();
         }
+        if !self.unshown.is_empty() && now.0 >= self.next_notify_retry {
+            self.next_notify_retry = now.0 + NOTIFY_RETRY;
+            self.report_problems();
+        }
         if now.0 >= self.next_rbw_retry {
             self.next_rbw_retry = now.0 + RBW_RETRY;
             if self.waits_for_rbw() {
@@ -924,6 +935,7 @@ impl Daemon {
             return;
         };
         let mut keys: Vec<String> = Vec::new();
+        let mut seen: Vec<String> = Vec::new();
         for (kind, reason) in &problems {
             // The daemon's own apply can fail the same way a pull's did.
             // Being offline is one problem however many commits wait.
@@ -943,20 +955,26 @@ impl Daemon {
                     _ => (&*format!("problem.{kind}"), "reason"),
                 };
                 let body = i18n::text(self.lang, text, &[(arg, reason)]);
+                if self.unshown.insert(key.clone()) {
+                    self.log(&format!("notified: {body}"));
+                }
                 let note = Note {
                     body,
                     items: Vec::new(),
                     view_only: false,
                 };
                 // Not counted until shown: the notification service may
-                // start after the daemon.
+                // start after the daemon. The tick tries again.
                 if !self.notifier.show(&note) {
+                    seen.push(key);
                     continue;
                 }
-                self.log(&format!("notified: {}", note.body));
+                self.unshown.remove(&key);
             }
+            seen.push(key.clone());
             keys.push(key);
         }
+        self.unshown.retain(|key| seen.contains(key));
         if state.notified != keys {
             state.notified = keys;
             if let Err(err) = instance::save(&state_dir, &state) {
