@@ -269,6 +269,8 @@ struct Daemon {
     repo_problem: Option<(&'static str, String)>,
     /// Problems logged but not shown yet, by key.
     unshown: BTreeSet<String>,
+    /// The review note logged but not shown yet.
+    review_unshown: Option<String>,
     next_notify_retry: Instant,
 }
 
@@ -400,6 +402,7 @@ impl Daemon {
             exe: None,
             repo_problem: None,
             unshown: BTreeSet::new(),
+            review_unshown: None,
             next_notify_retry: Instant::now(),
             ctx,
         }
@@ -797,16 +800,6 @@ impl Daemon {
         // Queue IDs are never reused, so ones that left can be forgotten.
         self.announced
             .retain(|id| queue.iter().any(|item| item.id == *id));
-        let state_dir = self.ctx.paths.state();
-        if let Ok(Some(mut state)) = instance::load(state_dir) {
-            let announced: Vec<u32> = self.announced.iter().copied().collect();
-            if state.announced != announced {
-                state.announced = announced;
-                if let Err(err) = instance::save(state_dir, &state) {
-                    self.log(&err.to_string());
-                }
-            }
-        }
         let new: Vec<&QueueItem> = queue.iter().filter(|item| ids.contains(&item.id)).collect();
         // Waiting items need no answer; next to ones that do, the note is
         // about those alone, so its actions never reach a waiting item.
@@ -822,7 +815,10 @@ impl Daemon {
         let view_only = decisions.is_empty();
         let items = if view_only { waits } else { decisions };
         let body = match items.as_slice() {
-            [] => return,
+            [] => {
+                self.save_announced();
+                return;
+            }
             [item] if item.script.is_some() => self.script_body(item),
             [item] if item.dotfile.is_some() => self.dotfile_body(item),
             [item] => {
@@ -863,12 +859,44 @@ impl Daemon {
                 i18n::text(self.lang, key, &[("count", &many.len().to_string())])
             }
         };
-        self.log(&format!("notified: {body}"));
-        self.notifier.show(&Note {
+        if self.review_unshown.as_ref() != Some(&body) {
+            self.log(&format!("notified: {body}"));
+        }
+        let note = Note {
             body,
             items: items.iter().map(|item| item.id).collect(),
             view_only,
-        });
+        };
+        if self.notifier.show(&note) {
+            self.review_unshown = None;
+        } else {
+            // Tried again once NOTIFY_RETRY has passed (`elapsed` stays zero
+            // until then), and not saved as announced meanwhile.
+            self.review_unshown = Some(note.body);
+            self.batch = ids;
+            self.batch_since = Some(Instant::now() + NOTIFY_RETRY);
+        }
+        self.save_announced();
+    }
+
+    /// Saves the announced items, leaving out a batch not shown yet, so the
+    /// daemon announces it after a restart.
+    fn save_announced(&self) {
+        let state_dir = self.ctx.paths.state();
+        if let Ok(Some(mut state)) = instance::load(state_dir) {
+            let announced: Vec<u32> = self
+                .announced
+                .iter()
+                .copied()
+                .filter(|id| !self.batch.contains(id))
+                .collect();
+            if state.announced != announced {
+                state.announced = announced;
+                if let Err(err) = instance::save(state_dir, &state) {
+                    self.log(&err.to_string());
+                }
+            }
+        }
     }
 
     /// What one script item is about, naming the script.

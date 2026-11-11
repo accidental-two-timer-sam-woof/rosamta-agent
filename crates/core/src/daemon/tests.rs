@@ -613,3 +613,52 @@ fn a_problem_not_shown_is_shown_once_the_service_is_up() {
         ["The repo has an invalid file: modules/a.toml: bad"]
     );
 }
+
+#[test]
+fn a_review_note_not_shown_is_shown_once_the_service_is_up() {
+    let dir = tempfile::tempdir().unwrap();
+    let (mut daemon, _) = daemon(dir.path());
+    let up = Arc::new(Mutex::new(false));
+    let shown = Arc::default();
+    daemon.notifier = Box::new(Late {
+        up: Arc::clone(&up),
+        shown: Arc::clone(&shown),
+    });
+    let state_dir = daemon.ctx.paths.state().to_path_buf();
+    instance::save(&state_dir, &instance::DaemonState::default()).unwrap();
+    let store = Store::new(&state_dir);
+    let mut queue = store.queue().unwrap();
+    queue.items = vec![QueueItem {
+        id: 1,
+        file: dir.path().join(".f1"),
+        dotfile: Some(dotfiles::review::DotfileItem {
+            path: ".f1".into(),
+            reason: Reason::Conflict,
+            sides: Default::default(),
+            waiting: None,
+        }),
+        ..Default::default()
+    }];
+    store.save_queue(&queue).unwrap();
+
+    daemon.announced.insert(1);
+    daemon.batch = vec![1];
+    daemon.announce();
+    // Not announced yet, so a restart would announce it too.
+    let state = instance::load(&state_dir).unwrap().unwrap();
+    assert!(state.announced.is_empty());
+    assert_eq!(daemon.batch, [1]);
+    assert!(
+        daemon
+            .batch_since
+            .is_some_and(|since| since > Instant::now())
+    );
+    daemon.announce();
+    *up.lock().unwrap() = true;
+    daemon.announce();
+    assert_eq!(*shown.lock().unwrap(), ["~/.f1: differs from the repo"]);
+    let state = instance::load(&state_dir).unwrap().unwrap();
+    assert_eq!(state.announced, [1]);
+    let log = std::fs::read_to_string(state_dir.join("daemon.log")).unwrap();
+    assert_eq!(log.matches("notified:").count(), 1, "{log}");
+}
