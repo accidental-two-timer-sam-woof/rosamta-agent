@@ -448,14 +448,8 @@ fn snippet(ctx: &Context, text: &str, watched: &Watched) -> Module {
 /// Whether `module` does its work in each of `shells`: structured content
 /// wherever the module renders, raw code only where it is written.
 fn runs_in(module: &Module, shells: &[Shell]) -> bool {
-    let structured = !module.env.is_empty()
-        || !module.path.prepend.is_empty()
-        || !module.path.append.is_empty()
-        || !module.aliases.is_empty();
-    shells.iter().all(|&shell| {
-        (module.shells.is_empty() || module.shells.contains(&shell))
-            && (structured || module.raw.get(shell).is_some())
-    })
+    let reached = module.reaches();
+    shells.iter().all(|shell| reached.contains(shell))
 }
 
 /// True when `existing` already sets everything `new` does.
