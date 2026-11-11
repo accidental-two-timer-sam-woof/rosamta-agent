@@ -69,6 +69,8 @@ pub struct Candidate {
     #[serde(skip)]
     source: Source,
     #[serde(skip)]
+    shells: Vec<Shell>,
+    #[serde(skip)]
     whole_file: bool,
     #[serde(skip)]
     content: Option<Module>,
@@ -215,11 +217,12 @@ pub fn scan(ctx: &Context) -> Result<Vec<Candidate>> {
                 module: None,
                 local: false,
                 source: watched.source,
+                shells: watched.shells.clone(),
                 whole_file: watched.whole_file,
                 content: None,
                 order: 0,
             };
-            let shells = watched.source.shells();
+            let shells = &watched.shells[..];
             let recorded = adoptions.adoptions.iter().filter(|a| a.hash == hash);
             if segment.comment_only() {
                 // Comments adopted from this file before run nothing; drop them again.
@@ -431,7 +434,7 @@ fn snippet(ctx: &Context, text: &str, watched: &Watched) -> Module {
     let fish = watched.source == Source::Fish;
     let text = segment::rewrite_home(text, &ctx.home, fish);
     let mut module: Module = toml::from_str("").expect("an empty module parses");
-    for shell in watched.source.shells() {
+    for shell in &watched.shells {
         let slot = match shell {
             Shell::Sh => &mut module.raw.sh,
             Shell::Bash => &mut module.raw.bash,
@@ -1011,8 +1014,7 @@ pub fn execute(ctx: &Context, plan: Plan) -> Result<Vec<Adoption>> {
     let shells: Vec<Shell> = plan
         .candidates
         .iter()
-        .flat_map(|candidate| candidate.source.shells())
-        .copied()
+        .flat_map(|candidate| candidate.shells.iter().copied())
         .collect();
     if let Err(err) = apply::apply_after(ctx, &shells, write) {
         if written {
@@ -1464,10 +1466,7 @@ pub fn undo(ctx: &Context, plan: Undo) -> Result<()> {
     let shells: Vec<Shell> = watched_files(&ctx.hook_env(&ctx.installed()))
         .into_iter()
         .find(|watched| watched.path == plan.adoption.file)
-        .map_or_else(
-            || vec![plan.adoption.shell],
-            |watched| watched.source.shells().to_vec(),
-        );
+        .map_or_else(|| vec![plan.adoption.shell], |watched| watched.shells);
     if let Err(err) = apply::apply_after(ctx, &shells, write) {
         if written {
             let _ = write_text(&plan.file.path, plan.file.before.as_deref());
