@@ -48,12 +48,24 @@ repo 裡要部署到 host 家目錄的檔案或目錄，例如 nvim、ghostty �
 _Avoid_: target, managed file
 
 **Deploy mode**（部署方式）:
-dotfile 放到 host 上的方式：link（symlink 回 repo）、copy（複製）或 template（render 成實體檔案）。
+dotfile 放到 host 上的方式：link（symlink 回 repo）、copy（複製）、template（render 成實體檔案）或 create（不存在時才建立，之後不再管理）。
 _Avoid_: install mode, strategy
 
+**External**（外部內容）:
+repo 裡宣告、從外部下載到 host 家目錄的 git repo 或壓縮檔，例如 oh-my-zsh 或 zsh 插件。所有 host 使用同一個鎖定的版本。
+_Avoid_: dependency, vendor, plugin
+
+**Script**（腳本）:
+repo 裡宣告、在 host 上執行的設定腳本，只執行一次，或在內容改變時才執行。
+_Avoid_: hook, task, job
+
 **Condition**（套用範圍）:
-決定一個 module 或 dotfile 套用到哪些 host 的條件，依據 OS、架構、host ID 與 tag。
+決定一個 module 或 dotfile 套用到哪些 host 的條件，依據 OS、架構、host ID 與 tag；module 另可限定 shell。
 _Avoid_: filter, ignore rule
+
+**Include**（加入本機）:
+把本機加進另一台 host 新增的 module 或 dotfile 的套用範圍，讓它在本機載入。接管到與其他 host 相同的內容時也會這樣做，不另建 module。
+_Avoid_: merge, share, copy
 
 **Secret source**（秘密來源）:
 提供 template 秘密值的外部工具，例如 rbw、bw、bws。
@@ -82,15 +94,19 @@ daemon 監看的使用者 rc 檔，例如 `~/.zshrc`、`~/.bash_profile`、`~/.p
 _Avoid_: target
 
 **Adopt**（接管）:
-把 watched file 裡、hook 以外的新內容轉成 repo 裡的 module，並從 rc 檔移除原行。首次匯入既有 rc 檔也是 Adopt。
+把 watched file 裡、hook 以外的新內容轉成 repo 裡的 module，並從 rc 檔移除原行。第一次把既有 rc 檔的內容搬進 repo 也是 Adopt。
 _Avoid_: capture, import, re-add, 收錄
 
 **Adopt policy**（接管偏好）:
 偵測到可接管的內容時的處理方式：自動接管、先詢問使用者，或關閉。
 _Avoid_: capture policy, auto-sync
 
+**Import**（匯入）:
+把另一個 dotfile 管理工具（目前是 chezmoi）的設定一次轉成 repo 裡的 dotfile、script 與 external，轉不了的部分不宣告並逐項列出。只處理那個工具管理的內容；watched file 的內容由 Adopt 處理。
+_Avoid_: migrate, convert
+
 **Review queue**（待處理）:
-等待使用者決定要不要接管的項目。詢問模式下的項目，以及無法發出通知的 host 上的項目，都放在這裡。
+等待使用者處理的項目：要不要接管的內容、與 repo 不同的 dotfile、等待執行的腳本。詢問模式下的項目，以及無法發出通知的 host 上的項目，都放在這裡。
 _Avoid_: inbox, pending list
 
 **Snapshot**（快照）:

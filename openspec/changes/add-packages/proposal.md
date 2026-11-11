@@ -26,9 +26,10 @@
 ### Modified Capabilities
 
 （無）
+- GUI：在 `add-gui` 建立的 app 中加入本 change 對應的頁面或步驟。
 
 ## Impact
 
 - 新依賴：`mise-system-packages`（鎖定版本）。
 - 新增 `rsmt install <package>`、`rsmt bootstrap`。
-- `add-providers-and-doctor` 與 `add-templates-and-secrets` 會宣告它們需要的應用程式。
+- `add-providers` 與 `add-templates-and-secrets` 會宣告它們需要的應用程式。

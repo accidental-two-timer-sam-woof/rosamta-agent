@@ -1,0 +1,8 @@
+id = "mbp"
+tags = ["lab", "personal"]
+adopt = "ask"
+adopt_original = "delete"
+publish = "auto"
+pull = "auto"
+pull_interval = 15
+shell_notice = true
