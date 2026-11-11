@@ -32,7 +32,7 @@ hook SHALL 是以 `# >>> rosamta >>>` 與 `# <<< rosamta <<<` 包住的區塊。
 - **THEN** `rsmt apply` 以 2 結束並指出該檔，檔案內容不變
 
 #### Scenario: Installer appends before the write
-- **WHEN** 安裝程式在 rosamta 讀取 `~/.zshrc` 之後、寫入之前附加一行
+- **WHEN** 安裝程式在 rosamta 讀取 `~/.zshrc` 之後、寫入前最後一次確認之前附加一行
 - **THEN** 該行保留在 `~/.zshrc`，rosamta 不寫入並指出該檔
 
 ### Requirement: bash login and non-login shells
