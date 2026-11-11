@@ -95,7 +95,12 @@ fn high_entropy(text: &str) -> bool {
     text.split(|c: char| !(c.is_ascii_alphanumeric() || "+/=_-.".contains(c)))
         .map(value)
         .any(|token| match token.contains('/') {
-            false => token.len() >= MIN_LEN && !words(token) && entropy(token) > MIN_ENTROPY,
+            false => {
+                token.len() >= MIN_LEN
+                    && !words(token)
+                    && !snake_name(token)
+                    && entropy(token) > MIN_ENTROPY
+            }
             true => {
                 !path_like(token)
                     && token.len() >= MIN_SLASHED_LEN
@@ -104,11 +109,10 @@ fn high_entropy(text: &str) -> bool {
         })
 }
 
-/// `NAME=value` is judged by its value and `NAME=` (or `NAME+=`) by its name;
-/// base64 padding (`abc==`) is not an assignment.
+/// `NAME=value` is judged by its value; base64 padding (`abc==`) is not an
+/// assignment.
 fn value(token: &str) -> &str {
     match token.split_once('=') {
-        Some((name, "")) if !name.is_empty() => name.trim_end_matches('+'),
         Some((name, value))
             if !name.is_empty()
                 && !value.is_empty()
@@ -121,18 +125,31 @@ fn value(token: &str) -> &str {
     }
 }
 
-/// Words in one case joined by `-`, `.` or `_`, with few digits, such as
-/// `my-macbook-pro`, `internal-tools.example` or
-/// `POWERLEVEL9K_DIR_FOREGROUND`: a name, not a key.
+/// Words joined by `-` or `.` in one case, such as `my-macbook-pro` or
+/// `internal-tools.example`: a name, not a key.
 fn words(token: &str) -> bool {
-    let digits = token.chars().filter(char::is_ascii_digit).count();
-    token.contains(['-', '.', '_'])
+    token.contains(['-', '.'])
         && token
             .chars()
-            .all(|c| c.is_ascii_alphanumeric() || "-._".contains(c))
-        && digits * 5 <= token.len()
+            .all(|c| c.is_ascii_alphabetic() || c == '-' || c == '.')
         && !(token.chars().any(|c| c.is_ascii_uppercase())
             && token.chars().any(|c| c.is_ascii_lowercase()))
+}
+
+/// An upper-case name such as `POWERLEVEL9K_DIR_FOREGROUND`, also as `NAME=`,
+/// `NAME+=` or at the end of a sentence: short parts joined by `_`, each
+/// longer one with a vowel.
+fn snake_name(token: &str) -> bool {
+    let token = token.trim_end_matches(['=', '+', '.']);
+    token.contains('_')
+        && token.split('_').all(|part| {
+            !part.is_empty()
+                && part.len() <= 12
+                && part
+                    .chars()
+                    .all(|c| c.is_ascii_uppercase() || c.is_ascii_digit())
+                && (part.len() <= 4 || part.contains(['A', 'E', 'I', 'O', 'U']))
+        })
 }
 
 /// `/usr/bin`, `~/.cargo`, `HOME/.local/share` (what `$HOME/...` leaves):
@@ -232,6 +249,16 @@ mod tests {
         assert!(looks_secret("export credential=qwertyuiopasdfghjklzxcvbnm"));
         assert!(looks_secret("Zk3q9LmP2vR8tY6wB1nC4xJ7=="));
         assert!(looks_secret("export X=K7Q2M9X4P8R3T6W1Z5N0"));
+        assert!(looks_secret("export X=\"Zk3q9LmP2vR8tY6wB1A=\""));
+        assert!(looks_secret("export X=qwertyuiopasdfghjkl_zxcvbnm"));
+        assert!(looks_secret("export X=\"qwertyuiopasdfghjkl_zxcvbnm\""));
+        assert!(looks_secret(
+            "kubeadm join 10.0.0.5:6443 --token q8xkzm.vjwpbhrtcfnlsydg"
+        ));
+        assert!(looks_secret(
+            "export NR_USER=NRAK-QW8ZRTYUPLKJHGFDSAXCVBN4M"
+        ));
+        assert!(looks_secret("export LICENSE=QW8ZRTYUPLKJ_HGFDSAXCVBNMKJH"));
         assert!(looks_secret(
             "aws_secret_access_key = wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY"
         ));
@@ -261,6 +288,8 @@ mod tests {
             "  typeset -g POWERLEVEL9K_MULTILINE_FIRST_PROMPT_GAP_BACKGROUND=",
             "  typeset -g POWERLEVEL9K_VCS_BRANCH_ICON='\\uF126 '",
             "  # typeset -g POWERLEVEL9K_CPU_ARCH_X86_64_CONTENT_EXPANSION=",
+            "  # POWERLEVEL9K_ASDF_PROMPT_ALWAYS_SHOW.",
+            "  typeset -g POWERLEVEL9K_XPLR_VISUAL_IDENTIFIER_EXPANSION=",
             "  POWERLEVEL9K_KUBECONTEXT_DEFAULT_CONTENT_EXPANSION+='${P9K_KUBECONTEXT_NAME}'",
         ] {
             assert!(!looks_secret(text), "{text}");
