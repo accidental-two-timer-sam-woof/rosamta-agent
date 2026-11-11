@@ -808,6 +808,10 @@ mod manage {
         let err =
             manage::add(&home.ctx, &[home.at(".config/fish")], Deploy::Link, false).unwrap_err();
         assert!(err.to_string().contains("config.fish"), "{err}");
+        write(&home.at(".config/fish/conf.d/bun.fish"), "set -x B 1\n");
+        let path = home.at(".config/fish/conf.d/bun.fish");
+        let err = manage::add(&home.ctx, &[path], Deploy::Link, false).unwrap_err();
+        assert!(err.to_string().contains("conf.d"), "{err}");
         fs::create_dir_all(home.at(".config/empty")).unwrap();
         let err =
             manage::add(&home.ctx, &[home.at(".config/empty")], Deploy::Link, false).unwrap_err();
@@ -921,6 +925,20 @@ mod manage {
         );
         assert_eq!(read(&home.at(".gitconfig-work")), "[user]\n");
     }
+}
+
+#[test]
+fn a_fish_conf_d_file_is_a_startup_file() {
+    let home = Home::new("ask");
+    home.repo_write("home/.config/fish/conf.d/bun.fish", "set -x B 1\n");
+    home.repo_write(
+        "dotfiles.toml",
+        "[[dotfile]]\npath = \".config/fish/conf.d/bun.fish\"\n",
+    );
+    let manifest = dotfiles::load(&home.repo()).unwrap();
+    let problems = dotfiles::check(&manifest, &home.repo());
+    assert_eq!(problems.len(), 1, "{problems:?}");
+    assert!(problems[0].contains("startup file"), "{problems:?}");
 }
 
 #[test]
