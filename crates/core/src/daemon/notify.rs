@@ -95,12 +95,12 @@ pub trait Notifier: Send {
     fn show(&self, note: &Note) -> bool;
 }
 
-/// For hosts without a notification service.
+/// For hosts without a notification service: there is nothing to wait for.
 pub struct Silent;
 
 impl Notifier for Silent {
     fn show(&self, _note: &Note) -> bool {
-        false
+        true
     }
 }
 

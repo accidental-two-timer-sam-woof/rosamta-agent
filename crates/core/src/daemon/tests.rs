@@ -563,9 +563,14 @@ fn a_problem_not_shown_is_shown_once_the_service_is_up() {
     instance::save(daemon.ctx.paths.state(), &instance::DaemonState::default()).unwrap();
     daemon.repo_problem = Some(("invalid", "modules/a.toml: bad".into()));
     daemon.report_problems();
+    daemon.report_problems();
     *up.lock().unwrap() = true;
+    // The next tick tries again, with no event to prompt it.
+    daemon.next_sync = Instant::now() + Duration::from_secs(600);
+    daemon.tick();
     daemon.report_problems();
-    daemon.report_problems();
+    let log = std::fs::read_to_string(daemon.ctx.paths.state().join("daemon.log")).unwrap();
+    assert_eq!(log.matches("notified:").count(), 1, "{log}");
     assert_eq!(
         *shown.lock().unwrap(),
         ["The repo has an invalid file: modules/a.toml: bad"]
