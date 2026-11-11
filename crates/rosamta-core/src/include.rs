@@ -114,14 +114,20 @@ fn module_item(name: String, module: &Module, facts: &HostFacts, hooked: &[Shell
     let mut widening = widening(&module.when, facts);
     let mut blocked = tags(&module.when, facts);
     if !shells_ok && blocked.is_none() {
-        if structured {
-            widening.shells = hooked.to_vec();
-        } else {
+        // Structured content renders for any shell; a snippet only where it has code.
+        let can_run: Vec<Shell> = hooked
+            .iter()
+            .copied()
+            .filter(|shell| structured || module.raw.get(*shell).is_some())
+            .collect();
+        if can_run.is_empty() {
             let only = Shell::ALL
                 .into_iter()
-                .filter(|shell| listed(shell) && module.raw.get(*shell).is_some())
+                .filter(|shell| module.raw.get(*shell).is_some())
                 .collect();
             blocked = Some(Blocked::Shells(only));
+        } else {
+            widening.shells = can_run;
         }
     }
     Some(Item {
@@ -138,7 +144,8 @@ fn module_item(name: String, module: &Module, facts: &HostFacts, hooked: &[Shell
 }
 
 /// Dotfiles with no entry for their path that deploys here; of several
-/// entries for one path, the newest.
+/// entries for one path, the one that loads here with the fewest additions,
+/// then the newest.
 fn dotfile_items(
     repo_dir: &Path,
     facts: &HostFacts,
@@ -162,7 +169,8 @@ fn dotfile_items(
             name: format!("~/{path}"),
             kind: Kind::Dotfile,
             file: PathBuf::from(dotfiles::MANIFEST),
-            added: added_at(&entry.source()),
+            added: dotfiles::clean(&entry.source())
+                .and_then(|source| added_at(&source.to_string_lossy())),
             when: entry.when.clone(),
             shells: Vec::new(),
             widening: widening(&entry.when, facts),
@@ -170,14 +178,30 @@ fn dotfile_items(
             entry: index,
         };
         match items.iter_mut().find(|old| old.name == item.name) {
-            Some(old) if old.added.unwrap_or(u64::MAX) < item.added.unwrap_or(u64::MAX) => {
-                *old = item;
-            }
+            Some(old) if preference(&item) < preference(old) => *old = item,
             Some(_) => {}
             None => items.push(item),
         }
     }
     Ok(items)
+}
+
+/// Lower is better: loads here at all, fewest additions, newest.
+fn preference(item: &Item) -> (bool, usize, Reverse<u64>) {
+    let widening = &item.widening;
+    let additions = [
+        widening.host.is_some(),
+        widening.os.is_some(),
+        widening.arch.is_some(),
+    ]
+    .into_iter()
+    .filter(|&added| added)
+    .count();
+    (
+        item.blocked.is_some(),
+        additions,
+        Reverse(item.added.unwrap_or(u64::MAX)),
+    )
 }
 
 /// The values `when` lacks for this host, for each limit it has.
@@ -197,7 +221,8 @@ fn tags(when: &When, facts: &HostFacts) -> Option<Blocked> {
     missing.then(|| Blocked::Tags(when.tags.clone()))
 }
 
-/// When each file in the repo was last added, from one `git log`.
+/// When each file in the repo was last added, from one `git log`; a file
+/// moved within the repo counts from the move.
 fn added(repo_dir: &Path) -> Result<HashMap<String, u64>> {
     let log = git::run(
         repo_dir,
@@ -205,6 +230,7 @@ fn added(repo_dir: &Path) -> Result<HashMap<String, u64>> {
             "-c",
             "core.quotePath=false",
             "log",
+            "--no-renames",
             "--diff-filter=A",
             "--name-only",
             "--format=@%ct",
@@ -236,29 +262,47 @@ pub fn shown(ctx: &Context, name: &str) -> String {
                 .ok()
                 .map(Path::to_path_buf)
         })
-        .or_else(|| name.starts_with('.').then(|| PathBuf::from(name)));
+        // Module names never hold a `/`.
+        .or_else(|| (name.starts_with('.') || name.contains('/')).then(|| PathBuf::from(name)));
     match rel.and_then(|rel| dotfiles::clean(&rel.to_string_lossy())) {
         Some(rel) => format!("~/{}", rel.display()),
         None => name.to_string(),
     }
 }
 
-/// Whether the repo has a module or a dotfile by this `shown` name.
-pub fn in_repo(ctx: &Context, shown: &str) -> Result<bool> {
+/// Why `recent` does not list an item by this `shown` name.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Unlisted {
+    Missing,
+    Disabled,
+    Loaded,
+}
+
+pub fn unlisted(ctx: &Context, shown: &str) -> Result<Unlisted> {
     let repo_dir = ctx.paths.repo();
-    if repo::module_files(&repo_dir)?
-        .iter()
-        .any(|path| repo::module_name(path) == shown)
+    if let Some((_, module)) = apply::load_modules(&repo_dir)?
+        .into_iter()
+        .find(|(name, _)| name == shown)
     {
-        return Ok(true);
+        return Ok(if module.enabled {
+            Unlisted::Loaded
+        } else {
+            Unlisted::Disabled
+        });
     }
-    let Some(rel) = shown.strip_prefix("~/") else {
-        return Ok(false);
-    };
-    Ok(dotfiles::load(&repo_dir)?
-        .dotfile
-        .iter()
-        .any(|entry| dotfiles::clean(&entry.path) == dotfiles::clean(rel)))
+    let found = shown.strip_prefix("~/").is_some_and(|rel| {
+        dotfiles::load(&repo_dir).is_ok_and(|manifest| {
+            manifest
+                .dotfile
+                .iter()
+                .any(|entry| dotfiles::clean(&entry.path) == dotfiles::clean(rel))
+        })
+    });
+    Ok(if found {
+        Unlisted::Loaded
+    } else {
+        Unlisted::Missing
+    })
 }
 
 /// The edits that widen `items`, one per file.
@@ -354,4 +398,42 @@ pub fn include(ctx: &Context, items: &[Item], changes: &[FileChange]) -> Result<
         dotfiles::deploy::deploy(ctx)?;
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::config::{Arch, Os};
+
+    fn facts() -> HostFacts {
+        HostFacts {
+            os: Os::Linux,
+            arch: Arch::X86_64,
+            id: "box".into(),
+            tags: Vec::new(),
+        }
+    }
+
+    fn item(text: &str, hooked: &[Shell]) -> Item {
+        let module: Module = toml::from_str(text).unwrap();
+        module_item("m".into(), &module, &facts(), hooked).expect("does not load here")
+    }
+
+    #[test]
+    fn a_snippet_gains_the_hooked_shells_it_has_code_for() {
+        let text = "shells = [\"zsh\"]\n[raw]\nzsh = \"a\"\nbash = \"b\"\n";
+        let both = item(text, &[Shell::Bash]);
+        assert_eq!(both.widening.shells, vec![Shell::Bash]);
+        assert_eq!(both.blocked, None);
+        let zsh_only = item("shells = [\"zsh\"]\n[raw]\nzsh = \"a\"\n", &[Shell::Bash]);
+        assert_eq!(zsh_only.blocked, Some(Blocked::Shells(vec![Shell::Zsh])));
+    }
+
+    #[test]
+    fn structured_content_gains_every_hooked_shell() {
+        let text = "shells = [\"zsh\"]\n[when]\nhosts = [\"mbp\"]\n[env]\nA = \"1\"\n";
+        let item = item(text, &[Shell::Bash, Shell::Fish]);
+        assert_eq!(item.widening.host.as_deref(), Some("box"));
+        assert_eq!(item.widening.shells, vec![Shell::Bash, Shell::Fish]);
+    }
 }

@@ -240,3 +240,52 @@ fn what_cannot_load_here_is_skipped_with_a_reason() {
         assert!(out.contains("Skipped fishy: only for fish"), "{out}");
     }
 }
+
+#[test]
+fn names_paths_moves_and_several_entries() {
+    let home = host();
+    let off = "enabled = false\n\n[when]\nhosts = [\"mbp\"]\n\n[env]\nOFF = \"1\"\n";
+    // mbp's own version, and box's, which this host would need more for.
+    let tool = format!(
+        "[[dotfile]]\npath = \"bin/tool\"\nsource = \"hosts/mbp/bin/tool\"\n[dotfile.when]\nhosts = [\"mbp\"]\nos = [\"{MY_OS}\"]\n\n[[dotfile]]\npath = \"bin/tool\"\nsource = \"hosts/box/bin/tool\"\n[dotfile.when]\nhosts = [\"box\"]\nos = [\"{OTHER_OS}\"]\n"
+    );
+    commit(
+        &home,
+        &[
+            ("modules/adopted/bun.toml", &bun(MY_OS)),
+            ("modules/off.toml", off),
+            ("dotfiles.toml", &tool),
+            ("hosts/mbp/bin/tool", "mbp\n"),
+            ("hosts/box/bin/tool", "box\n"),
+        ],
+        1_700_000_000,
+    );
+    fs::create_dir_all(home.repo().join("modules/tools")).unwrap();
+    let mut mv = Command::new("git");
+    git_env(&mut mv);
+    mv.arg("-C")
+        .arg(home.repo())
+        .args(["mv", "modules/adopted/bun.toml", "modules/tools/bun.toml"])
+        .assert()
+        .success();
+    commit(&home, &[], 1_700_600_000);
+
+    let out = run(&home, &["recent"]);
+    assert!(!out.contains("not committed"), "{out}");
+    assert!(!out.contains("off"), "{out}");
+    home.cmd("rsmt")
+        .args(["include", "off", "--yes"])
+        .assert()
+        .code(2)
+        .stderr(predicate::str::contains("off is turned off"));
+
+    run(&home, &["include", "bin/tool", "--yes"]);
+    let manifest = repo_file(&home, "dotfiles.toml");
+    let mbp = format!("hosts = [\"mbp\", \"test\"]\nos = [\"{MY_OS}\"]");
+    assert!(manifest.contains(&mbp), "{manifest}");
+    assert!(manifest.contains("hosts = [\"box\"]\n"), "{manifest}");
+    assert_eq!(
+        fs::read_to_string(home.root.join("bin/tool")).unwrap(),
+        "mbp\n"
+    );
+}
