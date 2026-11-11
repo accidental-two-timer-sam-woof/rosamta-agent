@@ -329,7 +329,10 @@ fn publish_locked(ctx: &Context, commit_edits: bool) -> Result<Published> {
 fn secret_blocked(ctx: &Context, hits: &[Hit], unpushed: Option<u32>) -> Error {
     let lines: Vec<String> = hits
         .iter()
-        .map(|hit| format!("  {}:{} ({})", hit.file, hit.line, hit.rule))
+        .map(|hit| {
+            let (file, line, rule, hash) = (&hit.file, hit.line, hit.rule, &hit.hash);
+            format!("  {file}:{line} ({rule}; allow.toml: {hash})")
+        })
         .collect();
     let text = format!(
         "publishing stopped: possible secret in\n{}",

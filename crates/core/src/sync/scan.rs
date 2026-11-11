@@ -6,7 +6,7 @@ use std::sync::OnceLock;
 use regex::Regex;
 use serde::Serialize;
 
-use crate::adopt::secret_rule;
+use crate::adopt::Allowed;
 use crate::error::Result;
 use crate::git;
 
@@ -18,6 +18,8 @@ pub struct Hit {
     pub file: String,
     pub line: usize,
     pub rule: &'static str,
+    /// What `allow.toml` lists to let this line through.
+    pub hash: String,
 }
 
 /// Plain patches with zero context, whatever the user's diff settings;
@@ -65,9 +67,10 @@ pub(crate) fn scan(repo: &Path, range: &[&str]) -> Result<Vec<Hit>> {
     revs.extend_from_slice(range);
     let commits = git::run(repo, &revs)?;
     let hosts = host_ids(repo, commits.lines().map(|sha| format!("{sha}:")));
+    let allowed = Allowed::load(repo)?;
     Ok(unencrypted(
         repo,
-        check(&added_lines(&git::run(repo, &args)?), &hosts),
+        check(&added_lines(&git::run(repo, &args)?), &hosts, &allowed),
     ))
 }
 
@@ -80,9 +83,10 @@ pub(crate) fn staged(repo: &Path, paths: &[&str]) -> Result<Vec<Hit>> {
         args.extend_from_slice(paths);
     }
     let hosts = host_ids(repo, [":".to_string()]);
+    let allowed = Allowed::load(repo)?;
     Ok(unencrypted(
         repo,
-        check(&added_lines(&git::run(repo, &args)?), &hosts),
+        check(&added_lines(&git::run(repo, &args)?), &hosts, &allowed),
     ))
 }
 
@@ -192,11 +196,13 @@ fn without_host_ids(text: &str, hosts: &[String]) -> String {
 }
 
 /// Check each file's added lines together, so rules spanning lines (private
-/// keys) still match; report the first line that matches on its own.
-fn check(files: &[Added], hosts: &[String]) -> Vec<Hit> {
-    let matched = |text: &str| secret_rule(&without_host_ids(text, hosts));
+/// keys) still match; report the first line that matches on its own. What
+/// `allowed` lists is left out.
+fn check(files: &[Added], hosts: &[String], allowed: &Allowed) -> Vec<Hit> {
+    let matched = |text: &str| allowed.rule(&without_host_ids(text, hosts));
     files
         .iter()
+        .filter(|added| !allowed.file(&added.file))
         .filter_map(|added| {
             let text: Vec<&str> = added.lines.iter().map(|(_, text)| text.as_str()).collect();
             let text = text.join("\n");
@@ -206,17 +212,17 @@ fn check(files: &[Added], hosts: &[String]) -> Vec<Hit> {
                 return None;
             }
             let rule = matched(&text)?;
-            let line = added
+            let (line, text) = added
                 .lines
                 .iter()
                 .find(|(_, text)| matched(text).is_some())
-                .unwrap_or(&added.lines[0])
-                .0;
+                .unwrap_or(&added.lines[0]);
             Some(Hit {
                 commit: added.commit.clone(),
                 file: added.file.clone(),
-                line,
+                line: *line,
                 rule,
+                hash: Allowed::hash(text),
             })
         })
         .collect()
@@ -225,6 +231,7 @@ fn check(files: &[Added], hosts: &[String]) -> Vec<Hit> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::adopt::secret_rule;
 
     #[test]
     fn changed_ciphertext_is_not_a_secret() {
@@ -448,12 +455,13 @@ deleted file mode 100644
     #[test]
     fn hits_name_file_line_and_rule() {
         assert_eq!(
-            check(&added_lines(LOG), &[]),
+            check(&added_lines(LOG), &[], &Allowed::default()),
             [Hit {
                 commit: "1111".into(),
                 file: "modules/env.toml".into(),
                 line: 3,
                 rule: "github-pat",
+                hash: Allowed::hash("GH = \"ghp_0123456789abcdefghijABCDEFGHIJ012345\""),
             }]
         );
     }

@@ -1,8 +1,13 @@
 //! Spot content that looks like a secret, so it never reaches the repo.
 
+use std::path::Path;
 use std::sync::OnceLock;
 
 use regex::Regex;
+use serde::Deserialize;
+use sha2::{Digest, Sha256};
+
+use crate::error::{Error, Result};
 
 include!(concat!(env!("OUT_DIR"), "/gitleaks.rs"));
 
@@ -100,6 +105,75 @@ const MIN_SLASHED_LEN: usize = 32;
 /// A literal this long that is not made of words could be a key no rule
 /// knows; see [`unsure`].
 const MIN_UNSURE_LEN: usize = 16;
+
+/// `allow.toml` in the repo: what the secret check lets through, for a rule
+/// that takes something harmless for a secret.
+#[derive(Debug, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Allowed {
+    /// Files or folders in the repo that are not checked at all.
+    #[serde(default)]
+    files: Vec<String>,
+    /// [`Allowed::hash`] of single lines that are not secrets.
+    #[serde(default)]
+    lines: Vec<String>,
+}
+
+impl Allowed {
+    pub const MANIFEST: &'static str = "allow.toml";
+
+    /// The repo's list; empty when the file does not exist.
+    pub fn load(repo_dir: &Path) -> Result<Self> {
+        let path = repo_dir.join(Self::MANIFEST);
+        let text = match std::fs::read_to_string(&path) {
+            Ok(text) => text,
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(Self::default()),
+            Err(err) => return Err(Error::Read { path, source: err }),
+        };
+        crate::validate::parse(&text)
+            .map_err(|issue| Error::Usage(format!("{}: {}", path.display(), issue.message)))
+    }
+
+    /// What names a line in `lines`: the start of the SHA-256 of the line
+    /// without the white space around it.
+    pub fn hash(line: &str) -> String {
+        let digest = Sha256::digest(line.trim().as_bytes());
+        digest[..8]
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect()
+    }
+
+    /// Whether `file`, relative to the repo, is listed or inside a listed folder.
+    pub fn file(&self, file: &str) -> bool {
+        self.files.iter().any(|entry| {
+            let entry = entry.trim_end_matches('/');
+            file.strip_prefix(entry)
+                .is_some_and(|rest| rest.is_empty() || rest.starts_with('/'))
+        })
+    }
+
+    fn checked<'a>(&self, text: &'a str) -> std::borrow::Cow<'a, str> {
+        if self.lines.is_empty() {
+            return text.into();
+        }
+        let kept: Vec<&str> = text
+            .lines()
+            .filter(|line| !self.lines.contains(&Self::hash(line)))
+            .collect();
+        kept.join("\n").into()
+    }
+
+    /// [`secret_rule`] for the lines of `text` that are not listed.
+    pub fn rule(&self, text: &str) -> Option<&'static str> {
+        secret_rule(&self.checked(text))
+    }
+
+    /// [`unsure`] for the lines of `text` that are not listed.
+    pub fn unsure(&self, text: &str) -> bool {
+        unsure(&self.checked(text))
+    }
+}
 
 /// Whether `text` holds what looks like a secret.
 pub fn looks_secret(text: &str) -> bool {
@@ -340,6 +414,27 @@ mod tests {
         assert!(looks_secret(
             "export GH=ghp_0123456789abcdefghijABCDEFGHIJ012345"
         ));
+    }
+
+    #[test]
+    fn listed_lines_and_files_pass() {
+        let key = "export GH=ghp_0123456789abcdefghijABCDEFGHIJ012345";
+        let text = format!("export A=1\n  {key}\n");
+        let allowed: Allowed = toml::from_str(&format!(
+            "lines = [{:?}]\nfiles = [\"home/.p10k.zsh\", \"home/.config/nvim/\"]\n",
+            Allowed::hash(key)
+        ))
+        .unwrap();
+        assert_eq!(Allowed::default().rule(&text), Some("github-pat"));
+        assert_eq!(allowed.rule(&text), None);
+        // Another line with the same key is still found.
+        assert_eq!(
+            allowed.rule(&format!("{text}{key} # copy\n")),
+            Some("github-pat")
+        );
+        assert!(allowed.file("home/.p10k.zsh") && allowed.file("home/.config/nvim/init.lua"));
+        assert!(!allowed.file("home/.p10k.zsh.bak") && !allowed.file("home/.config/nvimrc"));
+        assert!(toml::from_str::<Allowed>("line = []").is_err());
     }
 
     #[test]

@@ -199,7 +199,8 @@ pub(crate) fn keep(ctx: &Context, id: u32, item: &DotfileItem, scope: Scope) -> 
         )));
     }
     if !entry.encrypted
-        && let Some((file, rule)) = secret_in(&target)?
+        && let Some((file, rule)) =
+            secret_in(&ctx.paths.repo(), Path::new(&entry.source()), &target)?
     {
         return Err(Error::Usage(format!(
             "{} looks like it contains a secret ({rule}); it stays out of the repo",
@@ -269,13 +270,24 @@ fn secret_template(ctx: &Context, entry: &Dotfile) -> Result<bool> {
     Ok(crate::template::uses_secrets(&names))
 }
 
-/// The first file under `path` whose content looks like a secret, and the rule.
-pub(crate) fn secret_in(path: &Path) -> Result<Option<(PathBuf, &'static str)>> {
+/// The first file under `path` whose content looks like a secret, and the
+/// rule. `source` is where `path` is, or will be, in the repo: what the
+/// repo's `allow.toml` lists passes.
+pub(crate) fn secret_in(
+    repo: &Path,
+    source: &Path,
+    path: &Path,
+) -> Result<Option<(PathBuf, &'static str)>> {
+    let allowed = adopt::Allowed::load(repo)?;
     for file in tree::files(path)? {
+        let inside = file.strip_prefix(path).unwrap_or(Path::new(""));
+        if allowed.file(&source.join(inside).to_string_lossy()) {
+            continue;
+        }
         let Ok(text) = std::fs::read_to_string(&file) else {
             continue;
         };
-        if let Some(rule) = adopt::secret_rule(&text) {
+        if let Some(rule) = allowed.rule(&text) {
             return Ok(Some((file, rule)));
         }
     }

@@ -209,6 +209,16 @@ pub fn validate(repo_dir: &Path) -> Result<Report> {
             Err(issue) => report.file(rel).errors.push(issue),
         }
     }
+    let path = repo_dir.join(crate::adopt::Allowed::MANIFEST);
+    if path.is_file() {
+        let issues = read(&path)?
+            .and_then(|text| parse::<crate::adopt::Allowed>(&text))
+            .err();
+        report
+            .file(PathBuf::from(crate::adopt::Allowed::MANIFEST))
+            .errors
+            .extend(issues);
+    }
     // Its fields belong to a later change; for now only the syntax is checked.
     let path = repo_dir.join("packages.toml");
     if path.is_file() {

@@ -159,7 +159,8 @@ pub fn add(
         if deploy == Deploy::Template {
             check_template(&target, &meta)?;
         }
-        if !encrypt && let Some((file, rule)) = review::secret_in(&target)? {
+        let source = Path::new("home").join(&rel);
+        if !encrypt && let Some((file, rule)) = review::secret_in(&repo, &source, &target)? {
             return Err(Error::Usage(format!(
                 "{} looks like it contains a secret ({rule}); add it with --encrypt",
                 file.display()
