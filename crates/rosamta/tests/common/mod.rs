@@ -7,8 +7,9 @@ use std::time::Duration;
 
 use assert_cmd::Command;
 
-/// Variables that would point rosamta or a shell outside this HOME.
-const OUTSIDE: [&str; 13] = [
+/// Variables that would point rosamta, a shell or git outside this HOME;
+/// git sets the last ones for a hook that runs tests.
+const OUTSIDE: [&str; 20] = [
     "XDG_CONFIG_HOME",
     "XDG_DATA_HOME",
     "XDG_STATE_HOME",
@@ -22,6 +23,13 @@ const OUTSIDE: [&str; 13] = [
     "ROSAMTA_ENV",
     "ROSAMTA_PROFILE",
     "ROSAMTA_CURRENT",
+    "GIT_DIR",
+    "GIT_WORK_TREE",
+    "GIT_INDEX_FILE",
+    "GIT_OBJECT_DIRECTORY",
+    "GIT_COMMON_DIR",
+    "GIT_CONFIG_PARAMETERS",
+    "GIT_CONFIG_COUNT",
 ];
 
 pub struct Home {
