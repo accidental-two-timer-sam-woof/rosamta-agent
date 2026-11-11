@@ -1,7 +1,7 @@
 ## MODIFIED Requirements
 
 ### Requirement: Hook locations
-rosamta SHALL 在下列位置安裝 hook：sh 為 `~/.profile`；bash 為 `~/.bashrc` 與已存在的 `~/.bash_profile`、`~/.bash_login`，兩者都不存在且沒有 `~/.profile` 時建立 `~/.bash_profile`；zsh 為 `$ZDOTDIR` 下的 `.zshenv`、`.zprofile`、`.zshrc`，以及有片段來自它時的 `.zlogin`；fish 為 fish 設定目錄下 `conf.d/rosamta.fish` 這個獨立檔案。
+rosamta SHALL 在下列位置安裝 hook：sh 為 `~/.profile`；bash 為 `~/.bashrc` 與已存在的 `~/.bash_profile`、`~/.bash_login`，兩者都不存在時建立 `~/.bash_profile`；zsh 為 `$ZDOTDIR` 下的 `.zshenv`、`.zprofile`、`.zshrc`，以及有片段來自它時的 `.zlogin`；fish 為 fish 設定目錄下 `conf.d/rosamta.fish` 這個獨立檔案。
 
 #### Scenario: zsh with ZDOTDIR
 - **WHEN** 使用者在 `~/.zshenv` 把 `ZDOTDIR` 設為 `~/.config/zsh`
@@ -28,7 +28,7 @@ rosamta 自己產生的互動設定（結構化 module 與使用者寫的 module
 
 #### Scenario: New bash_profile
 - **WHEN** host 原本只有 `~/.profile`，沒有 `~/.bash_profile`
-- **THEN** rosamta 若建立 `~/.bash_profile`，login bash 仍會執行 `~/.profile` 的內容
+- **THEN** rosamta 建立 `~/.bash_profile`，login bash 仍會執行 `~/.profile` 的內容，`~/.bashrc` 只執行一次
 
 #### Scenario: Existing bash_profile that does not read bashrc
 - **WHEN** 既有的 `~/.bash_profile` 沒有執行 `~/.bashrc`，使用者執行 `rsmt apply`

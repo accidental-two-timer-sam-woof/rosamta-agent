@@ -4,7 +4,7 @@
 
 接管把 rc 檔的內容搬進「階段」之後，「shell 在什麼情況下讀那個檔」這個資訊就不見了，rosamta 只能靠靜態分析猜回來，猜錯的地方就是接管前後行為不同的地方。目前有五個 issue 與一個還沒開的問題都是同一個原因：
 
-- #34：`.bash_profile` 的內容在非 login、甚至非互動的 bash 執行。
+- #34：`.bash_profile` 的內容在非 login、甚至非互動的 bash 執行（這個變更只解決片段；接管成結構化 module 的 `export` 等行見 design 的 Open Questions 3）。
 - #35：巢狀 shell 失去 `.zshenv`、`.bash_profile` 中沒有 export 的設定。
 - #36：`.zprofile` 以 `emulate sh` 執行 `.profile` 時，內容跑兩次。
 - #37：Fedora、Arch 的 login bash 把 `.bashrc` 跑兩次。
