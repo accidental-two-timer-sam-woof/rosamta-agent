@@ -1029,6 +1029,37 @@ fn adoptions_json(home: &Home) -> String {
     read(home, ".local/state/rosamta/adoptions.json")
 }
 
+/// A host named like most Macs (`<user>-macbook-pro`) can publish what it
+/// adopted: its name in the modules' first line is not taken for a secret.
+#[test]
+fn the_first_publish_after_adopting_goes_out() {
+    if !has("zsh") {
+        return;
+    }
+    let home = Home::new();
+    write(&home, ".zshrc", BUN);
+    write(
+        &home,
+        ".config/rosamta/host.toml",
+        "id = \"xinshoutw-macbook-pro\"\nadopt = \"ask\"\n",
+    );
+    home.cmd("rsmt").arg("init").assert().success();
+    run(&home, &["apply"]);
+    let remote = home.root.join("remote.git");
+    let status = std::process::Command::new("git")
+        .args(["init", "--quiet", "--bare"])
+        .arg(&remote)
+        .status()
+        .unwrap();
+    assert!(status.success());
+    repo_git(
+        &home,
+        &["remote", "add", "origin", &remote.display().to_string()],
+    );
+    run(&home, &["adopt", "--yes"]);
+    home.cmd("rsmt").arg("publish").assert().success();
+}
+
 /// A commit that fails for a reason other than signing (here a stale
 /// `index.lock`) still leaves the adoption recorded and the warning shown.
 #[test]
