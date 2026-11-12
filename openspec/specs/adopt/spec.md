@@ -21,7 +21,7 @@ rosamta SHALL 掃描下列檔案中 hook 以外的內容：`~/.profile`、`~/.ba
 - **THEN** 掃描不列出它的內容，檔案的每個位元組維持原樣
 
 ### Requirement: Segmentation
-rosamta SHALL 把連續的非空白行切成一段（結構結尾之後另起一段的情況見 Segments end at complete code），並把緊接在上方的註解併入該段；以成對 marker 包住的區塊（例如 `# >>> conda initialize >>>` 到 `# <<< conda initialize <<<`）SHALL 整塊視為一段，即使它位在還沒結束的結構之中。fish `conf.d` 的檔案 SHALL 整個檔案視為一段。
+rosamta SHALL 把連續的非空白行切成一段（結構結尾之後另起一段的情況見 Segments end at complete code），並把緊接在上方的註解併入該段；以成對 marker 包住的區塊（例如 `# >>> conda initialize >>>` 到 `# <<< conda initialize <<<`）SHALL 整塊視為一段，即使它位在還沒結束的結構或 here-document 的內容之中。fish `conf.d` 的檔案 SHALL 整個檔案視為一段。
 
 #### Scenario: Installer comment
 - **WHEN** `~/.zprofile` 中有 `# Added by OrbStack` 註解，下一行是 `source ~/.orbstack/shell/init.zsh`
@@ -41,7 +41,7 @@ rosamta SHALL 把連續的非空白行切成一段（結構結尾之後另起一
 - **THEN** 區塊的每一行屬於同一段
 
 #### Scenario: Blank line inside a here-document
-- **WHEN** 一個 here-document 的內容有空白行
+- **WHEN** 一個 here-document 的內容有空白行，內容中沒有成對的 marker
 - **THEN** 從開始那一行到結束的分隔字屬於同一段
 
 #### Scenario: Line right after a finished block
