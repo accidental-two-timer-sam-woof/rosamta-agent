@@ -287,7 +287,7 @@ Metal toolchain 我已經安裝完成。
 - ▸ #673 `AskUserQuestion` 
   - add-adopt 的規格把 `.zprofile` 的片段放在 env 階段，也就是由 `.zshenv` 的 hook 載入。但 login zsh 的順序是 `.zshenv` → 系統 `/etc/zprofile`（macOS 會在這裡執行 path_helper）→ `.zprofile`。結果是 macOS 上最常見的 `eval "$(/opt/homebrew/bin/brew shellenv)"` 被接管後，會比 path_helper 早執行，Homebrew 的路徑因此排到 `/usr/bin` 之後，git、python 等會用到系統版本。要怎麼處理？〔選項：新增 login 階段 (Recommended)／維持規格（env 階段）／先辨識 brew shellenv〕
 
-↳ #673 使用者的回答
+↳ #673 沒有回答：使用者關閉了提問，以下是 harness 的訊息
 
 ~~~~text
 The user doesn't want to proceed with this tool use. The tool use was rejected (eg. if it was a file edit, the new_string was NOT written to the file). STOP what you are doing and wait for the user to tell you how to proceed.
@@ -1238,7 +1238,7 @@ C. 找「AI 錯在哪裡」的候選案例
   - 任務 4 貼上的提示詞有三部分（A 對話紀錄、B docs/ai-log、C AI 出錯的候選案例），你自己的說明只提到 docs/transcripts/。這次要做到哪裡？〔選項：A + B + C 都做 (Recommended)／只做 docs/transcripts/〕
   - weekly 用量現在 89，上限是 95。這五個任務可能做不完就到上限，要怎麼處理？〔選項：維持 95 (Recommended)／這次做到完〕
 
-↳ #4953 使用者的回答
+↳ #4953 沒有回答：提問被 hook 擋下，以下是 hook 的訊息
 
 ~~~~text
 PreToolUse:AskUserQuestion hook error: 離開模式（自 2026-11-12 03:51 起）：使用者不在，不要發問也不要停下來等。照預設或最安全的選項繼續，把這個問題、你的選擇和理由寫進給使用者的報告。需要使用者當下同意的動作（未授權的 push、merge main、tag、部署、刪資料）先跳過，記在報告裡等使用者回來。使用者若其實在線，請他說「我回來了」解除。

@@ -346,7 +346,7 @@ Docker 在背景跑。有一個規格層級的決定需要你拍板，先提出�
 - ▸ #87 `AskUserQuestion` 
   - add-adopt 的規格把 `.zprofile` 的片段放在 env 階段，也就是由 `.zshenv` 的 hook 載入。但 login zsh 的順序是 `.zshenv` → 系統 `/etc/zprofile`（macOS 會在這裡執行 path_helper）→ `.zprofile`。結果是 macOS 上最常見的 `eval "$(/opt/homebrew/bin/brew shellenv)"` 被接管後，會比 path_helper 早執行，Homebrew 的路徑因此排到 `/usr/bin` 之後，git、python 等會用到系統版本。要怎麼處理？〔選項：新增 login 階段 (Recommended)／維持規格（env 階段）／先辨識 brew shellenv〕
 
-↳ #87 使用者的回答
+↳ #87 沒有回答：使用者關閉了提問，以下是 harness 的訊息
 
 ~~~~text
 The user doesn't want to proceed with this tool use. The tool use was rejected (eg. if it was a file edit, the new_string was NOT written to the file). STOP what you are doing and wait for the user to tell you how to proceed.

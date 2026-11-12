@@ -138,7 +138,7 @@ Now a real-chezmoi experiment to verify #44's assumptions (output format, `cat` 
 
 - ▸ #56 `Bash` Check state of the latest #52 CI run：`R=accidental-two-timer-sam-woof/rosamta-agent; date -u +%FT%TZ; gh run view 43051520075 -R "${R}" --json status,conclusion,jobs --jq '"\(.st …`
 
-- ▸ #57 `Bash` Cancel the stuck #52 run and read its failed job log：`R=accidental-two-timer-sam-woof/rosamta-agent; gh run cancel 43051520075 -R "${R}" && echo cancelled; S=/private/tmp/claude-501/-Users-xinsh …`
+- ▸ #57 `Bash` Cancel the stuck #52 run and read its failed job log：`R=accidental-two-timer-sam-woof/rosamta-agent; gh run cancel 43051520075 -R "${R}" && echo cancelled; S=<session-tmp> …`
 
 - ▸ #58 `Bash` Resolve Ubuntu archive names against public resolvers：`for n in archive.ubuntu.com azure.archive.ubuntu.com security.ubuntu.com packages.microsoft.com; do for r in <REDACTED:ip> <REDACTED:ip> <REDACTED:ip>; do pri …`
 
@@ -971,7 +971,7 @@ Now core: the shared problem list.
 
 - ▸ #367 `Bash` Create a throwaway demo home for the app's screenshots：`S=<scratchpad>; mkdir -p "${S}/gui- …`
 
-- ▸ #368 `Bash` Check the add command's deploy options and the demo host file：`B=<repo>/target/debug; "${B}/rsmt" add --help 2>&1 | sed -n 1,30p; S=/private/tmp/claude-501/-Users-x …`
+- ▸ #368 `Bash` Check the add command's deploy options and the demo host file：`B=<repo>/target/debug; "${B}/rsmt" add --help 2>&1 | sed -n 1,30p; S=<session-tmp> …`
 
 - ▸ #369 `Bash` Rebuild the demo home without any network use and build the app with the screenshot feature：`S=<scratchpad>; python3 - "${S}/gui …`
 

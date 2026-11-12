@@ -44,7 +44,7 @@ session 的其他時段只有使用者的訊息（00），沒有 agent 的部分
 | agent 的文字 | 原樣保留 |
 | agent 的思考過程 | 不列入 |
 | 工具呼叫 | 一行：工具名稱與主要參數（指令的說明與前 140 個字元、檔案路徑等） |
-| 工具輸出 | 不列入。例外：使用者對提問的回答全文保留；子代理的回報與背景工作的結果保留前 120 行 |
+| 工具輸出 | 不列入。例外：使用者對提問的回答全文保留（提問被 hook 擋下或被使用者關閉時，標為沒有回答）；子代理的回報與背景工作的結果保留前 120 行 |
 | harness 加入的內容 | 不列入：系統提醒、使用者的全域設定、記憶索引、對話壓縮後的摘要。壓縮發生的位置有標記 |
 | 斜線指令 | 帶參數的指令原樣保留；單獨的指令屬於上面略去的訊息 |
 | 使用者中斷 agent | 只留〔使用者中斷 agent〕，不計入使用者訊息 |
@@ -58,7 +58,7 @@ session 的其他時段只有使用者的訊息（00），沒有 agent 的部分
 | --- | --- | --- |
 | repo 與工作目錄的絕對路徑 | `<repo>`、`<workspace>` | 359 |
 | 家目錄 | `~` 或 `<REDACTED:home>` | 398 |
-| session 的暫存目錄 | `<scratchpad>`、`<session-tmp>`、`<project>` | 236 |
+| session 的暫存目錄 | `<scratchpad>`、`<session-tmp>`、`<project>` | 238 |
 | 預覽頁（Claude Artifact）的私人連結 | `<REDACTED:artifact-url>` | 36 |
 | IP 位址 | `<REDACTED:ip>` | 3 |
 | email | `<REDACTED:email>` | 1 |
@@ -70,7 +70,7 @@ session 的其他時段只有使用者的訊息（00），沒有 agent 的部分
 ### 遮蔽後的檢查
 
 - 用本專案的秘密檢查（`rosamta_core::adopt::secret_rule`，含 `crates/core/rules/gitleaks.toml` 的 222 條規則）逐行掃描四個檔案：沒有任何一行符合已知的 token 格式。有 7 行符合名稱或高熵規則，都不是秘密：3 行是工具名稱或查詢字串，1 行是測試用的假字串，3 行是審查報告裡舉例的假密碼（`DEPLOY_TOKEN=abc\$def` 之類）。
-- 五個檔案中沒有 `/Users/` 或 `/home/` 開頭的路徑（00 有一行是使用者貼上的提示詞，內文提到這兩個字串）；email 樣式只剩 `git@github.com`。
+- 五個檔案中沒有 `/Users/` 或 `/home/` 開頭的路徑，也沒有家目錄路徑的編碼形式（`-Users-…`）（00 有一行是使用者貼上的提示詞，內文提到前兩個字串）；email 樣式只剩 `git@github.com`。
 - 同一個檢查掃過 00：只有 GitHub OAuth App 的 client ID 被標記（2 行）；它是公開值，寫在 `crates/core/src/github/mod.rs`。00 另外遮蔽了 5 處家目錄、5 處 repo 路徑、2 處主機名稱、2 處私有 repo 名稱、1 處姓名與 1 處預覽頁連結。
 
 轉換腳本含有用來遮蔽的實際字串，所以沒有放進 repo。
