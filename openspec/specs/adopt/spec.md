@@ -21,7 +21,7 @@ rosamta SHALL 掃描下列檔案中 hook 以外的內容：`~/.profile`、`~/.ba
 - **THEN** 掃描不列出它的內容，檔案的每個位元組維持原樣
 
 ### Requirement: Segmentation
-rosamta SHALL 把連續的非空白行切成一段，並把緊接在上方的註解併入該段；以成對 marker 包住的區塊（例如 `# >>> conda initialize >>>` 到 `# <<< conda initialize <<<`）SHALL 整塊視為一段。
+rosamta SHALL 把連續的非空白行切成一段（結構結尾之後另起一段的情況見 Segments end at complete code），並把緊接在上方的註解併入該段；以成對 marker 包住的區塊（例如 `# >>> conda initialize >>>` 到 `# <<< conda initialize <<<`）SHALL 整塊視為一段，即使它位在還沒結束的結構或 here-document 的內容之中。fish `conf.d` 的檔案 SHALL 整個檔案視為一段。
 
 #### Scenario: Installer comment
 - **WHEN** `~/.zprofile` 中有 `# Added by OrbStack` 註解，下一行是 `source ~/.orbstack/shell/init.zsh`
@@ -30,6 +30,27 @@ rosamta SHALL 把連續的非空白行切成一段，並把緊接在上方的註
 #### Scenario: Marker block with blank lines
 - **WHEN** 一個 marker 區塊內有空白行
 - **THEN** 整個區塊仍是一段
+
+### Requirement: Segments end at complete code
+本條適用於 fish `conf.d` 以外的檔案；`conf.d` 的檔案不論內容都是一段。空白行 SHALL 只在這一段到它為止是完整的程式碼時才結束該段：還沒結束的 `if`、迴圈、函式等結構，以及 here-document 的內容，其中的空白行不切開。一段的最後一行只有 `fi`、`done`、`esac`、`}` 或 `end`（後面可以接 `;`），且這一段是完整的程式碼時，下一個非空白行 SHALL 開始新的一段，即使中間沒有空白行。
+
+程式碼是否完整 SHALL 以該檔案所屬的 shell 檢查語法，`~/.profile` 以 sh 檢查。檢查不通過時（結構還沒結束、語法錯誤、逾時或 shell 無法執行），空白行不結束該段；一直不通過時，該段延續到下一個 marker 區塊、hook 區塊、已註解掉的接管段落或檔案結尾。找不到該 shell 時不檢查，一律視為完整：marker 區塊以外的空白行都結束一段，只有 here-document 內容中的空白行例外；結構結尾那一行之後的非空白行也開始新的一段，即使外層的結構還沒結束。
+
+#### Scenario: Blank line inside an unfinished block
+- **WHEN** zsh 已安裝，`~/.zshrc` 中一個 `if` 到 `fi` 的區塊內有空白行
+- **THEN** 區塊的每一行屬於同一段
+
+#### Scenario: Blank line inside a here-document
+- **WHEN** 一個 here-document 的內容有空白行，內容中沒有成對的 marker
+- **THEN** 從開始那一行到結束的分隔字屬於同一段
+
+#### Scenario: Line right after a finished block
+- **WHEN** 一個完整的 `if` 到 `fi` 區塊，`fi` 的下一行是 `. x`，中間沒有空白行
+- **THEN** `. x` 開始新的一段
+
+#### Scenario: Shell that cannot be found
+- **WHEN** `~/.zshrc` 有 rosamta 的 hook 區塊但找不到 zsh，檔案中一個 `if` 到 `fi` 的區塊內有空白行
+- **THEN** 空白行之前與之後的內容分屬不同的段
 
 ### Requirement: Structured recognition
 一段內容若只包含環境變數設定、PATH 的增加與 alias，rosamta SHALL 把它轉成結構化 module，套用到所有支援的 shell；只要有任一行無法辨識，整段 SHALL 保存為片段 module。
